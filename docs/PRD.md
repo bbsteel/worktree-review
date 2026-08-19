@@ -62,7 +62,7 @@ An experienced individual developer or small-project maintainer who:
 MergeGate must:
 
 1. Automatically review new and updated pull requests.
-2. Provide the same product experience for repository branches and external forks.
+2. Provide the same review experience for repository branches and external forks; reviews of external-fork pull requests are triggered manually by the repository owner or a committer, never automatically.
 3. Review from a complete, isolated worktree for the exact pull-request revision.
 4. Gather relevant code and business context on demand from that worktree.
 5. Publish inline findings with severity, confidence, evidence, and impact.
@@ -70,7 +70,7 @@ MergeGate must:
 7. Produce an explicit `Passed`, `Passed with bypass`, `Blocked`, or `Error` gate result.
 8. Re-evaluate findings after code changes or evidence supplied in discussion.
 9. Support a manually triggered Deep Review without weakening the default review's context.
-10. Allow authorized users to bypass a valid blocking finding with an auditable reason.
+10. Allow authorized users to bypass a blocking finding for the current revision with an auditable reason.
 11. Offer repair guidance without modifying the pull request.
 12. Let users encode and reuse their own review experience as policy.
 13. Let users control model selection, routing, quotas, budgets, and scheduling.
@@ -128,6 +128,14 @@ Repository owners control providers, models, budgets, quotas, timing strategies,
 
 A bypass records that an authorized user accepted a known risk. It must not be displayed as if MergeGate withdrew the finding or determined that the code was safe.
 
+### 7.8 Policy never comes from the reviewed repository
+
+Review Policy and Compute Policy are stored under MergeGate's control and are never read from files in the repository under review — neither from the pull-request head nor from the target branch. A pull request can therefore never modify the rules that gate it. Repository instruction files such as `AGENTS.md` and `CLAUDE.md` are review context, not policy.
+
+### 7.9 Repository content is data, not instructions
+
+Everything under review — code, comments, linked issues, pull-request discussion, and evidence supplied by participants — is untrusted input. It may inform findings, but it must never act as instructions to the reviewer or override policy.
+
 ## 8. Core concepts
 
 ### 8.1 Pull Request Workspace
@@ -150,7 +158,7 @@ A Review Policy captures the user's review experience and governs:
 - Comment presentation and output language.
 - Bypass permissions and requirements.
 
-Review Policy must be reusable and versionable. Its storage format and evaluation mechanism are deferred.
+Review Policy must be reusable and versionable. Per principle 7.8, it is stored under MergeGate's control, never in the reviewed repository. Its storage format and evaluation mechanism are deferred.
 
 ### 8.3 Compute Policy
 
@@ -165,7 +173,7 @@ A Compute Policy governs how review compute is allocated:
 - Escalation to stronger or independent models.
 - Deep Review budgets.
 
-Compute Policy changes must not silently change the meaning of Review Policy.
+Compute Policy changes must not silently change the meaning of Review Policy. Per principle 7.8, Compute Policy is also stored under MergeGate's control, never in the reviewed repository.
 
 ### 8.4 Finding
 
@@ -180,7 +188,9 @@ A finding is a structured claim about a pull-request change. It includes at leas
 - Supporting evidence.
 - Relevant policy rule, when applicable.
 - Suggested repair direction, when useful.
-- Review revision and provenance.
+- Review revision, the policy versions applied, and provenance.
+
+A finding has identity across revisions. MergeGate must recognize the same finding on a new revision despite ordinary code displacement. If a finding can no longer be located or matched on the new revision, the affected scope is re-reviewed rather than the finding being silently dropped.
 
 ### 8.5 Gate decision
 
@@ -195,8 +205,8 @@ Standard Review and Deep Review may use all relevant context available within th
 - The full diff and complete changed files.
 - Callers, callees, public interfaces, data structures, and dependencies.
 - Relevant tests and test intent.
-- Repository Review Policy.
-- Repository instruction files such as `AGENTS.md` and `CLAUDE.md`.
+- The repository's Review Policy (stored under MergeGate's control, per principle 7.8).
+- Repository instruction files such as `AGENTS.md` and `CLAUDE.md`, treated as untrusted context per principle 7.9.
 - Relevant architecture, product, and business documentation.
 - Existing pull-request discussion and evidence supplied by participants.
 - The target branch implementation.
@@ -218,6 +228,15 @@ Standard Review is automatic and is the default product experience. It:
 - Optimizes for reasonable latency and cost without reducing required context.
 - Produces a complete gate decision.
 
+Standard Review is incremental across revisions:
+
+- On the first revision of a pull request, it performs a complete review and records the review context used for that review.
+- On a subsequent revision, it reviews only the new changes when they fall within the recorded review context, re-evaluating existing findings alongside them.
+- When the new changes extend beyond the recorded review context, it performs a new complete review of the revision and records fresh context.
+- When the pull request is updated while a review is in flight, the in-flight review is abandoned and a new review starts for the new head revision.
+
+Incrementality never reduces the context available to a review; it reuses context that was already gathered and is still sufficient. The mechanism for deciding whether new changes exceed the recorded context is deferred to technical design.
+
 Standard Review must not be called Quick Review because lower latency does not imply reduced context or reduced review validity.
 
 ### 10.2 Deep Review
@@ -228,7 +247,7 @@ Deep Review is manually triggered. It:
 - Allocates additional compute or independent review passes.
 - May invoke more specialized review strategies.
 - May discover additional blocking findings.
-- Temporarily returns the current revision to an in-progress gate state.
+- Temporarily returns the current revision to an in-progress gate state. This is intentional: requesting a Deep Review withdraws the standing gate decision — including a `Passed` result — until the stronger review completes.
 - Supersedes the Standard Review gate decision for the same revision when complete.
 
 Deep Review increases analysis strength, not context completeness.
@@ -272,11 +291,13 @@ Review Policy defines the minimum confidence required for a blocking decision. A
 | --- | --- |
 | `In progress` | Review for the current revision has not completed. |
 | `Passed` | Review completed and no unresolved blocking findings remain. |
-| `Passed with bypass` | One or more valid blocking findings remain, but authorized users explicitly accepted the risk. |
+| `Passed with bypass` | Valid blocking findings remain — or the review ended in `Error` with partial results — but authorized users explicitly accepted the risk for this revision. |
 | `Blocked` | One or more sufficiently confident, unresolved, non-bypassed blocking findings remain. |
 | `Error` | MergeGate could not complete a valid review or gate decision. |
 
 `Error` is fail-closed: it does not open the gate.
+
+An unresolved blocking finding is a finding at a severity that blocks under the current Review Policy which has not been resolved, withdrawn, downgraded below the blocking severity, or bypassed. A finding downgraded below the blocking severity no longer blocks the gate, so downgrading a `major` finding to `minor` can turn a `Blocked` gate into `Passed`.
 
 ## 14. Finding interaction and reassessment
 
@@ -297,10 +318,13 @@ An authorized GitHub user may bypass a valid blocking finding. Bypass behavior m
 
 - Require an explicit reason.
 - Record the actor, time, pull request, revision, and affected finding.
-- Apply only to the intended finding and pull request.
-- Remain visibly distinct from resolution or withdrawal.
+- Apply only to the intended finding on the revision on which it is granted; a new revision expires all bypasses.
+- Be final for that finding on that revision: once granted, no reassessment, policy threshold, or repeated review of the same revision can make the bypassed finding block the gate again.
 - Preserve future enforcement for unrelated or newly introduced findings.
+- Remain visibly distinct from resolution or withdrawal; bypassed findings stay visible.
 - Coexist with GitHub's native administrative bypass capabilities.
+
+A bypass may also be granted while the gate is `Error` — for example, when budget was exhausted with partial findings visible. Bypassing the remaining blocking findings then records explicit acceptance of the incomplete review as well, and the gate becomes `Passed with bypass`. The incomplete coverage remains visible per §17: a bypass never converts a partial review into a complete one.
 
 The default authorization model should align with GitHub review permissions and support restricting bypass to requested reviewers other than the pull-request author. Exact authorization mapping is deferred.
 
@@ -323,7 +347,7 @@ If the configured budget cannot cover a complete review:
 - MergeGate reports that budget was exhausted.
 - Completed and unreviewed scope is visible.
 - Findings already discovered may remain visible.
-- No `Passed` or `Passed with bypass` decision is produced.
+- MergeGate does not itself produce a `Passed` or `Passed with bypass` decision. The paths out of `Error` are rerunning the review under a policy that can complete, or bypassing the remaining blocking findings (§15), which records explicit acceptance of the incomplete review.
 - The user may change budget or model policy and rerun the review.
 
 The same behavior applies to unrecoverable provider failure, missing workspace, missing mandatory context, or any other condition that prevents complete review.
@@ -367,33 +391,28 @@ When a provider does not expose reliable quota information, MergeGate must disti
 
 The expected product flow is:
 
-1. A pull request is opened or updated.
-2. MergeGate starts Standard Review for the exact revision.
+1. A pull request is opened or updated. For repository branches, review starts automatically; for external forks, the repository owner or a committer starts it manually.
+2. MergeGate starts Standard Review for the exact revision, abandoning any in-flight review of a superseded revision.
 3. MergeGate prepares a complete Pull Request Workspace.
-4. Relevant business and code context is gathered as needed.
-5. Findings are generated, verified, deduplicated, and classified.
+4. Relevant business and code context is gathered as needed, reusing the recorded review context when it still covers the changes (§10.1).
+5. Findings are generated, verified, deduplicated, and classified; existing findings are matched to the new revision (§8.4).
 6. Inline findings and a review summary are published.
 7. MergeGate produces a gate decision.
 8. The author changes code or supplies evidence.
-9. MergeGate incrementally re-evaluates affected findings against the new revision.
+9. MergeGate reviews the new revision — incrementally when the changes fall within the recorded review context, completely when they extend beyond it — and re-evaluates existing findings.
 10. The gate passes, remains blocked, is bypassed by an authorized user, or reports an error.
 
-The same user-facing lifecycle applies to repository branches and external forks.
+The same user-facing lifecycle applies to repository branches and external forks, with one exception: external-fork reviews never start automatically. This prevents untrusted contributors from consuming the owner's review compute at will.
 
-## 21. Success measurement
+## 21. Feedback
 
-The primary success metric is real-problem discovery rate:
+Quantitative success targets are not meaningful at this stage. MergeGate instead collects structured feedback from the people and agents whose pull requests are reviewed:
 
-> The proportion of known real issues in an evaluation set that MergeGate correctly identifies.
+- Whether each finding was a real problem — already captured as a by-product of normal use through reassessment outcomes (`Resolved`, `Withdrawn`, `Downgraded`, `Retained`) and bypass records.
+- Whether the gate decision matched the review participant's own judgment.
+- Whether review language, severity, and confidence presentation were useful.
 
-The evaluation set should include:
-
-- Historical real-bug pull requests.
-- Realistic seeded defects.
-- Security, correctness, performance, compatibility, and maintainability cases.
-- Expert-reviewed expected findings and non-findings.
-
-False-positive rate and false-block rate are release guardrails because an enforcement product cannot improve discovery by publishing unlimited speculation. Cost and latency are operational diagnostics, not the primary definition of product success.
+This feedback is reviewed qualitatively to guide product direction. Quantitative discovery and false-block metrics may be defined later, once there is enough usage to calibrate them. Cost and latency remain operational diagnostics.
 
 ## 22. Explicitly deferred technical decisions
 
@@ -405,9 +424,10 @@ This PRD does not decide:
 - Queue, database, cache, or storage technology.
 - Model-routing algorithms.
 - Confidence calibration algorithms.
-- Context retrieval implementation.
+- Context retrieval implementation, including the recorded review context used for incremental review.
+- Finding identity matching across revisions.
+- Policy storage and versioning mechanisms.
 - Sandbox and untrusted-fork isolation implementation.
 - GitHub API, webhook, checks, and comment mechanics.
-- Configuration file schema.
 
 These decisions belong in a separate technical design after this PRD is reviewed and accepted.
