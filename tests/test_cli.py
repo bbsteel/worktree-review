@@ -57,9 +57,14 @@ def test_review_json_is_error_and_matches_schema(git_repository: Path, policy_di
     document = json.loads(result.stdout)
     jsonschema.validate(instance=document, schema=cli_result_schema())
     assert document["gate_state"] == "Error"
-    assert document["merge_tree_oid"] is None
+    assert document["merge_tree_oid"] is not None
+    assert len(document["merge_tree_oid"]) >= 40
     assert document["target_ref"] == "main"
     assert len(document["target_head_oid"]) == 40
+    stages = {item["stage"]: item["status"] for item in document["stage_outcomes"]}
+    assert stages["construct-merge"] == "completed"
+    assert stages["prepare-workspace"] == "completed"
+    assert stages["gather-context"] == "failed"
 
 
 def test_dirty_worktree_is_invalid_invocation(git_repository: Path, policy_dir: Path) -> None:

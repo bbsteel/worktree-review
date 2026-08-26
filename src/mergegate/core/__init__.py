@@ -3,9 +3,12 @@
 from mergegate.core.errors import (
     GitRequiredError,
     InvalidInvocationError,
+    MergeConflictError,
+    MergeConstructionError,
     MergeGateError,
     PolicyValidationError,
     UnimplementedStageError,
+    WorkspaceError,
 )
 from mergegate.core.findings import EvidenceBand, Finding, Severity
 from mergegate.core.gate import (
@@ -42,6 +45,8 @@ __all__ = [
     "GitRequiredError",
     "InvalidInvocationError",
     "MergeCandidateIdentity",
+    "MergeConflictError",
+    "MergeConstructionError",
     "MergeGateError",
     "PolicyValidationError",
     "PolicyVersionIdentity",
@@ -55,6 +60,7 @@ __all__ = [
     "StageOutcome",
     "StageStatus",
     "UnimplementedStageError",
+    "WorkspaceError",
     "evaluate_gate",
     "finding_blocks_under_policy",
     "run_review_pipeline",

@@ -19,3 +19,19 @@ class GitRequiredError(InvalidInvocationError):
 
 class UnimplementedStageError(MergeGateError):
     """A pipeline stage has a contract but no implementation yet."""
+
+
+class MergeConstructionError(MergeGateError):
+    """The merge candidate could not be constructed. Fail closed to gate Error."""
+
+
+class MergeConflictError(MergeConstructionError):
+    """Proposed and target heads conflict. No review of a conflicted tree (PRD §8.1)."""
+
+    def __init__(self, message: str, conflicted_paths: tuple[str, ...] = ()) -> None:
+        super().__init__(message)
+        self.conflicted_paths = conflicted_paths
+
+
+class WorkspaceError(MergeGateError):
+    """The read-only merge-candidate workspace could not be prepared."""

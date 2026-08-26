@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import re
+from dataclasses import dataclass
 from pathlib import Path
 
 from mergegate.core.errors import (
@@ -14,10 +16,31 @@ from mergegate.core.errors import (
 
 MIN_GIT_VERSION: tuple[int, int, int] = (2, 38, 0)
 _VERSION_PATTERN = re.compile(r"git version (\d+)\.(\d+)\.(\d+)")
+_HOOKS_DISABLED: tuple[str, ...] = ("-c", "core.hooksPath=/dev/null")
 
 
 class GitCliError(MergeGateError):
     """A git subprocess failed. Callers decide whether that is invocation or review Error."""
+
+
+@dataclass(frozen=True)
+class GitProcessResult:
+    returncode: int
+    stdout: str
+    stderr: str
+
+
+def isolated_git_env() -> dict[str, str]:
+    """Minimal env: no user gitconfig, no hooks, no provider/platform tokens."""
+
+    return {
+        "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+        "LC_ALL": "C",
+        "GIT_CONFIG_NOSYSTEM": "1",
+        "GIT_CONFIG_GLOBAL": os.devnull,
+        "GIT_TERMINAL_PROMPT": "0",
+        "GIT_OPTIONAL_LOCKS": "0",
+    }
 
 
 def parse_git_version(version_stdout: str) -> tuple[int, int, int]:
@@ -27,23 +50,31 @@ def parse_git_version(version_stdout: str) -> tuple[int, int, int]:
     return int(match.group(1)), int(match.group(2)), int(match.group(3))
 
 
-async def run_git(*args: str, cwd: Path) -> str:
+async def invoke_git(*args: str, cwd: Path) -> GitProcessResult:
     process = await asyncio.create_subprocess_exec(
         "git",
+        *_HOOKS_DISABLED,
         *args,
         cwd=cwd,
+        env=isolated_git_env(),
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )
     stdout_bytes, stderr_bytes = await process.communicate()
-    stdout = stdout_bytes.decode("utf-8", errors="replace")
-    stderr = stderr_bytes.decode("utf-8", errors="replace")
-    if process.returncode != 0:
+    return GitProcessResult(
+        returncode=process.returncode if process.returncode is not None else -1,
+        stdout=stdout_bytes.decode("utf-8", errors="replace"),
+        stderr=stderr_bytes.decode("utf-8", errors="replace"),
+    )
+
+
+async def run_git(*args: str, cwd: Path) -> str:
+    result = await invoke_git(*args, cwd=cwd)
+    if result.returncode != 0:
         joined = " ".join(("git", *args))
-        raise GitCliError(
-            f"{joined} failed (exit {process.returncode}): {stderr.strip() or stdout.strip()}"
-        )
-    return stdout
+        detail = result.stderr.strip() or result.stdout.strip()
+        raise GitCliError(f"{joined} failed (exit {result.returncode}): {detail}")
+    return result.stdout
 
 
 async def require_git_version() -> tuple[int, int, int]:
