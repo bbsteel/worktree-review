@@ -1,0 +1,24 @@
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: mergegate
+      POSTGRES_PASSWORD: mergegate
+      POSTGRES_DB: mergegate
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mergegate -d mergegate"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  server:
+    build: .
+    environment:
+      MERGEGATE_DATABASE_URL: postgres://mergegate:mergegate@postgres:5432/mergegate
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy

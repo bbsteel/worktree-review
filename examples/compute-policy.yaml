@@ -1,0 +1,8 @@
+schema: mergegate.compute-policy/v1
+version: 0.1.0
+provider: anthropic
+model: claude-sonnet-4-5
+max_budget_usd: 2.00
+allow_start_under_uncertain_price: false
+data_destination: https://api.anthropic.com
+known_retention: "See Anthropic's current API data retention terms; nothing is sent in this skeleton."

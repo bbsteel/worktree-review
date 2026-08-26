@@ -1,0 +1,72 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mergegate.dev/schemas/cli-result.v1.json",
+  "title": "MergeGate CLI result v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "gate_state",
+    "source_repository",
+    "target_ref",
+    "target_head_oid",
+    "proposed_ref",
+    "proposed_head_oid",
+    "merge_tree_oid",
+    "review_policy_version",
+    "compute_policy_version",
+    "stage_outcomes",
+    "findings",
+    "summary"
+  ],
+  "properties": {
+    "schema": { "const": "mergegate.cli.result/v1" },
+    "gate_state": {
+      "type": "string",
+      "enum": [
+        "Awaiting review",
+        "In progress",
+        "Passed",
+        "Passed with bypass",
+        "Blocked",
+        "Error"
+      ]
+    },
+    "source_repository": { "type": "string" },
+    "target_ref": { "type": "string" },
+    "target_head_oid": { "type": "string" },
+    "proposed_ref": { "type": "string" },
+    "proposed_head_oid": { "type": "string" },
+    "merge_tree_oid": { "type": ["string", "null"] },
+    "review_policy_version": { "$ref": "#/$defs/policyVersion" },
+    "compute_policy_version": { "$ref": "#/$defs/policyVersion" },
+    "stage_outcomes": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/stageOutcome" }
+    },
+    "findings": { "type": "array", "items": { "type": "object" } },
+    "summary": { "type": "string" },
+    "error_detail": { "type": ["string", "null"] }
+  },
+  "$defs": {
+    "policyVersion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["semver", "sha256"],
+      "properties": {
+        "semver": { "type": "string" },
+        "sha256": { "type": "string", "minLength": 64, "maxLength": 64 }
+      }
+    },
+    "stageOutcome": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["stage", "status"],
+      "properties": {
+        "stage": { "type": "string" },
+        "status": { "type": "string", "enum": ["completed", "failed", "not-started"] },
+        "detail": { "type": ["string", "null"] }
+      }
+    }
+  }
+}
