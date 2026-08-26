@@ -1,6 +1,7 @@
 """Platform-independent product semantics. Adapters must not reinterpret these types."""
 
 from mergegate.core.errors import (
+    ContextGatherError,
     GitRequiredError,
     InvalidInvocationError,
     MergeConflictError,
@@ -36,6 +37,7 @@ from mergegate.core.report import (
 
 __all__ = [
     "ComputePolicy",
+    "ContextGatherError",
     "CoverageRecord",
     "EvidenceBand",
     "ExecutionRecord",

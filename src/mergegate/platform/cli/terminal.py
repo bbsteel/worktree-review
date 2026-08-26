@@ -28,6 +28,21 @@ def render_text_report(report: ReviewReport) -> str:
     for outcome in report.execution.outcomes:
         suffix = f" ({outcome.detail})" if outcome.detail else ""
         lines.append(f"  {outcome.stage.value}: {outcome.status.value}{suffix}")
+    if report.coverage is not None:
+        lines.append(
+            "Coverage: "
+            + ("complete" if report.coverage.required_coverage_complete else "incomplete")
+        )
+        if report.coverage.reviewed:
+            lines.append("  reviewed: " + ", ".join(report.coverage.reviewed))
+        if report.coverage.excluded:
+            lines.append("  excluded: " + ", ".join(report.coverage.excluded))
+        if report.coverage.unreviewable:
+            lines.append("  unreviewable: " + ", ".join(report.coverage.unreviewable))
+        if report.coverage.mandatory_missing:
+            lines.append("  mandatory missing: " + ", ".join(report.coverage.mandatory_missing))
+        if report.coverage.optional_missing:
+            lines.append("  optional missing: " + ", ".join(report.coverage.optional_missing))
     lines.append(f"Summary: {report.summary}")
     if report.error_detail:
         lines.append(f"Error: {report.error_detail}")

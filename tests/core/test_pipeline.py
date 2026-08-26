@@ -61,7 +61,7 @@ async def test_missing_objects_fail_at_construct_merge(
 
 
 @pytest.mark.asyncio
-async def test_clean_merge_prepares_workspace_then_stops_at_context(
+async def test_clean_merge_gathers_context_then_stops_at_dimensions(
     git_repository: Path, policy_dir: Path
 ) -> None:
     oid = head_oid(git_repository)
@@ -80,13 +80,16 @@ async def test_clean_merge_prepares_workspace_then_stops_at_context(
     assert report.gate_state is GateState.ERROR
     assert report.merge_tree_oid is not None
     assert len(report.merge_tree_oid) >= 40
+    assert report.coverage is not None
+    assert report.coverage.required_coverage_complete is True
     by_stage = {outcome.stage: outcome for outcome in report.execution.outcomes}
     assert tuple(by_stage) == PIPELINE_STAGE_ORDER
     assert by_stage[StageName.CONSTRUCT_MERGE].status is StageStatus.COMPLETED
     assert by_stage[StageName.PREPARE_WORKSPACE].status is StageStatus.COMPLETED
-    assert by_stage[StageName.GATHER_CONTEXT].status is StageStatus.FAILED
-    assert by_stage[StageName.RUN_DIMENSIONS].status is StageStatus.NOT_STARTED
-    assert "not implemented" in (by_stage[StageName.GATHER_CONTEXT].detail or "")
+    assert by_stage[StageName.GATHER_CONTEXT].status is StageStatus.COMPLETED
+    assert by_stage[StageName.RUN_DIMENSIONS].status is StageStatus.FAILED
+    assert "not implemented" in (by_stage[StageName.RUN_DIMENSIONS].detail or "")
+    assert by_stage[StageName.VERIFY_DEDUP].status is StageStatus.NOT_STARTED
 
 
 @pytest.mark.asyncio
@@ -114,3 +117,34 @@ async def test_conflict_does_not_prepare_workspace(git_repository: Path, policy_
     assert by_stage[StageName.CONSTRUCT_MERGE].status is StageStatus.FAILED
     assert "conflict" in (by_stage[StageName.CONSTRUCT_MERGE].detail or "").lower()
     assert by_stage[StageName.PREPARE_WORKSPACE].status is StageStatus.NOT_STARTED
+
+
+@pytest.mark.asyncio
+async def test_unreviewable_change_skips_dimensions(git_repository: Path, policy_dir: Path) -> None:
+    target_oid = head_oid(git_repository)
+    checkout_new_branch(git_repository, "topic")
+    blob = git_repository / "data.bin"
+    blob.write_bytes(b"hello\x00world")
+    git(git_repository, "add", "data.bin")
+    git(git_repository, "commit", "-m", "add binary")
+    proposed_oid = head_oid(git_repository)
+    git(git_repository, "checkout", "main")
+    report = await run_review_pipeline(
+        _request(
+            policy_dir,
+            ResolvedCommitPair(
+                source_repository=str(git_repository),
+                target_ref="main",
+                target_head_oid=target_oid,
+                proposed_ref="topic",
+                proposed_head_oid=proposed_oid,
+            ),
+        )
+    )
+    assert report.gate_state is GateState.ERROR
+    assert report.coverage is not None
+    assert report.coverage.required_coverage_complete is False
+    by_stage = {outcome.stage: outcome for outcome in report.execution.outcomes}
+    assert by_stage[StageName.GATHER_CONTEXT].status is StageStatus.COMPLETED
+    assert by_stage[StageName.RUN_DIMENSIONS].status is StageStatus.NOT_STARTED
+    assert "unreviewable" in (report.error_detail or "")

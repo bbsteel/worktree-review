@@ -31,6 +31,20 @@ COMPUTE_POLICY_DOCUMENT_ID: Literal["mergegate.compute-policy/v1"] = "mergegate.
 
 ProviderName = Literal["anthropic", "openai"]
 
+DEFAULT_MAX_FILE_BYTES = 1_048_576
+DEFAULT_OPTIONAL_CONTEXT_GLOBS: tuple[str, ...] = ("AGENTS.md", "CLAUDE.md")
+
+
+class ContextPolicy(BaseModel):
+    """How Review Policy classifies workspace and changed-file context (PRD §10)."""
+
+    model_config = ConfigDict(frozen=True)
+
+    max_file_bytes: Annotated[int, Field(ge=1)] = DEFAULT_MAX_FILE_BYTES
+    excluded_globs: tuple[str, ...] = ()
+    mandatory_globs: tuple[str, ...] = ()
+    optional_globs: tuple[str, ...] = DEFAULT_OPTIONAL_CONTEXT_GLOBS
+
 
 class ReviewPolicy(BaseModel):
     """Trusted Review Policy. Never loaded from the repository under review."""
@@ -45,6 +59,7 @@ class ReviewPolicy(BaseModel):
     required_dimensions: tuple[str, ...] = Field(min_length=1)
     blocking_severities: tuple[Severity, ...] = DEFAULT_BLOCKING_SEVERITIES
     minimum_blocking_evidence_band: EvidenceBand = DEFAULT_MINIMUM_BLOCKING_EVIDENCE_BAND
+    context: ContextPolicy = Field(default_factory=ContextPolicy)
 
     @field_validator("blocking_severities")
     @classmethod

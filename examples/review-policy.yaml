@@ -7,3 +7,10 @@ blocking_severities:
   - critical
   - major
 minimum_blocking_evidence_band: supported
+context:
+  max_file_bytes: 1048576
+  excluded_globs: []
+  mandatory_globs: []
+  optional_globs:
+    - AGENTS.md
+    - CLAUDE.md

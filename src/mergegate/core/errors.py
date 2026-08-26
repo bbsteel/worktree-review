@@ -35,3 +35,7 @@ class MergeConflictError(MergeConstructionError):
 
 class WorkspaceError(MergeGateError):
     """The read-only merge-candidate workspace could not be prepared."""
+
+
+class ContextGatherError(MergeGateError):
+    """Context gathering could not produce a reliable coverage record."""

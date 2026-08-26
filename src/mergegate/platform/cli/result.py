@@ -23,6 +23,17 @@ class StageOutcomePayload(BaseModel):
     detail: str | None = None
 
 
+class CoveragePayload(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    required_coverage_complete: bool
+    mandatory_missing: tuple[str, ...] = ()
+    optional_missing: tuple[str, ...] = ()
+    excluded: tuple[str, ...] = ()
+    unreviewable: tuple[str, ...] = ()
+    reviewed: tuple[str, ...] = ()
+
+
 class CliResultDocument(BaseModel):
     model_config = ConfigDict(frozen=True)
 
@@ -41,6 +52,7 @@ class CliResultDocument(BaseModel):
     compute_policy_version: PolicyVersionPayload
     stage_outcomes: tuple[StageOutcomePayload, ...]
     findings: tuple[dict[str, Any], ...]
+    coverage: CoveragePayload
     summary: str
     error_detail: str | None = None
 
@@ -73,6 +85,25 @@ def cli_result_document(report: ReviewReport) -> CliResultDocument:
                 for outcome in report.execution.outcomes
             ],
             "findings": [finding.model_dump(mode="json") for finding in report.findings],
+            "coverage": (
+                {
+                    "required_coverage_complete": report.coverage.required_coverage_complete,
+                    "mandatory_missing": list(report.coverage.mandatory_missing),
+                    "optional_missing": list(report.coverage.optional_missing),
+                    "excluded": list(report.coverage.excluded),
+                    "unreviewable": list(report.coverage.unreviewable),
+                    "reviewed": list(report.coverage.reviewed),
+                }
+                if report.coverage is not None
+                else {
+                    "required_coverage_complete": False,
+                    "mandatory_missing": [],
+                    "optional_missing": [],
+                    "excluded": [],
+                    "unreviewable": [],
+                    "reviewed": [],
+                }
+            ),
             "summary": report.summary,
             "error_detail": report.error_detail,
         }

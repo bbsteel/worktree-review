@@ -17,6 +17,7 @@ def test_load_review_policy(policy_dir: Path) -> None:
     assert policy.required_dimensions == ("correctness",)
     assert identity.semver == "0.1.0"
     assert len(identity.sha256) == 64
+    assert policy.context.optional_globs == ("AGENTS.md", "CLAUDE.md")
 
 
 def test_policy_hash_is_stable_across_key_order(tmp_path: Path) -> None:
@@ -54,3 +55,4 @@ def test_example_policies_validate() -> None:
     )
     assert "correctness" in review_policy.required_dimensions
     assert compute_policy.provider == "anthropic"
+    assert "AGENTS.md" in review_policy.context.optional_globs

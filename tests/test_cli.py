@@ -64,7 +64,9 @@ def test_review_json_is_error_and_matches_schema(git_repository: Path, policy_di
     stages = {item["stage"]: item["status"] for item in document["stage_outcomes"]}
     assert stages["construct-merge"] == "completed"
     assert stages["prepare-workspace"] == "completed"
-    assert stages["gather-context"] == "failed"
+    assert stages["gather-context"] == "completed"
+    assert stages["run-dimensions"] == "failed"
+    assert document["coverage"]["required_coverage_complete"] is True
 
 
 def test_dirty_worktree_is_invalid_invocation(git_repository: Path, policy_dir: Path) -> None:

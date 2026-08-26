@@ -82,11 +82,12 @@ class DimensionOutcome(BaseModel):
 
 
 class CoverageRecord(BaseModel):
-    """Disclosed coverage. Missing mandatory context makes required coverage incomplete."""
+    """Disclosed coverage. Missing mandatory or unreviewable-in-scope content is incomplete."""
 
     model_config = ConfigDict(frozen=True)
 
     required_coverage_complete: bool
+    mandatory_missing: tuple[str, ...] = ()
     optional_missing: tuple[str, ...] = ()
     excluded: tuple[str, ...] = ()
     unreviewable: tuple[str, ...] = ()

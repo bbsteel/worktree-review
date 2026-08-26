@@ -60,18 +60,22 @@ def _not_started(stage: StageName, detail: str | None = None) -> StageOutcome:
     return StageOutcome(stage=stage, status=StageStatus.NOT_STARTED, detail=detail)
 
 
-def _fill_unrecorded_stages(
-    execution: ExecutionRecord,
-    *,
-    failed_stage: StageName,
-) -> ExecutionRecord:
+def _fill_unrecorded_stages(execution: ExecutionRecord, *, reason: str) -> ExecutionRecord:
     recorded = {outcome.stage for outcome in execution.outcomes}
-    detail = f"short-circuited after {failed_stage.value} failure"
     for stage in PIPELINE_STAGE_ORDER:
         if stage in recorded or stage in _POST_FAILURE_STAGES:
             continue
-        execution = execution.with_outcome(_not_started(stage, detail))
+        execution = execution.with_outcome(_not_started(stage, reason))
     return execution
+
+
+def _coverage_error_detail(coverage: CoverageRecord) -> str:
+    parts: list[str] = []
+    if coverage.mandatory_missing:
+        parts.append("mandatory context missing: " + ", ".join(coverage.mandatory_missing))
+    if coverage.unreviewable:
+        parts.append("unreviewable in-scope content: " + ", ".join(coverage.unreviewable))
+    return "; ".join(parts) or "required coverage is incomplete"
 
 
 def _complete_report(
@@ -81,23 +85,29 @@ def _complete_report(
     merge_tree_oid: str | None,
     summary: str,
     error_detail: str | None,
+    coverage: CoverageRecord | None = None,
 ) -> ReviewReport:
+    resolved_coverage = coverage or CoverageRecord(required_coverage_complete=False)
     dimension_outcomes = tuple(
         DimensionOutcome(dimension_id=dimension_id, status=StageStatus.NOT_STARTED)
         for dimension_id in request.review_policy.required_dimensions
     )
-    coverage = CoverageRecord(required_coverage_complete=False)
     execution = execution.with_outcome(
         StageOutcome(
             stage=StageName.CHECK_COMPLETENESS,
             status=StageStatus.COMPLETED,
-            detail="required dimensions and coverage did not complete",
+            detail=(
+                "required coverage and dimensions completed"
+                if resolved_coverage.required_coverage_complete
+                and all(outcome.status is StageStatus.COMPLETED for outcome in dimension_outcomes)
+                else "required dimensions and coverage did not complete"
+            ),
         )
     )
     gate_state = evaluate_gate(
         GateEvaluationInput(
             dimension_outcomes=dimension_outcomes,
-            coverage=coverage,
+            coverage=resolved_coverage,
             findings=(),
             review_policy=request.review_policy,
         )
@@ -116,7 +126,7 @@ def _complete_report(
         compute_policy_version=request.compute_policy_version,
         execution=execution,
         findings=(),
-        coverage=coverage,
+        coverage=resolved_coverage,
         dimension_outcomes=dimension_outcomes,
         summary=summary,
         error_detail=error_detail,
@@ -124,7 +134,7 @@ def _complete_report(
 
 
 async def run_review_pipeline(request: ReviewRequest) -> ReviewReport:
-    """Run the shared pipeline through merge construction and workspace materialization."""
+    """Run the shared pipeline through context gathering; dimensions are not implemented."""
 
     execution = ExecutionRecord().with_outcome(
         StageOutcome(stage=StageName.DERIVE_IDENTITY, status=StageStatus.COMPLETED)
@@ -147,7 +157,9 @@ async def run_review_pipeline(request: ReviewRequest) -> ReviewReport:
                     detail=str(exc),
                 )
             )
-            execution = _fill_unrecorded_stages(execution, failed_stage=StageName.CONSTRUCT_MERGE)
+            execution = _fill_unrecorded_stages(
+                execution, reason="short-circuited after construct-merge failure"
+            )
             return _complete_report(
                 request,
                 execution,
@@ -172,7 +184,9 @@ async def run_review_pipeline(request: ReviewRequest) -> ReviewReport:
                     detail=str(exc),
                 )
             )
-            execution = _fill_unrecorded_stages(execution, failed_stage=StageName.PREPARE_WORKSPACE)
+            execution = _fill_unrecorded_stages(
+                execution, reason="short-circuited after prepare-workspace failure"
+            )
             return _complete_report(
                 request,
                 execution,
@@ -182,8 +196,8 @@ async def run_review_pipeline(request: ReviewRequest) -> ReviewReport:
             )
 
         try:
-            await gather_context(workspace, request.review_policy)
-        except UnimplementedStageError as exc:
+            gathered = await gather_context(workspace, candidate, request.review_policy)
+        except (MergeGateError, UnimplementedStageError) as exc:
             execution = execution.with_outcome(
                 StageOutcome(
                     stage=StageName.GATHER_CONTEXT,
@@ -191,15 +205,51 @@ async def run_review_pipeline(request: ReviewRequest) -> ReviewReport:
                     detail=str(exc),
                 )
             )
-            execution = _fill_unrecorded_stages(execution, failed_stage=StageName.GATHER_CONTEXT)
+            execution = _fill_unrecorded_stages(
+                execution, reason="short-circuited after gather-context failure"
+            )
             return _complete_report(
                 request,
                 execution,
                 merge_tree_oid=candidate.merge_tree_oid,
-                summary="Review did not complete: context gathering is not implemented.",
+                summary="Review did not complete: context gathering failed.",
                 error_detail=str(exc),
             )
-        raise UnimplementedStageError("pipeline stages after context gathering are not implemented")
+
+        execution = execution.with_outcome(
+            StageOutcome(stage=StageName.GATHER_CONTEXT, status=StageStatus.COMPLETED)
+        )
+        if not gathered.coverage.required_coverage_complete:
+            execution = _fill_unrecorded_stages(
+                execution, reason="short-circuited: required coverage is incomplete"
+            )
+            return _complete_report(
+                request,
+                execution,
+                merge_tree_oid=candidate.merge_tree_oid,
+                summary="Review did not complete: required context coverage is incomplete.",
+                error_detail=_coverage_error_detail(gathered.coverage),
+                coverage=gathered.coverage,
+            )
+
+        execution = execution.with_outcome(
+            StageOutcome(
+                stage=StageName.RUN_DIMENSIONS,
+                status=StageStatus.FAILED,
+                detail="required review dimensions are not implemented",
+            )
+        )
+        execution = _fill_unrecorded_stages(
+            execution, reason="short-circuited after run-dimensions failure"
+        )
+        return _complete_report(
+            request,
+            execution,
+            merge_tree_oid=candidate.merge_tree_oid,
+            summary="Review did not complete: required review dimensions are not implemented.",
+            error_detail="required review dimensions are not implemented",
+            coverage=gathered.coverage,
+        )
     finally:
         if workspace is not None:
             await cleanup_review_workspace(workspace)

@@ -26,6 +26,28 @@
     "minimum_blocking_evidence_band": {
       "type": "string",
       "enum": ["insufficient", "supported", "verified"]
+    },
+    "context": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "max_file_bytes": { "type": "integer", "minimum": 1 },
+        "excluded_globs": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "uniqueItems": true
+        },
+        "mandatory_globs": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "uniqueItems": true
+        },
+        "optional_globs": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "uniqueItems": true
+        }
+      }
     }
   }
 }

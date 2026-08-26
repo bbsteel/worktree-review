@@ -17,6 +17,7 @@
     "compute_policy_version",
     "stage_outcomes",
     "findings",
+    "coverage",
     "summary"
   ],
   "properties": {
@@ -45,6 +46,7 @@
       "items": { "$ref": "#/$defs/stageOutcome" }
     },
     "findings": { "type": "array", "items": { "type": "object" } },
+    "coverage": { "$ref": "#/$defs/coverage" },
     "summary": { "type": "string" },
     "error_detail": { "type": ["string", "null"] }
   },
@@ -66,6 +68,19 @@
         "stage": { "type": "string" },
         "status": { "type": "string", "enum": ["completed", "failed", "not-started"] },
         "detail": { "type": ["string", "null"] }
+      }
+    },
+    "coverage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["required_coverage_complete"],
+      "properties": {
+        "required_coverage_complete": { "type": "boolean" },
+        "mandatory_missing": { "type": "array", "items": { "type": "string" } },
+        "optional_missing": { "type": "array", "items": { "type": "string" } },
+        "excluded": { "type": "array", "items": { "type": "string" } },
+        "unreviewable": { "type": "array", "items": { "type": "string" } },
+        "reviewed": { "type": "array", "items": { "type": "string" } }
       }
     }
   }

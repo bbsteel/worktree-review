@@ -111,3 +111,57 @@ async def resolve_commit(ref: str, repository: Path) -> str:
     except GitCliError as exc:
         raise InvalidInvocationError(f"cannot resolve {ref!r} to a commit: {exc}") from exc
     return stdout.strip()
+
+
+async def commit_tree_oid(commit: str, repository: Path) -> str:
+    return (await run_git("rev-parse", f"{commit}^{{tree}}", cwd=repository)).strip()
+
+
+async def diff_name_status(
+    *,
+    from_tree: str,
+    to_tree: str,
+    repository: Path,
+) -> tuple[tuple[str, str], ...]:
+    """Return ``((status, path), ...)`` for ``from_tree`` → ``to_tree``.
+
+    Rename detection is off so add+delete pairs stay explicit.
+    """
+
+    stdout = await run_git(
+        "diff-tree",
+        "-r",
+        "--name-status",
+        "--no-renames",
+        from_tree,
+        to_tree,
+        cwd=repository,
+    )
+    entries: list[tuple[str, str]] = []
+    for line in stdout.splitlines():
+        if not line:
+            continue
+        status, path = line.split("\t", 1)
+        entries.append((status[0], path))
+    return tuple(entries)
+
+
+async def git_blob_bytes(spec: str, repository: Path) -> bytes:
+    """Read a blob (``commit:path`` or object id) as raw bytes."""
+
+    process = await asyncio.create_subprocess_exec(
+        "git",
+        *_HOOKS_DISABLED,
+        "cat-file",
+        "-p",
+        spec,
+        cwd=repository,
+        env=isolated_git_env(),
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    stdout_bytes, stderr_bytes = await process.communicate()
+    if process.returncode != 0:
+        detail = stderr_bytes.decode("utf-8", errors="replace").strip()
+        raise GitCliError(f"git cat-file -p {spec} failed: {detail}")
+    return stdout_bytes
