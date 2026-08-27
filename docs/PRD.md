@@ -1,9 +1,9 @@
-# MergeGate Product Requirements Document
+# Worktree Review Product Requirements Document
 
 - Status: First-stage product contract ready for technical design
 - Date: 2026-08-27
 - Visibility: Public product document
-- Product form: Platform-independent review gate with GitHub and local CLI surfaces
+- Product form: Worktree-based code review with a first-stage GitHub merge gate and local CLI
 - Chinese translation: `docs/PRD.zh-CN.md`
 
 This is a living description of the intended product direction, not a delivery
@@ -18,7 +18,9 @@ gate a platform change request:
 
 | Term | Definition |
 | --- | --- |
-| Review Request Key | The pre-construction key consisting of source repository, target ref, resolved target-head commit, proposed-head commit, and Review Policy version. It identifies what MergeGate was asked to construct and review even when merge construction fails. |
+| Worktree Review | A review method that evaluates a proposed change in a complete, isolated materialization of the resulting repository tree. The diff locates the change; the full tree supplies the context needed to understand and verify it. The method does not require the materialization to be created by `git worktree add`. |
+| Review Worktree | The immutable filesystem view materialized for one successfully constructed merge candidate. It is a product-level review environment, not necessarily a Git linked worktree. |
+| Review Request Key | The pre-construction key consisting of source repository, target ref, resolved target-head commit, proposed-head commit, and Review Policy version. It identifies what Worktree Review was asked to construct and review even when merge construction fails. |
 | Merge Candidate Identity | The source repository, target ref, resolved target-head commit, proposed-head commit, and resulting merge-tree identifier. It exists only after merge construction succeeds. |
 | Review Identity | The Merge Candidate Identity plus the applied Review Policy version. It defines exactly what a completed review conclusion applies to. |
 | Review Context | The code, diff, tests, documentation, change-request metadata, external results, and other evidence gathered for one Attempt. Context informs a review but is not its identity. |
@@ -34,18 +36,24 @@ authority*.
 
 ## 1. Product summary
 
-MergeGate is a platform-independent, policy-driven AI review gate for proposed
-code changes. It reviews the exact result that would be merged into a target,
-publishes evidence-backed findings, and decides whether that merge candidate may
-pass under user-owned review and compute policies.
+Worktree Review is a platform-independent, policy-driven AI code-change review
+product. Instead of treating a diff as the complete review object, it reviews the
+exact resulting tree in an isolated Review Worktree, publishes evidence-backed
+findings, and decides whether that merge candidate may pass under user-owned
+review and compute policies.
 
-MergeGate provides an open, user-controlled alternative for code-change review
+Worktree Review provides an open, user-controlled alternative for code-change review
 and merge gating. Its long-term direction gives users control over review
 standards, language, models, budgets, quotas, and routing.
 GitHub is the first repository-platform integration, not the boundary of the
 product. A local CLI exposes the same review semantics without requiring a pull
 request. The first product stage deliberately implements a smaller, fail-closed
 subset of this direction.
+
+Reliable merge gating is the original motivation for the product and the
+highest-priority first-stage outcome. Worktree Review is the product and review
+method; the GitHub Gate is its first authoritative enforcement surface, not a
+separate compliance-only product.
 
 ## 2. Problem statement
 
@@ -65,7 +73,7 @@ limitations in AI-assisted review workflows:
 - A review bot may publish comments without providing a dependable merge
   decision.
 
-MergeGate addresses these problems by making review policy, compute policy,
+Worktree Review addresses these problems by making review policy, compute policy,
 merge-candidate context, evidence strength, review coverage, and the gate
 decision first-class product concepts.
 
@@ -78,18 +86,18 @@ merge gate is open.
 
 The product promise is:
 
-> Your policies. Your models. Your merge gate.
+> Review the worktree, not just the diff. Control the gate with evidence.
 
 ## 4. Product form and platform scope
 
-MergeGate has one platform-independent product contract exposed through multiple
+Worktree Review has one platform-independent product contract exposed through multiple
 surfaces:
 
 | Surface | First-stage role | Result authority |
 | --- | --- | --- |
 | GitHub integration | Automatically reviews eligible pull requests, publishes inline findings and a durable check, and supports auditable finding bypass. | A standing gate decision bound to the current review identity. |
 | Local CLI | Reviews an explicitly selected local merge candidate on demand and emits human-readable and machine-readable results. | A one-shot result and process exit status for the reviewed identity; it does not create or change a remote standing gate. |
-| Other repository platforms | Later integrations map native change requests, checks, comments, and authorization onto the same MergeGate semantics. | Must preserve the same identity, evidence, coverage, and fail-closed rules. |
+| Other repository platforms | Later integrations map native change requests, checks, comments, and authorization onto the same Worktree Review semantics. | Must preserve the same identity, evidence, coverage, and fail-closed rules. |
 
 GitHub-specific triggers, presentation, and authorization may differ from those
 of a future platform. They must not redefine Review Policy, evidence bands,
@@ -130,12 +138,17 @@ The first product stage supports two entry points:
   selected target ref. The local worktree must be clean so the candidate is
   reproducible from Git objects.
 
+The GitHub entry point, including authoritative invalidation, retry, publication,
+and merge blocking, has delivery priority over convenience features on either
+surface. The CLI remains a first-stage surface because it exercises and exposes
+the same review and deterministic gate semantics locally.
+
 Each distinct review identity receives a complete Standard Review. Both entry
 points construct and review the same kind of merge candidate, apply the same
 Review Policy and gate evaluation, and expose the exact identity reviewed. The
 first stage does not reuse review conclusions incrementally across candidates.
 
-MergeGate must:
+Worktree Review must:
 
 1. Automatically review an eligible GitHub pull request when it is opened,
    reopened, marked ready for review, or updated.
@@ -209,7 +222,7 @@ unless Review Policy explicitly requires Deep Review for that new identity.
 
 ### 7.2 Non-goals
 
-MergeGate is not intended to be:
+Worktree Review is not intended to be:
 
 - A general-purpose coding agent.
 - An IDE completion or editing extension.
@@ -222,7 +235,7 @@ MergeGate is not intended to be:
 - A merge-conflict resolution service.
 - A repository modification or auto-commit service.
 
-MergeGate may provide a suggested fix or illustrative patch, but it does not
+Worktree Review may provide a suggested fix or illustrative patch, but it does not
 apply, commit, or push that fix in the first stage.
 
 ## 8. Product principles
@@ -235,13 +248,13 @@ resolves these commits from the current pull request; the CLI resolves them from
 the explicitly selected target ref and proposed head. If either resolved commit
 changes, a new merge candidate exists.
 
-If MergeGate cannot construct the merge candidate, including because of a merge
+If Worktree Review cannot construct the merge candidate, including because of a merge
 conflict, the review ends with `Error`. A head-only worktree has no gate value and
 must not produce a passing decision.
 
 ### 8.2 Decisions are identity-bound
 
-MergeGate applies the terminology above as follows:
+Worktree Review applies the terminology above as follows:
 
 - The review request key exists before merge construction and remains available
   when construction fails. It is the scheduling, failure-reporting, and audit key
@@ -296,7 +309,7 @@ not by reducing the required review scope.
 
 ### 8.4 No silent degradation
 
-MergeGate must never represent a partial or failed review as a successful
+Worktree Review must never represent a partial or failed review as a successful
 review. Skipped files, missing context, exhausted budget, provider failure, and
 incomplete coverage must be visible.
 
@@ -320,14 +333,14 @@ fallback without changing Review Policy semantics.
 ### 8.8 Bypass is not resolution
 
 A bypass records that an authorized user chose to proceed despite the stated
-risk. It must not be displayed as if MergeGate withdrew the finding or
+risk. It must not be displayed as if Worktree Review withdrew the finding or
 determined that the code was safe.
 
 ### 8.9 Policy never comes from the reviewed repository
 
-Review Policy and Compute Policy are stored under MergeGate's control and are
+Review Policy and Compute Policy are stored under Worktree Review's control and are
 never loaded from the Git refs or merge tree under review. GitHub uses policy
-held by its MergeGate installation; the CLI uses an explicitly selected trusted
+held by its Worktree Review installation; the CLI uses an explicitly selected trusted
 policy outside the reviewed repository. A proposed change can therefore never
 modify the rules that gate it. Repository instruction files such as `AGENTS.md`
 and `CLAUDE.md` are review context, not policy.
@@ -388,7 +401,7 @@ A Review Policy captures the user's review experience and governs:
 - Comment presentation and output language.
 - Bypass authorization and requirements.
 
-Review Policy must be reusable and versionable. It is stored under MergeGate's
+Review Policy must be reusable and versionable. It is stored under Worktree Review's
 control, never in the reviewed repository. Its storage format and evaluation
 mechanism are deferred.
 
@@ -421,9 +434,9 @@ least:
 - Suggested repair direction, when useful.
 - Review identity and execution provenance.
 
-A finding is scoped to one review identity in the first product stage. MergeGate
+A finding is scoped to one review identity in the first product stage. Worktree Review
 does not promise to preserve finding identity across merge candidates. When the
-same review identity is reviewed again, MergeGate may recognize a materially
+same review identity is reviewed again, Worktree Review may recognize a materially
 unchanged finding so that an applicable bypass remains auditable, but it must not
 transfer a bypass to a materially different risk.
 
@@ -445,7 +458,7 @@ surface and within first-stage scope, including:
 - The complete merge-candidate diff and changed files.
 - Callers, callees, public interfaces, data structures, and dependencies.
 - Relevant tests and test intent, without executing the tests.
-- Review Policy stored under MergeGate's control.
+- Review Policy stored under Worktree Review's control.
 - Repository instruction files such as `AGENTS.md` and `CLAUDE.md`, treated as
   untrusted context.
 - Relevant architecture, product, and business documentation in the reviewed
@@ -454,7 +467,7 @@ surface and within first-stage scope, including:
 - The resolved target implementation represented in the merge candidate.
 - Relevant commit history.
 - Available results from CI, tests, linters, and security checks run outside the
-  MergeGate review workspace.
+  Review Worktree.
 
 Review Policy classifies context as follows:
 
@@ -466,7 +479,7 @@ Review Policy classifies context as follows:
 | Unreviewable changed content | Review Policy must explicitly exclude it; otherwise the review ends with `Error`. |
 
 Unreviewable content may include binaries, unavailable Git LFS objects, or files
-that exceed supported limits. MergeGate must not silently skip such content and
+that exceed supported limits. Worktree Review must not silently skip such content and
 claim complete coverage.
 
 Context completeness means complete coverage of the scope required by the
@@ -515,7 +528,7 @@ report the resolved identities, and never imply that its result covers commits o
 working-tree changes created after that resolution.
 
 Draft pull requests are not eligible for review. Marking a pull request ready
-starts review; converting it back to draft invalidates any standing MergeGate
+starts review; converting it back to draft invalidates any standing Worktree Review
 decision. Pull requests from external forks are reported as unsupported in the
 first stage rather than receiving a partial review experience.
 
@@ -555,7 +568,7 @@ Self-reported model certainty is not evidence. Review Policy defines the minimum
 evidence band required for blocking, and that definition remains stable across
 models.
 
-MergeGate may display a numerical or human-readable confidence diagnostic when
+Worktree Review may display a numerical or human-readable confidence diagnostic when
 useful, but the first product stage must identify its model provenance and must
 not use it as a blocking threshold or imply that values from uncalibrated models
 are comparable.
@@ -569,13 +582,13 @@ are comparable.
 | `Passed` | Every required review dimension and required coverage completed, with no unresolved blocking findings. |
 | `Passed with bypass` | Every required review dimension and required coverage completed; all remaining blocking findings have applicable authorized bypasses. |
 | `Blocked` | Every required review dimension and required coverage completed, and one or more unresolved, non-bypassed blocking findings remain. |
-| `Error` | MergeGate could not complete every required review dimension, required coverage, or a valid gate decision. |
+| `Error` | Worktree Review could not complete every required review dimension, required coverage, or a valid gate decision. |
 
 `Error` is fail-closed. Finding bypass is unavailable for an incomplete review,
 and no product action converts `Error` to `Passed with bypass`. The only product
 path out of `Error` is to correct or change the blocking condition and rerun the
 review successfully. A platform administrator may use a platform-native
-administrative bypass when one exists, but MergeGate keeps its state as `Error`
+administrative bypass when one exists, but Worktree Review keeps its state as `Error`
 and records no passing decision. The CLI returns its documented nonzero `Error`
 outcome.
 
@@ -641,23 +654,23 @@ represents unknown review risk, not only the findings already discovered.
 
 ## 17. Repair suggestions
 
-MergeGate may provide:
+Worktree Review may provide:
 
 - A repair direction.
 - An illustrative code snippet or patch.
 - Recommended tests.
 - Relevant examples from the repository.
 
-MergeGate does not apply, commit, or push the repair in the first stage. A
+Worktree Review does not apply, commit, or push the repair in the first stage. A
 suggested repair is not verified until the author creates a new merge candidate
-and MergeGate completes its review.
+and Worktree Review completes its review.
 
 ## 18. Budget exhaustion and incomplete review
 
 If the configured budget cannot cover a complete review:
 
 - The gate state is `Error`.
-- MergeGate reports that the budget was exhausted.
+- Worktree Review reports that the budget was exhausted.
 - Completed, excluded, optional-missing, and unreviewed scope is visible.
 - Findings already discovered may remain visible but cannot be bypassed.
 - No `Passed` or `Passed with bypass` decision is produced.
@@ -722,7 +735,7 @@ For the first product stage, users must be able to configure:
 - Whether uncertain price or usage information permits a review to start.
 
 When a provider does not expose reliable quota, usage, or price information,
-MergeGate must distinguish measured usage, user-declared limits, current price
+Worktree Review must distinguish measured usage, user-declared limits, current price
 estimates, and inferred availability. It must not present guesses as
 authoritative or silently exceed the configured budget.
 
@@ -765,12 +778,12 @@ failed, or not-started outcome; a fatal failure cannot be hidden by later output
    updated, force-pushed, or retargeted; its target branch or applicable Review
    Policy changes; or an authorized user explicitly retries its unchanged review
    request, including after correcting Compute Policy or a transient failure.
-2. MergeGate resolves the current target branch and pull-request head.
-3. MergeGate creates a new attempt and atomically makes it authoritative. Any
+2. Worktree Review resolves the current target branch and pull-request head.
+3. Worktree Review creates a new attempt and atomically makes it authoritative. Any
    standing decision from the prior authoritative attempt is invalidated
    immediately, before review scheduling or candidate construction, whether the
    Review Identity changed or remained the same.
-4. MergeGate runs the shared review pipeline and publishes a durable GitHub check.
+4. Worktree Review runs the shared review pipeline and publishes a durable GitHub check.
 5. Publication atomically verifies the current Attempt ID and Review Request Key,
    plus Review Identity whenever construction succeeded. A superseded attempt
    remains audit-only.
@@ -789,7 +802,7 @@ first product stage rather than entering this lifecycle.
 
 ### 21.3 Local CLI lifecycle
 
-1. The user invokes MergeGate inside a local Git repository and explicitly
+1. The user invokes Worktree Review inside a local Git repository and explicitly
    selects a target ref; the proposed head defaults to the committed `HEAD` but
    may be another committed ref.
 2. The CLI verifies that the worktree is clean, resolves both refs to immutable
@@ -808,7 +821,7 @@ working-tree changes.
 
 ## 22. Feedback and product validation
 
-Quantitative success targets are not meaningful before MergeGate has enough
+Quantitative success targets are not meaningful before Worktree Review has enough
 representative usage and independently reviewed examples. The first stage
 collects structured feedback including:
 
@@ -820,7 +833,7 @@ collects structured feedback including:
 - The participant role and whether no feedback was supplied.
 
 Participant feedback is not treated as ground truth. When sufficient examples
-exist, MergeGate should maintain a separately adjudicated evaluation set for
+exist, Worktree Review should maintain a separately adjudicated evaluation set for
 real-problem discovery, false-positive, and false-block measurement. Cost and
 latency remain operational diagnostics rather than quality substitutes.
 

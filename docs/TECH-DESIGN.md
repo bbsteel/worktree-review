@@ -1,4 +1,4 @@
-# MergeGate Technical Design — v1
+# Worktree Review Technical Design — v1
 
 - Status: First-version technical landing plan for the first-stage PRD
 - Date: 2026-08-27
@@ -21,6 +21,7 @@ boundaries:
 
 | Concept | Technical role |
 | --- | --- |
+| Review Worktree | Read-only, verified filesystem materialization of a successful merge candidate. It provides full-tree review context but is not required to be a Git linked worktree. |
 | Review Request Key | Available before merge construction; keys scheduling, construction-failure reporting, and audit by repository, target ref, resolved heads, and Review Policy version. |
 | Merge Candidate Identity | Finalized only after `git merge-tree` returns a valid resulting tree OID. |
 | Review Identity | Merge Candidate Identity plus Review Policy version; defines what a review conclusion applies to. |
@@ -36,13 +37,14 @@ completion can belong to an older, superseded attempt.
 
 ### Decision: Python (single language for core, CLI, and GitHub service)
 
-One repository, one Python package with a shared `mergegate.core`, and two
-entry points:
+One repository, one Python package with a shared `worktree_review.core`, and two
+entry points. The GitHub server and its authoritative gate are the first-stage
+delivery priority; the CLI shares the same pipeline and deterministic evaluator:
 
 | Entry point | Role |
 | --- | --- |
-| `mergegate` | Local CLI surface (PRD §4, §21.3). Distributed via PyPI (`uv tool install mergegate` / pipx). |
-| `mergegate-server` | GitHub App: webhook receiver + review workers in one deployable process. Distributed as a Docker image. |
+| `worktree-review` | Local CLI surface (PRD §4, §21.3). Distributed via PyPI (`uv tool install worktree-review` / pipx). |
+| `worktree-review-server` | GitHub App: webhook receiver + review workers in one deployable process. Distributed as a Docker image. |
 
 Rationale:
 
@@ -86,26 +88,26 @@ Rationale:
 
 ```
 ┌───────────────────────────────────────────────────────────────┐
-│ Surfaces (entry points of the single `mergegate` package)      │
-│   mergegate          (CLI, PRD §21.3; Typer app)               │
-│   mergegate-server   (GitHub App, PRD §21.2; FastAPI)          │
+│ Surfaces (entry points of the single `worktree-review` package)      │
+│   worktree-review    (CLI, PRD §21.3; Typer app)               │
+│   worktree-review-server   (GitHub App, PRD §21.2; FastAPI)          │
 ├───────────────────────────────────────────────────────────────┤
 │ Adapters (thin; may not reinterpret product semantics, §8.12)  │
-│   mergegate.platform.github  checks, comments, webhooks, authz │
-│   mergegate.platform.cli     terminal report, JSON result, exit│
+│   worktree_review.platform.github  checks, comments, webhooks, authz │
+│   worktree_review.platform.cli     terminal report, JSON result, exit│
 ├───────────────────────────────────────────────────────────────┤
 │ Core (platform-independent; both surfaces import this)         │
-│   mergegate.core.identity    merge-candidate / review identity │
-│   mergegate.core.candidate   merge construction (git merge-tree)│
-│   mergegate.core.workspace   isolated read-only materialization│
-│   mergegate.core.policy      Review/Compute Policy load+validate│
-│   mergegate.core.context     mandatory/optional/excluded gather│
-│   mergegate.core.dimension   required review dimensions        │
-│   mergegate.core.provider    LLM provider abstraction + budget │
-│   mergegate.core.findings    verify, dedup, classify           │
-│   mergegate.core.gate        deterministic gate evaluation     │
-│   mergegate.core.report      surface-neutral result model      │
-│   mergegate.core.pipeline    the 9-stage pipeline (PRD §21.1)  │
+│   worktree_review.core.identity    merge-candidate / review identity │
+│   worktree_review.core.candidate   merge construction (git merge-tree)│
+│   worktree_review.core.workspace   isolated read-only materialization│
+│   worktree_review.core.policy      Review/Compute Policy load+validate│
+│   worktree_review.core.context     mandatory/optional/excluded gather│
+│   worktree_review.core.dimension   required review dimensions        │
+│   worktree_review.core.provider    LLM provider abstraction + budget │
+│   worktree_review.core.findings    verify, dedup, classify           │
+│   worktree_review.core.gate        deterministic gate evaluation     │
+│   worktree_review.core.report      surface-neutral result model      │
+│   worktree_review.core.pipeline    the 9-stage pipeline (PRD §21.1)  │
 ├───────────────────────────────────────────────────────────────┤
 │ Infrastructure                                                 │
 │   system git CLI · PostgreSQL (server state) · pgqueuer jobs   │
@@ -114,11 +116,11 @@ Rationale:
 ```
 
 The PRD's portability rule (§8.12) is enforced structurally: everything the
-PRD calls a product semantic lives in `mergegate.core`; adapters only map
+PRD calls a product semantic lives in `worktree_review.core`; adapters only map
 transport concepts (webhook payloads, checks API, terminal output, exit
-codes) onto core types. The package uses a `src/mergegate/` layout; the CLI
+codes) onto core types. The package uses a `src/worktree_review/` layout; the CLI
 and server share one distribution, with server-only dependencies behind a
-`mergegate[server]` extra.
+`worktree-review[server]` extra.
 
 ### 2.2 Architecture decisions
 
@@ -144,7 +146,7 @@ merge-candidate identity (§8.2). Before construction, the attempt carries only
 the Review Request Key; conflict or missing objects therefore produce `Error`
 without inventing a merge-tree OID or completed Review Identity.
 
-The review workspace is materialized from raw tree entries and blob OIDs into a
+The Review Worktree is materialized from raw tree entries and blob OIDs into a
 fresh directory, then verified against the source tree and chmod'd read-only. It
 must not use `git archive`, checkout filters, or another mechanism that applies
 candidate-controlled `export-ignore`, `export-subst`, smudge, clean, or external
@@ -152,6 +154,12 @@ driver behavior. Repository paths may not collide with product-owned markers;
 product metadata lives outside the extracted tree. File creation uses
 directory-relative operations that reject traversal and never follows a
 repository symlink for writes. Symlinks are materialized as link data only.
+
+The product term Review Worktree deliberately borrows the developer intuition
+of a complete, isolated Git worktree. The implementation does not use
+`git worktree add`: doing so would require a commit/HEAD-shaped checkout and
+would introduce repository metadata and checkout behavior that the exact
+merge-tree materialization contract does not need.
 
 The workspace is owned by a dedicated unprivileged runtime user (server) or the
 invoking user (CLI), with a scrubbed environment: no platform tokens, no
@@ -161,7 +169,7 @@ and LFS pointer behavior must match real git byte-for-byte. The CLI requires git
 ≥ 2.38 and fails invocation (exit 3) otherwise.
 
 **D3 — One shared 9-stage pipeline, explicit stage outcomes.**
-`mergegate.core.pipeline` implements PRD §21.1 literally: establish request key
+`worktree_review.core.pipeline` implements PRD §21.1 literally: establish request key
 and attempt → merge and finalize identities → workspace → context → dimensions
 → verify/dedup → completeness check → gate → publish. Every stage writes an
 outcome record (`completed` / `failed` /
@@ -179,21 +187,21 @@ comparison converts publication to an audit-only superseded result, never a
 standing decision.
 
 **D4 — Deterministic, pure gate evaluator.**
-`mergegate.core.gate` is a pure function
+`worktree_review.core.gate` is a pure function
 `(dimension outcomes, coverage, findings, bypasses, Review Policy) →
 GateState`. No model call participates; model output may only influence
 *which findings exist*, never the mapping to the decision (§9.5). The
 evaluator is table-driven and property-tested (e.g., "no unresolved blocking
 finding ⇒ not `Blocked`", "any incomplete required dimension ⇒ `Error`").
 
-**D5 — Policy as versioned, content-addressed YAML under MergeGate control.**
+**D5 — Policy as versioned, content-addressed YAML under Worktree Review control.**
 Review Policy and Compute Policy are separate YAML documents with separate
 versions (§8.2: Compute Policy changes do not invalidate standing
 decisions). Each document carries a semver; its *version identity* is
 `semver + SHA-256 of canonical bytes`. Storage:
 
 - CLI: an explicitly selected path outside the reviewed repository
-  (`--policy`, `--compute-policy`, or `~/.config/mergegate/`). The CLI
+  (`--policy`, `--compute-policy`, or `~/.config/worktree-review/`). The CLI
   refuses any policy path inside the worktree under review (§8.9).
 - GitHub: per-installation rows in Postgres, edited outside the reviewed
   repo; every review records the exact policy version hashes it used.
@@ -253,7 +261,7 @@ infrastructure:
 - No Redis/SQS/NATS/Celery in stage one.
 
 The CLI is stateless except an optional local cache directory
-(`~/.cache/mergegate/`) for immutable artifacts keyed by content hash;
+(`~/.cache/worktree-review/`) for immutable artifacts keyed by content hash;
 caching may never reduce review scope or reuse conclusions (§11.1).
 
 **D9 — Append-only audit events, with published-state self-audit.**
@@ -264,7 +272,7 @@ risk snapshot (problem statement, severity, impact, key evidence); expiry on
 identity or Review-Policy change and "materially unchanged" re-match on
 re-review are evaluated deterministically from these fields (§16, §9.4).
 
-MergeGate does not trust the platform-visible standing state it published;
+Worktree Review does not trust the platform-visible standing state it published;
 it reconciles it against its own records (the forged-status lesson from
 palantir/policy-bot):
 
@@ -297,7 +305,7 @@ as the mechanism that keeps native overrides visible.
 
 **D10 — CLI contract.**
 - Human-readable report to stdout; `--format json` emits the versioned
-  machine-readable schema `mergegate.cli.result/v1` (§19).
+  machine-readable schema `worktree-review.cli.result/v1` (§19).
 - Exit codes: `0` = `Passed`, `1` = `Blocked`, `2` = `Error`,
   `3` = invalid invocation (dirty worktree, unresolvable refs, policy inside
   repo, git too old, bad flags). `Passed with bypass` is never produced by
@@ -318,9 +326,9 @@ trusted policy (§8.11). Findings and logs pass through a detect-secrets-based
 redaction step before publication (§8.11).
 
 **D12 — Deployment for stage one.**
-The server ships as a single Docker image running `mergegate-server`
+The server ships as a single Docker image running `worktree-review-server`
 (webhook HTTP + embedded pgqueuer workers) beside a Postgres instance; the
-CLI ships via PyPI and installs with `uv tool install mergegate` or pipx.
+CLI ships via PyPI and installs with `uv tool install worktree-review` or pipx.
 For development, webhooks arrive via smee.io/ngrok. There is no separate
 worker fleet, scheduler, or service mesh in stage one.
 
@@ -366,7 +374,7 @@ reason, prior attempt ID, and new attempt ID are append-only audit fields.
 | Concern | Choice | Why / notes |
 | --- | --- | --- |
 | Language toolchain | Python ≥ 3.12, `uv` for env/lock/publish | See §1. `uv` covers venvs, lockfile, build, and PyPI upload. |
-| Packaging/build | `hatchling` (via uv), `src/mergegate/` layout | Single package; server-only deps behind the `mergegate[server]` extra; two console entry points. |
+| Packaging/build | `hatchling` (via uv), `src/worktree_review/` layout | Single package; server-only deps behind the `worktree-review[server]` extra; two console entry points. |
 | CLI framework | `typer` | Type-hint-driven commands on top of Click; exit-code control stays ours. |
 | HTTP server | `fastapi` + `uvicorn` | Webhook receiver; async-native; OpenAPI for the details/health endpoints. |
 | HTTP client | `httpx` (async) | Provider SDKs and GitHub calls share one async client discipline. |
@@ -517,7 +525,7 @@ must converge in this order so intermediate states remain fail-closed:
    establishing the request key and Attempt. Preserve the nine externally
    reported stages while making stage 2 finalize the successful identities.
 3. Add Attempt ID, request key, and optional successful identities to the
-   surface-neutral report and `mergegate.cli.result/v1`; update both human and
+   surface-neutral report and `worktree-review.cli.result/v1`; update both human and
    JSON CLI renderers together.
 4. Implement the GitHub `change_requests.authoritative_attempt_id` transaction,
    attempt-keyed jobs, and stage-9 compare-and-set before enabling retries or

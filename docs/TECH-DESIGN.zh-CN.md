@@ -1,4 +1,4 @@
-# MergeGate 技术设计 — v1
+# Worktree Review 技术设计 — v1
 
 - 状态：第一阶段 PRD 的首版技术落地计划
 - 日期：2026-08-27
@@ -15,6 +15,7 @@
 
 | 概念 | 技术职责 |
 | --- | --- |
+| Review Worktree | 成功合并候选的只读、已校验文件系统物化；提供完整代码树上下文，但不要求是 Git linked worktree。 |
 | Review Request Key | merge 前可用；按仓库、target ref、resolved heads 和 Review Policy 版本为调度、构造失败与审计提供键。 |
 | Merge Candidate Identity | 仅在 `git merge-tree` 返回合法结果 tree OID 后完成。 |
 | Review Identity | Merge Candidate Identity 加 Review Policy 版本，限定结论适用对象。 |
@@ -29,12 +30,13 @@
 
 ### 决定：Python（core、CLI、GitHub service 单一语言）
 
-一个仓库、一个含共享 `mergegate.core` 的 Python package，两个入口：
+一个仓库、一个含共享 `worktree_review.core` 的 Python package，两个入口。GitHub server
+及其权威 gate 是第一阶段交付重点；CLI 复用同一 pipeline 和确定性 evaluator：
 
 | 入口 | 职责 |
 | --- | --- |
-| `mergegate` | 本地 CLI，通过 PyPI、`uv tool install` 或 pipx 分发。 |
-| `mergegate-server` | GitHub App webhook receiver 与 review worker，Docker image 分发。 |
+| `worktree-review` | 本地 CLI，通过 PyPI、`uv tool install` 或 pipx 分发。 |
+| `worktree-review-server` | GitHub App webhook receiver 与 review worker，Docker image 分发。 |
 
 理由：第一阶段主要工作是 prompt、context assembly 和 finding processing，维护者的
 Python 迭代速度最重要；目标用户能接受 Python ≥3.12 与 uv/pipx；并发主要等待 LLM
@@ -54,12 +56,12 @@ API 体验好但 CLI 分发和 runtime schema 成本更高；Rust 安全和 bina
 
 ```text
 Surfaces
-  mergegate (Typer CLI)
-  mergegate-server (FastAPI GitHub App)
+  worktree-review (Typer CLI)
+  worktree-review-server (FastAPI GitHub App)
         │
 Adapters
-  mergegate.platform.github
-  mergegate.platform.cli
+  worktree_review.platform.github
+  worktree_review.platform.cli
         │
 Core
   identity / candidate / workspace / policy / context / dimension
@@ -70,9 +72,9 @@ Infrastructure
   detect-secrets · structlog · OpenTelemetry
 ```
 
-产品语义全部位于 `mergegate.core`；adapter 只映射 webhook、Checks API、终端、JSON 和
-退出码，不得重新解释语义。采用 `src/mergegate/` 布局，server-only dependency 放在
-`mergegate[server]` extra。
+产品语义全部位于 `worktree_review.core`；adapter 只映射 webhook、Checks API、终端、JSON 和
+退出码，不得重新解释语义。采用 `src/worktree_review/` 布局，server-only dependency 放在
+`worktree-review[server]` extra。
 
 ### 2.2 架构决定
 
@@ -89,11 +91,15 @@ target branch push 事件不适合 run-scoped、repo-config-loaded 的 Action。
 tree OID；构造前 Attempt 只有 Review Request Key，冲突/缺 object 输出没有 tree 或
 Review Identity 的 `Error`。
 
-Workspace 必须从原始 tree entry/blob OID 物化到新目录，并与源 tree 校验后 chmod
+Review Worktree 必须从原始 tree entry/blob OID 物化到新目录，并与源 tree 校验后 chmod
 只读。不得使用会应用候选控制的 `export-ignore`、`export-subst`、smudge、clean 或
 external driver 的 `git archive`/checkout filter。产品 metadata 放在 extracted tree
 之外；目录相对创建必须拒绝 traversal，写入绝不跟随仓库 symlink；symlink 只作为链接
 数据物化。
+
+产品术语 Review Worktree 有意借用开发者对完整、隔离 Git worktree 的认知，但实现不使用
+`git worktree add`：后者要求 commit/HEAD 形态的 checkout，并会引入本契约不需要的仓库
+metadata 和 checkout 行为。
 
 Server 使用专用无特权用户，CLI 使用调用用户；环境移除平台、installation 和 provider
 凭据。Git fidelity 必须逐 byte 匹配真实 Git，因此不采用 go-git。CLI 在 Git 过旧时以
@@ -116,10 +122,10 @@ GitHub stage 1 在入队前事务性创建 Attempt 并设为权威；stage 9 使
 GateState。模型只影响 finding 是否存在，不参与状态映射。使用 table-driven 与 property
 tests 保证“required dimension 不完整必为 Error”等性质。
 
-**D5 — MergeGate 控制的版本化、内容寻址 YAML Policy。**
+**D5 — Worktree Review 控制的版本化、内容寻址 YAML Policy。**
 
 Review/Compute Policy 分离；每份具有 semver 和 canonical parsed bytes 的 SHA-256。
-CLI 只接受 worktree 外显式路径或 `~/.config/mergegate/`；GitHub 按 installation 保存到
+CLI 只接受 worktree 外显式路径或 `~/.config/worktree-review/`；GitHub 按 installation 保存到
 Postgres。两条路径都以版本化 JSON Schema 验证并失败关闭。`AGENTS.md` 等只作为
 untrusted context。
 
@@ -167,7 +173,7 @@ override 记录审计。
 
 **D10 — CLI 契约。**
 
-- stdout 人类报告；`--format json` 输出 `mergegate.cli.result/v1`。
+- stdout 人类报告；`--format json` 输出 `worktree-review.cli.result/v1`。
 - Exit code：0 Passed、1 Blocked、2 Error、3 invalid invocation；CLI 永不产生
   `Passed with bypass`。
 - 远程传输前打印 provider/model/destination/retention，并要求可信 Compute Policy
@@ -189,7 +195,7 @@ service mesh。
 **D13 — GitHub inline publication 是经测试的映射层。**
 
 Core finding 使用 merge tree 绝对行号；GitHub adapter 把 controlled diff hunk 映射到
-可评论位置。GitHub 三点 PR diff 与 MergeGate 的 target-head→merge-tree diff 不同，
+可评论位置。GitHub 三点 PR diff 与 Worktree Review 的 target-head→merge-tree diff 不同，
 target-side 行可能无法 inline。降级顺序必须披露：inline annotation/comment → file-level
 comment → check summary（保留完整坐标和原因），不得静默丢 finding。Annotations 每次
 API 最多 50 条，级别由严重度映射。
@@ -207,7 +213,7 @@ Policy 记录在 Attempt，不加入 Review Identity。授权结果、原因、�
 | 关注点 | 选择 | 说明 |
 | --- | --- | --- |
 | 语言工具链 | Python ≥3.12 + `uv` | env、lock、build、publish。 |
-| 构建/打包 | `hatchling` + `src/mergegate/` | 单 package，server extra，两个 console entry。 |
+| 构建/打包 | `hatchling` + `src/worktree_review/` | 单 package，server extra，两个 console entry。 |
 | CLI | `typer` | 基于类型提示，退出码由本项目控制。 |
 | HTTP server | `fastapi` + `uvicorn` | Webhook、details、health。 |
 | HTTP client | async `httpx` | Provider 和 GitHub 统一异步纪律。 |
@@ -296,7 +302,7 @@ ORM、vector database 和默认 hosted telemetry backend。
    `MergeCandidateIdentity`/`ReviewIdentity`；构造错误保留 Request Key，tree 为 null。
 2. Pipeline stage 1 从“已完成 Review Identity”改为建立 Request Key/Attempt，stage 2
    完成成功身份，同时保留九个外部 stage。
-3. Surface-neutral report 与 `mergegate.cli.result/v1` 同步增加 Attempt ID、Request Key
+3. Surface-neutral report 与 `worktree-review.cli.result/v1` 同步增加 Attempt ID、Request Key
    和可选成功身份；terminal/JSON renderer 同时更新。
 4. 启用 retry/standing decision 前，先实现 GitHub
    `change_requests.authoritative_attempt_id` 事务、Attempt-keyed job 和 stage-9 CAS；测试

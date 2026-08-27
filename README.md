@@ -1,15 +1,22 @@
-# MergeGate
+# Worktree Review
 
-Identity-bound merge-candidate review gate. One Python package, two surfaces:
+Review the worktree, not just the diff. Worktree Review constructs the exact
+merge result, examines it in full-tree context, and produces an evidence-bound
+decision for local use or authoritative GitHub gating.
 
 | Entry point | Role |
 | --- | --- |
-| `mergegate` | Local CLI. One-shot review of a committed head against an explicit target ref. |
-| `mergegate-server` | GitHub App: webhook receiver and review workers in one process. |
+| `worktree-review` | Local CLI. One-shot review of a committed head against an explicit target ref. |
+| `worktree-review-server` | GitHub App: webhook receiver and review workers in one process. |
 
-Product semantics live in `mergegate.core`. Platform adapters only map transport (terminal, GitHub checks/webhooks) onto core types. See `docs/PRD.md` and `docs/TECH-DESIGN.md`.
+Product semantics live in `worktree_review.core`. Platform adapters only map transport (terminal, GitHub checks/webhooks) onto core types. See `docs/PRD.md` and `docs/TECH-DESIGN.md`.
 
-This repository currently contains the **stage-one skeleton**: domain types, policy load/validate, the deterministic gate evaluator, CLI invocation checks, and a fail-closed pipeline that records stage outcomes. Merge construction, workspace materialization, context gathering, and model-backed dimensions are not implemented yet.
+This repository currently contains the **stage-one core**: domain identities,
+policy validation, exact merge construction, verified read-only Review Worktree
+materialization, context gathering, provider-backed review dimensions, budget
+metering, deterministic gate evaluation, CLI output, and fail-closed stage
+records. Finding verification and the authoritative GitHub worker remain to be
+implemented.
 
 ## Requirements
 
@@ -32,7 +39,7 @@ CLI only (no FastAPI / Postgres extra):
 
 ```bash
 uv sync
-uv run mergegate --help
+uv run worktree-review --help
 ```
 
 Install git hooks:
@@ -46,13 +53,13 @@ uv run pre-commit install
 Review a committed local head. Policy files must live **outside** the reviewed worktree.
 
 ```bash
-uv run mergegate review \
+uv run worktree-review review \
   --target main \
   --policy /path/to/review-policy.yaml \
   --compute-policy /path/to/compute-policy.yaml
 ```
 
-`--proposed` defaults to `HEAD`. `--format json` emits `mergegate.cli.result/v1`.
+`--proposed` defaults to `HEAD`. `--format json` emits `worktree-review.cli.result/v1`.
 
 Exit codes (TECH-DESIGN D10):
 
@@ -74,16 +81,16 @@ uv sync --extra server
 docker compose up --build
 ```
 
-The image runs `mergegate-server`. `GET /healthz` is the liveness probe. Webhook handling and the review worker are not implemented in this skeleton.
+The image runs `worktree-review-server`. `GET /healthz` is the liveness probe. Webhook handling and the review worker are not implemented in this skeleton.
 
 ## Layout
 
 ```
-src/mergegate/
+src/worktree_review/
   core/            platform-independent product semantics
   platform/cli/    terminal report, JSON result, exit codes
   platform/github/ checks, comments, webhooks, authz, inline mapping
   schemas/         versioned JSON Schema for policy and CLI results
-  cli.py           `mergegate` entry
-  server/          `mergegate-server` entry (FastAPI)
+  cli.py           `worktree-review` entry
+  server/          `worktree-review-server` entry (FastAPI)
 ```

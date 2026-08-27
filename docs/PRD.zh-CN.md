@@ -1,9 +1,9 @@
-# MergeGate 产品需求文档
+# Worktree Review 产品需求文档
 
 - 状态：第一阶段产品契约已可进入技术设计
 - 日期：2026-08-27
 - 可见性：公开产品文档
-- 产品形态：平台无关的审查门禁，首批提供 GitHub 与本地 CLI 界面
+- 产品形态：基于完整工作树的代码检视，第一阶段提供高优先级 GitHub 合并门禁与本地 CLI
 - 规范来源：`docs/PRD.md`；本文是同步维护的中文翻译，歧义时以英文为准
 
 本文描述产品方向，不构成交付承诺。第一阶段要求是初始产品的规范；
@@ -16,6 +16,8 @@
 
 | 术语 | 定义 |
 | --- | --- |
+| 工作树检视（Worktree Review） | 在完整、隔离物化的结果仓库树中评估拟议变更的方法。diff 用于定位变化，完整代码树提供理解和验证所需的上下文；该方法不要求必须由 `git worktree add` 创建目录。 |
+| 检视工作树（Review Worktree） | 为一个成功构造的合并候选物化出的不可变文件系统视图。它是产品层的检视环境，不一定是 Git linked worktree。 |
 | 审查请求键（Review Request Key） | merge 构造前即可确定的键：源仓库、目标 ref、解析后的目标 head commit、提议 head commit、Review Policy 版本。即使 merge 构造失败，也能标识系统被要求构造和审查的对象。 |
 | 合并候选身份（Merge Candidate Identity） | 源仓库、目标 ref、目标 head commit、提议 head commit及结果 merge-tree 标识。仅在 merge 构造成功后存在。 |
 | 审查身份（Review Identity） | 合并候选身份加所应用的 Review Policy 版本，精确限定一个完整审查结论适用的对象。 |
@@ -31,12 +33,16 @@
 
 ## 1. 产品概述
 
-MergeGate 是平台无关、策略驱动的 AI 代码变更审查门禁。它审查真正会合入目标的
-精确结果，发布有证据支持的 finding，并依据用户拥有的 Review Policy 与 Compute
-Policy 判断合并候选能否通过。
+Worktree Review 是平台无关、策略驱动的 AI 代码变更检视产品。它不把 diff 当作完整
+检视对象，而是在隔离的 Review Worktree 中检视真正会合入目标的结果树，发布有证据
+支持的 finding，并依据用户拥有的 Review Policy 与 Compute Policy 判断合并候选能否通过。
 
 GitHub 是首个平台集成，但不是产品边界。本地 CLI 使用同一语义，不要求先创建 PR。
 第一阶段实现一个更小且失败关闭的子集。
+
+可靠的合并门禁是本产品的原始动力，也是第一阶段最高优先级的交付结果。Worktree
+Review 是产品和检视方法；GitHub Gate 是它首个具有权威性的执行界面，而不是一个独立、
+只做简单合规检查的产品。
 
 ## 2. 问题陈述
 
@@ -44,7 +50,7 @@ GitHub 是首个平台集成，但不是产品边界。本地 CLI 使用同一�
 语言与严重度不合需求、无法控制模型与成本、通用提示无法复用资深审查经验、只看
 diff 会遗漏调用者/测试/配置/业务要求，以及评论机器人不能给出可靠门禁结论。
 
-MergeGate 将 Review Policy、Compute Policy、merge-candidate 上下文、证据强度、
+Worktree Review 将 Review Policy、Compute Policy、merge-candidate 上下文、证据强度、
 覆盖率和 gate decision 作为一等产品概念。
 
 ## 3. 产品愿景
@@ -52,7 +58,7 @@ MergeGate 将 Review Policy、Compute Policy、merge-candidate 上下文、证�
 每个符合条件的合并候选，都应按照策略拥有者控制的规则得到上下文完整的审查。
 结果必须说明审查了什么、发现了什么、证据有多强、成本多少以及门禁是否开放。
 
-> 你的策略。你的模型。你的合并门禁。
+> 检视完整工作树，而不只是一份 diff；用证据控制合并门禁。
 
 ## 4. 产品形态与平台范围
 
@@ -83,10 +89,13 @@ PR 上都获得审查；审查本人或可信协作者分支；希望复用审�
 入口包括：同一公开 GitHub 仓库内、已 ready-for-review 的 PR；以及在 clean worktree
 中，把明确目标 ref 与已提交 proposed head 进行比较的本地 CLI。
 
+GitHub 入口的权威失效、重试、发布和阻止合并能力，其交付优先级高于两个界面的便利性
+功能。本地 CLI 仍属于第一阶段，因为它在本地执行并暴露同一套检视和确定性门禁语义。
+
 每个不同 Review Identity 都接受完整 Standard Review；每次显式 retry 也执行完整
 审查，不跨候选增量复用结论。
 
-MergeGate 必须：
+Worktree Review 必须：
 
 1. 在符合条件的 GitHub PR 打开、重新打开、转为 ready 或更新时自动审查。
 2. 允许 CLI 选择目标 ref 与已提交 proposed head，执行相同语义。
@@ -123,7 +132,7 @@ finding 生命周期、只根据讨论重评、Deep Review、多 provider 路由
 
 ### 7.2 非目标
 
-MergeGate 不是通用 coding agent、IDE 补全工具、自动修复系统、所有 linter/SAST
+Worktree Review 不是通用 coding agent、IDE 补全工具、自动修复系统、所有 linter/SAST
 的托管替代、项目管理平台、团队分析面板、reviewer 分配器、测试生成器、冲突解决器
 或自动提交服务。第一阶段可以给补丁示例，但不应用、提交或推送。
 
@@ -212,7 +221,7 @@ parent commit 与结果 tree。机制由技术设计决定。
 
 定义 finding 类别和优先级、required dimensions、完成条件、严重度、证据等级、阻断、
 上下文分类、路径/语言/组件规则、正反例、例外、输出语言及 bypass 授权。它可复用、
-可版本化并由 MergeGate 控制。
+可版本化并由 Worktree Review 控制。
 
 ### 9.3 Compute Policy
 
@@ -299,7 +308,7 @@ GitHub identity 变化或显式 retry 时，新 Attempt 先成为权威并撤销
 | `Error` | required dimension、coverage 或有效 gate decision 无法完成。 |
 
 `Error` 失败关闭，不能通过 finding bypass 变成 `Passed with bypass`。只能修正条件并
-成功重跑；平台原生管理员绕过不改变 MergeGate 的 `Error`。
+成功重跑；平台原生管理员绕过不改变 Worktree Review 的 `Error`。
 
 Review Request 变化或同键显式 retry 时，旧状态在新权威 Attempt 启动前停止作为
 standing gate。新身份不继承旧 pass 或 bypass；同身份 retry 可以按 §16 保留仍适用
