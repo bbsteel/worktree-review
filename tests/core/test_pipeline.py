@@ -5,11 +5,11 @@ from pathlib import Path
 import pytest
 from tests.gitutil import checkout_new_branch, commit_files, git, head_oid
 
-from mergegate.core.identity import ResolvedCommitPair
-from mergegate.core.pipeline import ReviewRequest, run_review_pipeline
-from mergegate.core.policy import load_compute_policy, load_review_policy
-from mergegate.core.provider import ScriptedProvider
-from mergegate.core.report import (
+from worktree_review.core.identity import ResolvedCommitPair
+from worktree_review.core.pipeline import ReviewRequest, run_review_pipeline
+from worktree_review.core.policy import load_compute_policy, load_review_policy
+from worktree_review.core.provider import ScriptedProvider
+from worktree_review.core.report import (
     PIPELINE_STAGE_ORDER,
     GateState,
     StageName,

@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 REVIEW_POLICY_YAML = """\
-schema: mergegate.review-policy/v1
+schema: worktree-review.review-policy/v1
 version: 0.1.0
 required_dimensions:
   - correctness
@@ -17,7 +17,7 @@ minimum_blocking_evidence_band: supported
 """
 
 COMPUTE_POLICY_YAML = """\
-schema: mergegate.compute-policy/v1
+schema: worktree-review.compute-policy/v1
 version: 0.1.0
 provider: anthropic
 model: claude-sonnet-4-5
@@ -46,8 +46,8 @@ def git_repository(tmp_path: Path) -> Path:
     repo = tmp_path / "repo"
     repo.mkdir()
     _git(repo, "init", "-b", "main")
-    _git(repo, "config", "user.email", "mergegate-test@example.com")
-    _git(repo, "config", "user.name", "MergeGate Test")
+    _git(repo, "config", "user.email", "worktree-review-test@example.com")
+    _git(repo, "config", "user.name", "Worktree Review Test")
     (repo / "README").write_text("hello\n", encoding="utf-8")
     _git(repo, "add", "README")
     _git(repo, "commit", "-m", "initial")

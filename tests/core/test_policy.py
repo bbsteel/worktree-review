@@ -4,8 +4,8 @@ from pathlib import Path
 
 import pytest
 
-from mergegate.core.errors import PolicyValidationError
-from mergegate.core.policy import (
+from worktree_review.core.errors import PolicyValidationError
+from worktree_review.core.policy import (
     load_compute_policy,
     load_review_policy,
     policy_version_identity,
@@ -22,14 +22,14 @@ def test_load_review_policy(policy_dir: Path) -> None:
 
 def test_policy_hash_is_stable_across_key_order(tmp_path: Path) -> None:
     first = {
-        "schema": "mergegate.review-policy/v1",
+        "schema": "worktree-review.review-policy/v1",
         "version": "1.2.3",
         "required_dimensions": ["a", "b"],
     }
     second = {
         "required_dimensions": ["a", "b"],
         "version": "1.2.3",
-        "schema": "mergegate.review-policy/v1",
+        "schema": "worktree-review.review-policy/v1",
     }
     assert policy_version_identity(first, "1.2.3") == policy_version_identity(second, "1.2.3")
 

@@ -1,4 +1,4 @@
-schema: mergegate.compute-policy/v1
+schema: worktree-review.compute-policy/v1
 version: 0.1.0
 provider: anthropic
 model: claude-sonnet-4-5

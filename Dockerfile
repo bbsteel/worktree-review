@@ -21,4 +21,4 @@ EXPOSE 8000
 
 USER nobody
 
-CMD ["mergegate-server"]
+CMD ["worktree-review-server"]

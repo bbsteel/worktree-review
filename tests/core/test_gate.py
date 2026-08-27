@@ -3,10 +3,10 @@ from __future__ import annotations
 from hypothesis import given
 from hypothesis import strategies as st
 
-from mergegate.core.findings import EvidenceBand, Finding, Severity
-from mergegate.core.gate import GateEvaluationInput, evaluate_gate
-from mergegate.core.policy import ReviewPolicy
-from mergegate.core.report import (
+from worktree_review.core.findings import EvidenceBand, Finding, Severity
+from worktree_review.core.gate import GateEvaluationInput, evaluate_gate
+from worktree_review.core.policy import ReviewPolicy
+from worktree_review.core.report import (
     CoverageRecord,
     DimensionOutcome,
     GateState,
@@ -15,7 +15,7 @@ from mergegate.core.report import (
 
 POLICY = ReviewPolicy.model_validate(
     {
-        "schema": "mergegate.review-policy/v1",
+        "schema": "worktree-review.review-policy/v1",
         "version": "1.0.0",
         "required_dimensions": ["correctness", "security"],
         "blocking_severities": ["critical", "major"],

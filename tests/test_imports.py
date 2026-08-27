@@ -3,13 +3,13 @@ from __future__ import annotations
 import subprocess
 import sys
 
-from mergegate.core import GateState, StageName
+from worktree_review.core import GateState, StageName
 
 
 def test_core_does_not_import_server_or_github_adapters() -> None:
     script = """
 import sys
-import mergegate.core  # noqa: F401
+import worktree_review.core  # noqa: F401
 
 forbidden = (
     "fastapi",
@@ -17,9 +17,9 @@ forbidden = (
     "asyncpg",
     "pgqueuer",
     "alembic",
-    "mergegate.server",
-    "mergegate.cli",
-    "mergegate.platform.github",
+    "worktree_review.server",
+    "worktree_review.cli",
+    "worktree_review.platform.github",
 )
 loaded = [name for name in forbidden if name in sys.modules]
 assert loaded == [], loaded

@@ -2,13 +2,13 @@ services:
   postgres:
     image: postgres:16
     environment:
-      POSTGRES_USER: mergegate
-      POSTGRES_PASSWORD: mergegate
-      POSTGRES_DB: mergegate
+      POSTGRES_USER: worktree_review
+      POSTGRES_PASSWORD: worktree_review
+      POSTGRES_DB: worktree_review
     ports:
       - "5432:5432"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U mergegate -d mergegate"]
+      test: ["CMD-SHELL", "pg_isready -U worktree_review -d worktree_review"]
       interval: 5s
       timeout: 5s
       retries: 10
@@ -16,7 +16,7 @@ services:
   server:
     build: .
     environment:
-      MERGEGATE_DATABASE_URL: postgres://mergegate:mergegate@postgres:5432/mergegate
+      WORKTREE_REVIEW_DATABASE_URL: postgres://worktree_review:worktree_review@postgres:5432/worktree_review
     ports:
       - "8000:8000"
     depends_on:

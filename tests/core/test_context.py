@@ -5,22 +5,22 @@ from pathlib import Path
 import pytest
 from tests.gitutil import checkout_new_branch, commit_files, git, head_oid
 
-from mergegate.core.candidate import construct_merge_candidate
-from mergegate.core.context import (
+from worktree_review.core.candidate import construct_merge_candidate
+from worktree_review.core.context import (
     MERGE_CANDIDATE_DIFF_PATH,
     ContextClass,
     gather_context,
     path_matches_glob,
     unreviewable_reason,
 )
-from mergegate.core.identity import ResolvedCommitPair
-from mergegate.core.policy import ReviewPolicy
-from mergegate.core.workspace import cleanup_review_workspace, materialize_read_only_workspace
+from worktree_review.core.identity import ResolvedCommitPair
+from worktree_review.core.policy import ReviewPolicy
+from worktree_review.core.workspace import cleanup_review_workspace, materialize_read_only_workspace
 
 
 def _policy(**context: object) -> ReviewPolicy:
     payload: dict[str, object] = {
-        "schema": "mergegate.review-policy/v1",
+        "schema": "worktree-review.review-policy/v1",
         "version": "1.0.0",
         "required_dimensions": ["correctness"],
         "context": {"optional_globs": [], **context},
@@ -47,7 +47,7 @@ async def _gather(
 ):
     candidate = await construct_merge_candidate(_pair(repository, target_oid, proposed_oid))
     workspace = await materialize_read_only_workspace(
-        candidate, destination=tmp_path / "mergegate-ws-ctx"
+        candidate, destination=tmp_path / "worktree-review-ws-ctx"
     )
     try:
         return await gather_context(workspace, candidate, policy)
@@ -294,11 +294,11 @@ async def test_repo_workspace_marker_path_is_not_skipped(
     checkout_new_branch(git_repository, "topic")
     proposed_oid = commit_files(
         git_repository,
-        {".mergegate-workspace": "not-a-marker\n"},
+        {".worktree-review-workspace": "not-a-marker\n"},
         "add colliding marker name",
     )
     git(git_repository, "checkout", "main")
     gathered = await _gather(git_repository, _policy(), target_oid, proposed_oid, tmp_path)
     by_path = {item.path: item for item in gathered.items}
-    assert ".mergegate-workspace" in by_path
-    assert by_path[".mergegate-workspace"].body == "not-a-marker\n"
+    assert ".worktree-review-workspace" in by_path
+    assert by_path[".worktree-review-workspace"].body == "not-a-marker\n"

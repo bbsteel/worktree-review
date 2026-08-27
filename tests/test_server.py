@@ -8,7 +8,7 @@ pytest.importorskip("fastapi")
 def test_healthz() -> None:
     from fastapi.testclient import TestClient
 
-    from mergegate.server.app import create_app
+    from worktree_review.server.app import create_app
 
     client = TestClient(create_app())
     response = client.get("/healthz")
@@ -21,7 +21,7 @@ def test_healthz() -> None:
 def test_github_webhook_is_not_implemented() -> None:
     from fastapi.testclient import TestClient
 
-    from mergegate.server.app import create_app
+    from worktree_review.server.app import create_app
 
     client = TestClient(create_app())
     response = client.post("/webhooks/github", content=b"{}")

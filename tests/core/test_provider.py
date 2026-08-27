@@ -4,8 +4,8 @@ from decimal import Decimal
 
 import pytest
 
-from mergegate.core.policy import ComputePolicy
-from mergegate.core.provider import (
+from worktree_review.core.policy import ComputePolicy
+from worktree_review.core.provider import (
     BudgetDecision,
     ScriptedProvider,
     UsageKind,
@@ -18,7 +18,7 @@ from mergegate.core.provider import (
 
 def _compute_policy(**overrides: object) -> ComputePolicy:
     payload: dict[str, object] = {
-        "schema": "mergegate.compute-policy/v1",
+        "schema": "worktree-review.compute-policy/v1",
         "version": "1.0.0",
         "provider": "anthropic",
         "model": "claude-sonnet-4-5",

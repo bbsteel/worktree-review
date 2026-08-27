@@ -5,10 +5,10 @@ from pathlib import Path
 import pytest
 from tests.gitutil import checkout_new_branch, commit_files, git, head_oid
 
-from mergegate.core.candidate import construct_merge_candidate
-from mergegate.core.errors import MergeConflictError, MergeConstructionError
-from mergegate.core.git import worktree_is_clean
-from mergegate.core.identity import ResolvedCommitPair
+from worktree_review.core.candidate import construct_merge_candidate
+from worktree_review.core.errors import MergeConflictError, MergeConstructionError
+from worktree_review.core.git import worktree_is_clean
+from worktree_review.core.identity import ResolvedCommitPair
 
 
 def _pair(repository: Path, target_oid: str, proposed_oid: str) -> ResolvedCommitPair:
@@ -84,8 +84,8 @@ async def test_unrelated_histories_fail_closed(git_repository: Path, tmp_path: P
     other = tmp_path / "other"
     other.mkdir()
     git(other, "init", "-b", "other")
-    git(other, "config", "user.email", "mergegate-test@example.com")
-    git(other, "config", "user.name", "MergeGate Test")
+    git(other, "config", "user.email", "worktree-review-test@example.com")
+    git(other, "config", "user.name", "Worktree Review Test")
     commit_files(other, {"x.txt": "x\n"}, "unrelated")
     git(git_repository, "remote", "add", "other", str(other))
     git(git_repository, "fetch", "other")

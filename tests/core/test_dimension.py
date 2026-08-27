@@ -4,19 +4,19 @@ from pathlib import Path
 
 import pytest
 
-from mergegate.core.context import ContextClass, ContextItem, GatheredContext
-from mergegate.core.dimension import findings_from_payload, run_required_dimensions
-from mergegate.core.errors import ProviderError
-from mergegate.core.policy import ComputePolicy, ReviewPolicy
-from mergegate.core.provider import ScriptedProvider
-from mergegate.core.report import CoverageRecord, StageStatus
-from mergegate.core.workspace import ReviewWorkspace
+from worktree_review.core.context import ContextClass, ContextItem, GatheredContext
+from worktree_review.core.dimension import findings_from_payload, run_required_dimensions
+from worktree_review.core.errors import ProviderError
+from worktree_review.core.policy import ComputePolicy, ReviewPolicy
+from worktree_review.core.provider import ScriptedProvider
+from worktree_review.core.report import CoverageRecord, StageStatus
+from worktree_review.core.workspace import ReviewWorkspace
 
 
 def _policy() -> ReviewPolicy:
     return ReviewPolicy.model_validate(
         {
-            "schema": "mergegate.review-policy/v1",
+            "schema": "worktree-review.review-policy/v1",
             "version": "1.0.0",
             "required_dimensions": ["correctness", "security"],
         }
@@ -39,7 +39,7 @@ def _context() -> GatheredContext:
 def _compute_policy() -> ComputePolicy:
     return ComputePolicy.model_validate(
         {
-            "schema": "mergegate.compute-policy/v1",
+            "schema": "worktree-review.compute-policy/v1",
             "version": "1.0.0",
             "provider": "anthropic",
             "model": "scripted",

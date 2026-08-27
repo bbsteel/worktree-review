@@ -2,15 +2,16 @@ from __future__ import annotations
 
 import json
 import subprocess
+import sys
 from pathlib import Path
 
 import jsonschema
 import pytest
 from typer.testing import CliRunner
 
-from mergegate.cli import app
-from mergegate.platform.cli.exit_codes import CliExitCode
-from mergegate.platform.cli.result import cli_result_schema
+from worktree_review.cli import app
+from worktree_review.platform.cli.exit_codes import CliExitCode
+from worktree_review.platform.cli.result import cli_result_schema
 
 runner = CliRunner()
 
@@ -23,7 +24,7 @@ def test_help() -> None:
 
 def test_missing_target_flag_is_invalid_invocation() -> None:
     completed = subprocess.run(
-        ["mergegate", "review"],
+        [sys.executable, "-m", "worktree_review", "review"],
         check=False,
         capture_output=True,
         text=True,

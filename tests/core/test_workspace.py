@@ -5,10 +5,10 @@ from pathlib import Path
 import pytest
 from tests.gitutil import checkout_new_branch, commit_files, git, head_oid
 
-from mergegate.core.candidate import construct_merge_candidate
-from mergegate.core.errors import WorkspaceError
-from mergegate.core.identity import MergeCandidateIdentity, ResolvedCommitPair
-from mergegate.core.workspace import (
+from worktree_review.core.candidate import construct_merge_candidate
+from worktree_review.core.errors import WorkspaceError
+from worktree_review.core.identity import MergeCandidateIdentity, ResolvedCommitPair
+from worktree_review.core.workspace import (
     TREE_DIRECTORY_NAME,
     WORKSPACE_MARKER_NAME,
     ReviewWorkspace,
@@ -32,7 +32,7 @@ async def test_workspace_is_read_only_and_contains_tree(
             proposed_head_oid=oid,
         )
     )
-    destination = tmp_path / "mergegate-ws-test"
+    destination = tmp_path / "worktree-review-ws-test"
     workspace = await materialize_read_only_workspace(candidate, destination=destination)
     readme = workspace.root / "README"
     assert readme.read_text(encoding="utf-8") == "hello\n"
@@ -109,7 +109,7 @@ async def test_export_ignore_does_not_omit_tree_content(
     git(git_repository, "checkout", "main")
     candidate = await _candidate_for_heads(git_repository, target_oid, proposed_oid)
     workspace = await materialize_read_only_workspace(
-        candidate, destination=tmp_path / "mergegate-ws-export"
+        candidate, destination=tmp_path / "worktree-review-ws-export"
     )
     try:
         assert (workspace.root / "secret.txt").read_text(encoding="utf-8") == "classified\n"
@@ -135,7 +135,7 @@ async def test_export_subst_does_not_rewrite_blob_content(
     git(git_repository, "checkout", "main")
     candidate = await _candidate_for_heads(git_repository, target_oid, proposed_oid)
     workspace = await materialize_read_only_workspace(
-        candidate, destination=tmp_path / "mergegate-ws-subst"
+        candidate, destination=tmp_path / "worktree-review-ws-subst"
     )
     try:
         assert (workspace.root / "subst.txt").read_text(encoding="utf-8") == "id $Format:%H$\n"
@@ -159,7 +159,7 @@ async def test_repo_marker_symlink_does_not_overwrite_external_file(
     git(git_repository, "checkout", "main")
     candidate = await _candidate_for_heads(git_repository, target_oid, proposed_oid)
     workspace = await materialize_read_only_workspace(
-        candidate, destination=tmp_path / "mergegate-ws-marker"
+        candidate, destination=tmp_path / "worktree-review-ws-marker"
     )
     try:
         assert victim.read_text(encoding="utf-8") == "untouched\n"

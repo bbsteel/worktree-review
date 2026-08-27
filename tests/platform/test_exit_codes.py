@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import pytest
 
-from mergegate.core.report import GateState
-from mergegate.platform.cli.exit_codes import CliExitCode, exit_code_for_gate_state
+from worktree_review.core.report import GateState
+from worktree_review.platform.cli.exit_codes import CliExitCode, exit_code_for_gate_state
 
 
 def test_terminal_cli_mapping() -> None:

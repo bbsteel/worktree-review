@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import pytest
 
-from mergegate.core.errors import GitRequiredError
-from mergegate.core.git import MIN_GIT_VERSION, parse_git_version, require_git_version
+from worktree_review.core.errors import GitRequiredError
+from worktree_review.core.git import MIN_GIT_VERSION, parse_git_version, require_git_version
 
 
 def test_parse_git_version_accepts_common_banners() -> None:

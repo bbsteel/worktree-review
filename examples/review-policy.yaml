@@ -1,4 +1,4 @@
-schema: mergegate.review-policy/v1
+schema: worktree-review.review-policy/v1
 version: 0.1.0
 required_dimensions:
   - correctness

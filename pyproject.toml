@@ -3,14 +3,14 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "mergegate"
+name = "worktree-review"
 dynamic = ["version"]
-description = "Identity-bound merge-candidate review gate with GitHub and local CLI surfaces."
+description = "Full-worktree code review with evidence-bound GitHub gating and a local CLI."
 readme = "README.md"
 requires-python = ">=3.12"
 license = { text = "Proprietary" }
-authors = [{ name = "MergeGate" }]
-keywords = ["code-review", "merge-gate", "github-app"]
+authors = [{ name = "Worktree Review" }]
+keywords = ["code-review", "git-worktree", "merge-gate", "github-app"]
 classifiers = [
   "Development Status :: 2 - Pre-Alpha",
   "Environment :: Console",
@@ -48,11 +48,11 @@ server = [
 ]
 
 [project.scripts]
-mergegate = "mergegate.cli:main"
-mergegate-server = "mergegate.server:main"
+worktree-review = "worktree_review.cli:main"
+worktree-review-server = "worktree_review.server:main"
 
 [project.urls]
-Homepage = "https://github.com/mergegate/mergegate"
+Homepage = "https://github.com/worktree-review/worktree-review"
 
 [dependency-groups]
 dev = [
@@ -68,10 +68,10 @@ dev = [
 ]
 
 [tool.hatch.version]
-path = "src/mergegate/__init__.py"
+path = "src/worktree_review/__init__.py"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/mergegate"]
+packages = ["src/worktree_review"]
 
 [tool.hatch.build.targets.sdist]
 include = [
@@ -93,7 +93,7 @@ src = ["src", "tests"]
 select = ["E", "F", "I", "UP", "B", "ASYNC", "RUF"]
 
 [tool.ruff.lint.isort]
-known-first-party = ["mergegate"]
+known-first-party = ["worktree_review"]
 
 [tool.ruff.format]
 quote-style = "double"
@@ -102,7 +102,7 @@ docstring-code-format = true
 [tool.mypy]
 python_version = "3.12"
 strict = true
-packages = ["mergegate"]
+packages = ["worktree_review"]
 mypy_path = "src"
 plugins = ["pydantic.mypy"]
 warn_unused_ignores = true
