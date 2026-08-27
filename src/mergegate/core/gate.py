@@ -51,13 +51,18 @@ def evaluate_gate(evaluation_input: GateEvaluationInput) -> GateState:
     """
 
     required = frozenset(evaluation_input.review_policy.required_dimensions)
-    completed = {
-        outcome.dimension_id
-        for outcome in evaluation_input.dimension_outcomes
-        if outcome.status is StageStatus.COMPLETED
-    }
-    if not required or not required.issubset(completed):
+    if not required:
         return GateState.ERROR
+
+    outcomes_by_dimension: dict[str, list[DimensionOutcome]] = {}
+    for outcome in evaluation_input.dimension_outcomes:
+        outcomes_by_dimension.setdefault(outcome.dimension_id, []).append(outcome)
+    if any(len(recorded) != 1 for recorded in outcomes_by_dimension.values()):
+        return GateState.ERROR
+    for dimension_id in required:
+        recorded = outcomes_by_dimension.get(dimension_id)
+        if recorded is None or recorded[0].status is not StageStatus.COMPLETED:
+            return GateState.ERROR
     if not evaluation_input.coverage.required_coverage_complete:
         return GateState.ERROR
 

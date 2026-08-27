@@ -149,19 +149,112 @@ async def diff_name_status(
 async def git_blob_bytes(spec: str, repository: Path) -> bytes:
     """Read a blob (``commit:path`` or object id) as raw bytes."""
 
-    process = await asyncio.create_subprocess_exec(
-        "git",
-        *_HOOKS_DISABLED,
-        "cat-file",
-        "-p",
-        spec,
-        cwd=repository,
-        env=isolated_git_env(),
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
+    returncode, stdout_bytes, stderr_bytes = await invoke_git_bytes(
+        "cat-file", "-p", spec, cwd=repository
     )
-    stdout_bytes, stderr_bytes = await process.communicate()
-    if process.returncode != 0:
+    if returncode != 0:
         detail = stderr_bytes.decode("utf-8", errors="replace").strip()
         raise GitCliError(f"git cat-file -p {spec} failed: {detail}")
     return stdout_bytes
+
+
+@dataclass(frozen=True)
+class TreeEntry:
+    mode: str
+    object_type: str
+    object_id: str
+    path: str
+
+
+async def invoke_git_bytes(
+    *args: str, cwd: Path, stdin: bytes | None = None
+) -> tuple[int, bytes, bytes]:
+    process = await asyncio.create_subprocess_exec(
+        "git",
+        *_HOOKS_DISABLED,
+        *args,
+        cwd=cwd,
+        env=isolated_git_env(),
+        stdin=asyncio.subprocess.PIPE if stdin is not None else None,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    stdout_bytes, stderr_bytes = await process.communicate(input=stdin)
+    returncode = process.returncode if process.returncode is not None else -1
+    return returncode, stdout_bytes, stderr_bytes
+
+
+async def list_tree_entries(tree_oid: str, repository: Path) -> tuple[TreeEntry, ...]:
+    """List recursive tree entries as recorded in the object database (no export filters)."""
+
+    returncode, stdout_bytes, stderr_bytes = await invoke_git_bytes(
+        "ls-tree", "-r", "-z", "--full-tree", tree_oid, cwd=repository
+    )
+    if returncode != 0:
+        detail = stderr_bytes.decode("utf-8", errors="replace").strip()
+        raise GitCliError(f"git ls-tree {tree_oid} failed: {detail}")
+    entries: list[TreeEntry] = []
+    for record in stdout_bytes.split(b"\0"):
+        if not record:
+            continue
+        try:
+            meta, path_bytes = record.split(b"\t", 1)
+            mode_b, type_b, oid_b = meta.split(b" ", 2)
+        except ValueError as exc:
+            raise GitCliError(f"unrecognized ls-tree record: {record!r}") from exc
+        entries.append(
+            TreeEntry(
+                mode=mode_b.decode("ascii"),
+                object_type=type_b.decode("ascii"),
+                object_id=oid_b.decode("ascii"),
+                path=os.fsdecode(path_bytes),
+            )
+        )
+    return tuple(entries)
+
+
+def _parse_cat_file_batch(payload: bytes) -> dict[str, bytes]:
+    blobs: dict[str, bytes] = {}
+    cursor = 0
+    length = len(payload)
+    while cursor < length:
+        newline = payload.find(b"\n", cursor)
+        if newline < 0:
+            raise GitCliError("truncated git cat-file --batch header")
+        header = payload[cursor:newline]
+        cursor = newline + 1
+        parts = header.split()
+        if len(parts) == 2 and parts[1] == b"missing":
+            missing_oid = parts[0].decode("ascii")
+            raise GitCliError(f"missing git object {missing_oid}")
+        if len(parts) != 3:
+            raise GitCliError(f"unrecognized cat-file --batch header: {header!r}")
+        object_id = parts[0].decode("ascii")
+        size = int(parts[2])
+        content = payload[cursor : cursor + size]
+        if len(content) != size:
+            raise GitCliError(f"truncated git cat-file --batch payload for {object_id}")
+        cursor += size
+        if cursor >= length or payload[cursor : cursor + 1] != b"\n":
+            raise GitCliError(f"missing trailing newline in cat-file --batch for {object_id}")
+        cursor += 1
+        blobs[object_id] = content
+    return blobs
+
+
+async def cat_file_batch(object_ids: tuple[str, ...], repository: Path) -> dict[str, bytes]:
+    unique_ids = tuple(dict.fromkeys(object_ids))
+    if not unique_ids:
+        return {}
+    stdin = "".join(f"{object_id}\n" for object_id in unique_ids).encode("ascii")
+    returncode, stdout_bytes, stderr_bytes = await invoke_git_bytes(
+        "cat-file", "--batch", cwd=repository, stdin=stdin
+    )
+    if returncode != 0:
+        detail = stderr_bytes.decode("utf-8", errors="replace").strip()
+        raise GitCliError(f"git cat-file --batch failed: {detail}")
+    blobs = _parse_cat_file_batch(stdout_bytes)
+    missing = [object_id for object_id in unique_ids if object_id not in blobs]
+    if missing:
+        raise GitCliError(f"git cat-file --batch omitted objects: {', '.join(missing)}")
+    return blobs

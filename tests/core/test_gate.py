@@ -76,6 +76,31 @@ def test_incomplete_dimension_is_error_even_with_no_findings() -> None:
     assert evaluate_gate(_input(dimension_status=StageStatus.FAILED)) is GateState.ERROR
 
 
+def test_duplicate_dimension_outcomes_fail_closed() -> None:
+    mixed = GateEvaluationInput(
+        dimension_outcomes=(
+            DimensionOutcome(dimension_id="correctness", status=StageStatus.COMPLETED),
+            DimensionOutcome(dimension_id="correctness", status=StageStatus.FAILED),
+            DimensionOutcome(dimension_id="security", status=StageStatus.COMPLETED),
+        ),
+        coverage=CoverageRecord(required_coverage_complete=True),
+        findings=(),
+        review_policy=POLICY,
+    )
+    assert evaluate_gate(mixed) is GateState.ERROR
+    duplicated_completed = GateEvaluationInput(
+        dimension_outcomes=(
+            DimensionOutcome(dimension_id="correctness", status=StageStatus.COMPLETED),
+            DimensionOutcome(dimension_id="correctness", status=StageStatus.COMPLETED),
+            DimensionOutcome(dimension_id="security", status=StageStatus.COMPLETED),
+        ),
+        coverage=CoverageRecord(required_coverage_complete=True),
+        findings=(),
+        review_policy=POLICY,
+    )
+    assert evaluate_gate(duplicated_completed) is GateState.ERROR
+
+
 def test_incomplete_coverage_is_error() -> None:
     assert evaluate_gate(_input(coverage_complete=False)) is GateState.ERROR
 

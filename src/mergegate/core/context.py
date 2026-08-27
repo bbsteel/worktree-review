@@ -25,7 +25,7 @@ from mergegate.core.git import (
 from mergegate.core.identity import MergeCandidateIdentity
 from mergegate.core.policy import ReviewPolicy
 from mergegate.core.report import CoverageRecord
-from mergegate.core.workspace import WORKSPACE_MARKER_NAME, ReviewWorkspace
+from mergegate.core.workspace import ReviewWorkspace
 
 MERGE_CANDIDATE_DIFF_PATH = "merge-candidate.diff"
 _NUL_SCAN_BYTES = 8192
@@ -74,8 +74,19 @@ class GatheredContext(BaseModel):
     items: tuple[ContextItem, ...] = ()
 
 
+def _normalize_relative_path(relative_path: str) -> str:
+    """Strip only ``./`` prefixes. ``str.lstrip('./')`` would also strip ``.env``."""
+
+    normalized = relative_path.replace("\\", "/")
+    while normalized.startswith("./"):
+        normalized = normalized[2:]
+    if normalized.startswith("/"):
+        normalized = normalized.lstrip("/")
+    return normalized
+
+
 def path_matches_glob(relative_path: str, pattern: str) -> bool:
-    normalized = relative_path.replace("\\", "/").lstrip("./")
+    normalized = _normalize_relative_path(relative_path)
     basename = normalized.rsplit("/", 1)[-1]
     if fnmatch.fnmatch(normalized, pattern) or fnmatch.fnmatch(basename, pattern):
         return True
@@ -118,8 +129,6 @@ def _list_workspace_relative_paths(root: Path) -> tuple[str, ...]:
         for name in filenames:
             full = Path(dirpath) / name
             relative = full.relative_to(root).as_posix()
-            if relative == WORKSPACE_MARKER_NAME:
-                continue
             relative_paths.append(relative)
     return tuple(sorted(relative_paths))
 
@@ -281,8 +290,6 @@ async def gather_context(
 
     in_scope_diff_paths: list[str] = []
     for status, path in changes:
-        if path == WORKSPACE_MARKER_NAME:
-            continue
         classified_paths.add(path)
         kind = _change_kind(status)
         if path_matches_any_glob(path, context_policy.excluded_globs):

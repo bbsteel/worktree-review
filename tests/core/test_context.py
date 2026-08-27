@@ -62,6 +62,10 @@ def test_path_glob_matching() -> None:
     assert not path_matches_glob("src/a.py", "vendor/**")
     assert path_matches_glob("AGENTS.md", "AGENTS.md")
     assert path_matches_glob("nested/AGENTS.md", "AGENTS.md")
+    assert path_matches_glob(".env", ".env")
+    assert path_matches_glob("./.env", ".env")
+    assert path_matches_glob(".github/workflows/ci.yml", ".github/**")
+    assert not path_matches_glob(".env", "env")
 
 
 def test_unreviewable_reasons() -> None:
@@ -258,3 +262,43 @@ async def test_deleted_file_includes_target_body(git_repository: Path, tmp_path:
     assert by_path["README"].change_kind.value == "deleted"
     assert by_path["README"].body == "hello\n"
     assert gathered.coverage.required_coverage_complete is True
+
+
+@pytest.mark.asyncio
+async def test_dotfile_exclusion_glob_matches(git_repository: Path, tmp_path: Path) -> None:
+    target_oid = head_oid(git_repository)
+    checkout_new_branch(git_repository, "topic")
+    proposed_oid = commit_files(
+        git_repository,
+        {".env": "SECRET=1\n", "src/app.py": "print(1)\n"},
+        "add env and app",
+    )
+    git(git_repository, "checkout", "main")
+    gathered = await _gather(
+        git_repository,
+        _policy(excluded_globs=[".env", ".github/**"]),
+        target_oid,
+        proposed_oid,
+        tmp_path,
+    )
+    assert ".env" in gathered.coverage.excluded
+    assert "SECRET=1" not in "".join(item.body or "" for item in gathered.items)
+    assert "src/app.py" in gathered.coverage.reviewed
+
+
+@pytest.mark.asyncio
+async def test_repo_workspace_marker_path_is_not_skipped(
+    git_repository: Path, tmp_path: Path
+) -> None:
+    target_oid = head_oid(git_repository)
+    checkout_new_branch(git_repository, "topic")
+    proposed_oid = commit_files(
+        git_repository,
+        {".mergegate-workspace": "not-a-marker\n"},
+        "add colliding marker name",
+    )
+    git(git_repository, "checkout", "main")
+    gathered = await _gather(git_repository, _policy(), target_oid, proposed_oid, tmp_path)
+    by_path = {item.path: item for item in gathered.items}
+    assert ".mergegate-workspace" in by_path
+    assert by_path[".mergegate-workspace"].body == "not-a-marker\n"
