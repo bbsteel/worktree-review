@@ -1,13 +1,36 @@
 # MergeGate Product Requirements Document
 
 - Status: First-stage product contract ready for technical design
-- Date: 2026-08-20
+- Date: 2026-08-27
 - Visibility: Public product document
 - Product form: Platform-independent review gate with GitHub and local CLI surfaces
+- Chinese translation: `docs/PRD.zh-CN.md`
 
 This is a living description of the intended product direction, not a delivery
 commitment. The first-stage requirements are normative for the initial product;
 later-stage capabilities remain directional until promoted into that scope.
+
+## Terminology and conceptual model
+
+The following terms separate the object being reviewed, the information used to
+review it, an execution of that review, and the decision currently allowed to
+gate a platform change request:
+
+| Term | Definition |
+| --- | --- |
+| Review Request Key | The pre-construction key consisting of source repository, target ref, resolved target-head commit, proposed-head commit, and Review Policy version. It identifies what MergeGate was asked to construct and review even when merge construction fails. |
+| Merge Candidate Identity | The source repository, target ref, resolved target-head commit, proposed-head commit, and resulting merge-tree identifier. It exists only after merge construction succeeds. |
+| Review Identity | The Merge Candidate Identity plus the applied Review Policy version. It defines exactly what a completed review conclusion applies to. |
+| Review Context | The code, diff, tests, documentation, change-request metadata, external results, and other evidence gathered for one Attempt. Context informs a review but is not its identity. |
+| Review Attempt | One execution started from a Review Request Key. It has an Attempt ID and records its surface, Compute Policy version, model provenance, context snapshot, stage outcomes, usage, and cost. A successful construction also binds the Attempt to a Review Identity. |
+| Authoritative Attempt | The latest Attempt that a platform integration designates as eligible to publish the Standing Decision for its current Review Request. Older Attempts are superseded even when they have the same Review Identity. |
+| Standing Decision | The currently effective platform gate result. It is derived only from the Authoritative Attempt and is always bound to the current Review Request Key; after construction succeeds it is also bound to Review Identity. This permits a construction `Error` to stand without inventing a merge candidate. |
+| Review Result | The immutable output of one Attempt. A CLI result is one-shot and never becomes a remote Standing Decision. |
+
+In short: Review Identity says *what a conclusion applies to*; Review Context
+says *what information an attempt used*; Review Attempt says *which execution
+produced a result*; and Standing Decision says *which result currently has gate
+authority*.
 
 ## 1. Product summary
 
@@ -120,11 +143,15 @@ MergeGate must:
    ref and committed proposed head.
 3. Review the merge candidate produced by merging the proposed head into the
    resolved target head, rather than reviewing the proposed head alone.
-4. Bind every result to its source repository, target ref, resolved target head,
-   proposed head, resulting merge tree, and Review Policy version; a platform
+4. Bind every attempt and result to its review request key. After merge
+   construction succeeds, also bind it to the resulting merge candidate and
+   Review Identity. A construction failure reports the merge-tree identifier as
+   unavailable rather than claiming that a merge candidate exists; a platform
    change-request identifier is additional provenance when one exists.
 5. Immediately invalidate a standing platform gate when any part of its review
-   identity changes; invalidation happens before a replacement review starts.
+   request key changes; invalidation happens before a replacement attempt starts.
+   Starting another attempt for the same key also withdraws the prior standing
+   decision until the new authoritative attempt completes.
 6. Prepare a complete, isolated, read-only workspace for the exact merge
    candidate without executing code supplied by the proposed change.
 7. Gather relevant code and business context according to explicit mandatory,
@@ -141,17 +168,22 @@ MergeGate must:
     surface that provides durable authorization and audit records.
 12. Allow authorized GitHub users to bypass a blocking finding from a completed
     review for the current review identity, with an auditable reason.
-13. Give the CLI stable, documented process exit behavior, with success for
+13. Let an authorized GitHub user explicitly retry the current unchanged review
+    request after an `Error` or when changed Compute Policy should be applied.
+    The retry creates a new authoritative attempt without changing Review
+    Identity semantics.
+14. Give the CLI stable, documented process exit behavior, with success for
     `Passed` and distinct nonzero outcomes for `Blocked`, `Error`, and invalid
     invocation.
-14. Offer repair guidance without modifying the proposed change.
-15. Let users encode and version their review experience as policy stored outside
+15. Offer repair guidance without modifying the proposed change.
+16. Let users encode and version their review experience as policy stored outside
     the repository under review.
-16. Let users select the permitted provider and model and set a per-review budget.
-17. Fail explicitly when a complete review cannot finish, including when the
+17. Let users select the permitted provider and model and set a per-review budget.
+18. Fail explicitly when a complete review cannot finish, including when the
     merge candidate cannot be constructed or the budget is exhausted.
-18. Make the merge-candidate identity, policy versions, model usage, cost,
-    coverage, and failure behavior visible on every surface.
+19. Make the review request key, attempt identifier, merge-candidate and Review
+    identities when available, policy versions, model usage, cost, coverage, and
+    failure behavior visible on every surface.
 
 ## 7. First-stage boundaries
 
@@ -209,34 +241,52 @@ must not produce a passing decision.
 
 ### 8.2 Decisions are identity-bound
 
-MergeGate distinguishes related identities:
+MergeGate applies the terminology above as follows:
 
-- Merge candidate identity: source repository, target ref, resolved target-head
-  commit, proposed-head commit, and the resulting merge-tree identifier when
-  construction succeeds. A platform change-request identifier is provenance,
-  not a substitute for these Git identities.
-- Review identity: merge candidate identity plus the applied Review Policy
-  version.
+- The review request key exists before merge construction and remains available
+  when construction fails. It is the scheduling, failure-reporting, and audit key
+  for that case; it must not be presented as a successfully constructed Review
+  Identity.
+- Merge candidate identity and Review Identity exist only after construction
+  produces a resulting merge-tree identifier. A platform change-request
+  identifier is provenance, not a substitute for these Git identities.
 - Finding identity: a finding within one review identity.
 - Bypass identity: the review identity, finding identity, and the stated risk
   that the authorized user chose to bypass.
 
-Every execution records the invoking surface, Compute Policy version, selected
-model provenance, and an attempt identifier as audit fields. These fields do not
-create another product identity.
+Every execution is a Review Attempt. Its invoking surface, Compute Policy
+version, selected model provenance, context snapshot, stage outcomes, usage,
+cost, and attempt identifier are execution provenance. They do not change what
+Review Identity means.
 
-A standing platform gate decision is valid only for its review identity. A
-target-ref change, target-head change, proposed-head change, retarget, or
-applicable Review Policy change invalidates the old decision immediately. An
-eligible GitHub pull request then starts a new complete review. Superseded queued
-or in-flight reviews must not publish a standing decision. A CLI result remains a
-one-shot result for the exact identity printed in its output and is never a
-standing decision for later local state.
+A standing platform gate decision is valid only for its authoritative attempt
+and review request key and, after successful construction, its Review Identity.
+A target-ref change, target-head change, proposed-head change, retarget, or
+applicable Review Policy change invalidates the old decision immediately and
+starts a new authoritative attempt. Starting an explicit retry for an unchanged
+review request key also designates a new authoritative attempt and withdraws the
+prior standing decision until that attempt finishes.
+
+At most one attempt is authoritative for a platform change request at a time.
+Every older queued or in-flight attempt is superseded, including an older attempt
+with the same Review Identity. A superseded attempt may finish and retain an
+immutable audit result, but it must not publish, restore, or overwrite the
+standing decision. Publication must atomically confirm the current review
+request key and authoritative attempt identifier, plus Review Identity whenever
+construction succeeded.
+
+A CLI invocation creates an independent one-shot attempt. Its result applies to
+the review request key and, when construction succeeds, the exact Review
+Identity printed in its output. It is never a standing decision for later local
+state.
 
 A Compute Policy change can change what a later review discovers, but it does not
 change the meaning of Review Policy. It does not silently invalidate a completed
-decision; explicitly reviewing again withdraws that decision until the new
-review completes.
+decision. Applying changed Compute Policy to an existing GitHub review requires
+an authorized explicit retry, which creates a new authoritative attempt and
+withdraws that decision until the attempt completes. Provider-level retries
+inside one attempt do not create another Review Attempt; rerunning the complete
+review pipeline does.
 
 ### 8.3 Context-complete by default
 
@@ -430,8 +480,9 @@ mandatory context for the review instead produces `Error`.
 
 Standard Review is the only first-stage review mode. It:
 
-- Starts automatically for every new review identity of an eligible GitHub pull
-  request and on demand for each CLI invocation.
+- Starts automatically for every new review request key of an eligible GitHub
+  pull request, for every authorized explicit retry, and on demand for each CLI
+  invocation.
 - Covers all changed content unless Review Policy explicitly excludes it.
 - Uses all mandatory context and any available relevant optional context.
 - Completes every review dimension required by Review Policy and reports whether
@@ -451,11 +502,12 @@ The first product stage does not incrementally reuse review conclusions from a
 previous merge candidate. Retrieval and immutable artifact caches may be reused
 only when doing so does not reduce review scope or preserve stale conclusions.
 
-When a new GitHub review identity appears while a review is queued or in flight,
-the old standing decision becomes invalid immediately and the superseded review
-is abandoned. A new complete review is then queued. Implementations may coalesce
-superseded work for cost control, but they must never leave the previous gate
-decision standing.
+When a GitHub identity change or explicit retry occurs while an attempt is queued
+or in flight, the old standing decision becomes invalid immediately and the new
+attempt becomes authoritative. Implementations may cancel or coalesce superseded
+work for cost control. If an older attempt cannot be stopped, its result remains
+audit-only and must fail the atomic authority check at publication even when it
+has the same Review Identity as the newer attempt.
 
 The CLI resolves its target and proposed head once at invocation time and reviews
 those immutable Git objects. It must refuse a dirty worktree in the first stage,
@@ -527,11 +579,13 @@ administrative bypass when one exists, but MergeGate keeps its state as `Error`
 and records no passing decision. The CLI returns its documented nonzero `Error`
 outcome.
 
-When a platform review identity changes, the prior state ceases to be the
-standing gate before the replacement review begins. The new identity moves
-through `Awaiting review` and `In progress`; it never inherits `Passed`, `Passed
-with bypass`, or a finding bypass from the previous identity. CLI invocations do
-not inherit a gate or bypass from prior invocations.
+When a platform review request changes or an unchanged request is explicitly
+retried, the prior state ceases to be the standing gate before the authoritative
+replacement attempt begins. A new identity never inherits `Passed`, `Passed with
+bypass`, or a finding bypass from the previous identity. A same-identity retry
+may retain an applicable finding bypass under §16, but it does not inherit the
+prior standing decision. CLI invocations do not inherit a gate or bypass from
+prior invocations.
 
 An unresolved blocking finding is one whose severity and evidence band block
 under the current Review Policy and which has not received an applicable finding
@@ -607,7 +661,8 @@ If the configured budget cannot cover a complete review:
 - Completed, excluded, optional-missing, and unreviewed scope is visible.
 - Findings already discovered may remain visible but cannot be bypassed.
 - No `Passed` or `Passed with bypass` decision is produced.
-- The user may change Compute Policy and rerun the same review identity.
+- The user may change Compute Policy and start a new attempt for the same review
+  request and Review Identity when merge construction remains unchanged.
 
 The same fail-closed behavior applies to provider failure, an incomplete required
 review dimension, unavailable mandatory context, unreviewable in-scope content,
@@ -630,7 +685,9 @@ Every surface presents:
 - Suggested repairs when appropriate.
 - A review summary.
 - Gate state.
-- Merge-candidate and review identity.
+- Review request key and attempt identifier.
+- Merge-candidate and Review Identity when construction succeeds; otherwise an
+  explicit unavailable merge-tree identifier and construction failure.
 - Completion or failure status for candidate construction, workspace preparation,
   context gathering, every review dimension required by Review Policy, and gate
   evaluation.
@@ -647,9 +704,10 @@ where observable.
 The CLI additionally emits a human-readable terminal report, a stable
 machine-readable result, and a documented process exit status. Its output must
 include the resolved target ref, target-head commit, proposed-head commit,
-merge-tree identifier, and Review Policy version so a result cannot be mistaken
-for a later local state. The first-stage CLI does not create a bypass or update a
-remote check.
+attempt identifier, Review Policy version, and merge-tree identifier when
+available so a result cannot be mistaken for a later local state. Construction
+failure represents the merge-tree identifier as unavailable. The first-stage
+CLI does not create a bypass or update a remote check.
 
 Presentation details, machine-readable schema, and platform UI mechanisms are
 deferred to product interaction design and technical design.
@@ -679,9 +737,13 @@ After a surface resolves a target head and proposed head, both GitHub and CLI
 execute the same ordered pipeline. Every stage records an explicit completed,
 failed, or not-started outcome; a fatal failure cannot be hidden by later output.
 
-1. Derive the merge-candidate and review identities.
-2. Attempt to merge the proposed head into the resolved target head. Failure
-   produces `Error` for that review identity.
+1. Derive the review request key, create an attempt identifier, and record the
+   execution provenance known before construction. A platform integration also
+   atomically designates whether this attempt is authoritative.
+2. Attempt to merge the proposed head into the resolved target head. Success
+   finalizes the merge candidate identity and Review Identity. Failure produces
+   `Error` bound to the review request key and attempt identifier, with no
+   merge-tree identifier or completed Review Identity.
 3. Prepare a complete, isolated, read-only Merge Candidate Workspace.
 4. Gather relevant context according to Review Policy.
 5. Execute every review dimension required by Review Policy against that same
@@ -692,18 +754,34 @@ failed, or not-started outcome; a fatal failure cannot be hidden by later output
    gate decision.
 8. Evaluate the deterministic gate rules.
 9. Publish or return the findings, coverage, provenance, cost, review summary,
-   and gate result through the invoking surface.
+   and gate result through the invoking surface. A platform publication may
+   change the standing decision only after an atomic check that this Attempt and
+   Review Request Key are still authoritative, plus Review Identity whenever
+   construction succeeded.
 
 ### 21.2 GitHub lifecycle
 
 1. An eligible repository-branch pull request is opened, reopened, marked ready,
-   updated, force-pushed, or retargeted; or its target branch or applicable Review
-   Policy changes.
+   updated, force-pushed, or retargeted; its target branch or applicable Review
+   Policy changes; or an authorized user explicitly retries its unchanged review
+   request, including after correcting Compute Policy or a transient failure.
 2. MergeGate resolves the current target branch and pull-request head.
-3. Any standing decision for a different review identity is invalidated
-   immediately, before review scheduling or candidate construction.
+3. MergeGate creates a new attempt and atomically makes it authoritative. Any
+   standing decision from the prior authoritative attempt is invalidated
+   immediately, before review scheduling or candidate construction, whether the
+   Review Identity changed or remained the same.
 4. MergeGate runs the shared review pipeline and publishes a durable GitHub check.
-5. A later identity change returns to step 2 for another complete review.
+5. Publication atomically verifies the current Attempt ID and Review Request Key,
+   plus Review Identity whenever construction succeeded. A superseded attempt
+   remains audit-only.
+6. A later identity change or explicit retry returns to step 2 for another
+   complete review.
+
+The first stage must expose an authorized retry action for the current GitHub
+review request. Exact presentation through a check action, command, or details
+page is interaction design, but the retry semantics are normative. Automatic
+provider-request retries within an attempt follow Compute Policy and do not
+replace this complete-review retry path.
 
 Draft pull requests have no standing passing decision. External-fork pull
 requests and hosted private repositories are reported as unsupported in the
@@ -718,12 +796,14 @@ first product stage rather than entering this lifecycle.
    commits, loads trusted policy from outside the reviewed repository, and
    identifies the configured model provider, data destination, and known
    retention behavior.
-3. The CLI runs the shared review pipeline against those resolved Git objects.
+3. The CLI creates an independent attempt identifier and runs the shared review
+   pipeline against those resolved Git objects.
 4. The CLI writes human-readable and machine-readable results and exits with the
    documented status for `Passed`, `Blocked`, `Error`, or invalid invocation.
 
-A CLI result applies only to the identities printed in that result. It neither
-creates a standing remote gate nor claims to cover later commits or uncommitted
+A CLI result applies only to the review request key, attempt identifier, and any
+successfully constructed identities printed in that result. It neither creates a
+standing remote gate nor claims to cover later commits or uncommitted
 working-tree changes.
 
 ## 22. Feedback and product validation

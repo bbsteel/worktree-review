@@ -1,17 +1,36 @@
 # MergeGate Technical Design — v1
 
 - Status: First-version technical landing plan for the first-stage PRD
-- Date: 2026-08-20
+- Date: 2026-08-27
 - Companion document: `docs/PRD.md` (normative first-stage product contract)
-- Scope: architecture, language, and third-party component selection only.
-  Detailed schemas, prompting algorithms, and interaction design land in
-  follow-up designs.
+- Chinese translation: `docs/TECH-DESIGN.zh-CN.md`
+- Scope: architecture, language, third-party components, identity/attempt
+  persistence, and authoritative publication semantics. Detailed schemas,
+  prompting algorithms, and interaction design land in follow-up designs.
 
 This document resolves the decisions the PRD explicitly defers (PRD §23).
 Every choice below must preserve the PRD's normative invariants: exact merge
 candidate or no review, identity-bound decisions, fail-closed `Error`,
 complete review or visible failure, read-only analysis, and policy that never
 comes from the reviewed repository.
+
+## Conceptual model used by this design
+
+This design uses the PRD terminology as distinct persistence and concurrency
+boundaries:
+
+| Concept | Technical role |
+| --- | --- |
+| Review Request Key | Available before merge construction; keys scheduling, construction-failure reporting, and audit by repository, target ref, resolved heads, and Review Policy version. |
+| Merge Candidate Identity | Finalized only after `git merge-tree` returns a valid resulting tree OID. |
+| Review Identity | Merge Candidate Identity plus Review Policy version; defines what a review conclusion applies to. |
+| Review Context | An immutable, content-addressed snapshot gathered by one Attempt; never used as a substitute for Review Identity. |
+| Review Attempt | One pipeline execution with its own Attempt ID, Compute Policy version, model/usage provenance, and result. |
+| Authoritative Attempt | The Attempt ID stored as current for a platform change request; only this Attempt may mutate its Standing Decision. |
+| Standing Decision | The platform gate row and published check derived from the Authoritative Attempt after atomically checking the Review Request Key and, when constructed, Review Identity. Construction `Error` therefore remains representable without a fake identity. |
+
+The database must never infer attempt authority from completion time. A later
+completion can belong to an older, superseded attempt.
 
 ## 1. Language selection
 
@@ -121,24 +140,43 @@ Construction must not execute or even check out proposed-change code
 --write-tree` (git ≥ 2.38) computes the merge tree purely in the object
 database: no worktree, no hooks, no smudge filters, and conflict detection
 is exact. Both parent commits and the resulting tree OID are recorded as the
-merge-candidate identity (§8.2). The review workspace is then materialized
-with `git archive <tree> | tar -x` into a fresh directory that is chmod'd
-read-only, owned by a dedicated unprivileged runtime user (server) or the
+merge-candidate identity (§8.2). Before construction, the attempt carries only
+the Review Request Key; conflict or missing objects therefore produce `Error`
+without inventing a merge-tree OID or completed Review Identity.
+
+The review workspace is materialized from raw tree entries and blob OIDs into a
+fresh directory, then verified against the source tree and chmod'd read-only. It
+must not use `git archive`, checkout filters, or another mechanism that applies
+candidate-controlled `export-ignore`, `export-subst`, smudge, clean, or external
+driver behavior. Repository paths may not collide with product-owned markers;
+product metadata lives outside the extracted tree. File creation uses
+directory-relative operations that reject traversal and never follows a
+repository symlink for writes. Symlinks are materialized as link data only.
+
+The workspace is owned by a dedicated unprivileged runtime user (server) or the
 invoking user (CLI), with a scrubbed environment: no platform tokens, no
-installation tokens, no provider credentials inside the worker's reachable
-env (§8.11). We deliberately do **not** use go-git: merge fidelity,
-rename handling, and LFS pointer behavior must match real git byte-for-byte.
-The CLI requires git ≥ 2.38 and fails invocation (exit 3) otherwise.
+installation tokens, no provider credentials inside the worker's reachable env
+(§8.11). We deliberately do **not** use go-git: merge fidelity, rename handling,
+and LFS pointer behavior must match real git byte-for-byte. The CLI requires git
+≥ 2.38 and fails invocation (exit 3) otherwise.
 
 **D3 — One shared 9-stage pipeline, explicit stage outcomes.**
-`mergegate.core.pipeline` implements PRD §21.1 literally: identity → merge →
-workspace → context → dimensions → verify/dedup → completeness check → gate
-→ publish. Every stage writes an outcome record (`completed` / `failed` /
+`mergegate.core.pipeline` implements PRD §21.1 literally: establish request key
+and attempt → merge and finalize identities → workspace → context → dimensions
+→ verify/dedup → completeness check → gate → publish. Every stage writes an
+outcome record (`completed` / `failed` /
 `not-started`) into an append-only execution record, so a fatal failure can
 never be hidden by later output (§21.1) and every surface can render
 per-stage completion (§19). A fatal stage failure short-circuits to `Error`;
 partial findings from completed dimensions remain visible but carry the
 review's `Error` state and cannot be bypassed (§16, §18).
+
+For GitHub, stage 1 transactionally creates the attempt and makes its ID
+authoritative before work is queued. Stage 9 uses a compare-and-set publication:
+the persisted authoritative attempt ID and Review Request Key must still match,
+plus Review Identity after successful construction. Failure of any applicable
+comparison converts publication to an audit-only superseded result, never a
+standing decision.
 
 **D4 — Deterministic, pure gate evaluator.**
 `mergegate.core.gate` is a pure function
@@ -199,13 +237,19 @@ Postgres-backed job queue using `LISTEN`/`NOTIFY` and
 `SELECT ... FOR UPDATE SKIP LOCKED`) covers both without extra
 infrastructure:
 
-- New review identity arrives → standing gate for the old identity is
-  invalidated *in the same transaction* that records the new identity
-  (§8.2), then a new review job is enqueued, unique-keyed by review
-  identity. Superseded queued jobs are discarded; in-flight reviews check
-  identity currency at publish time and refuse to publish a standing
-  decision for a stale identity (§11.1 "must never leave the previous gate
-  decision standing").
+- An identity-changing event or authorized same-identity retry creates a fresh
+  attempt ID, stores it as the change request's `authoritative_attempt_id`, and
+  invalidates the prior standing decision in one transaction before enqueue.
+  Jobs are unique by attempt ID, not Review Identity, because a valid retry must
+  be able to execute the same identity again.
+- Superseded queued jobs are discarded. In-flight work may finish, but stage 9
+  atomically compares `authoritative_attempt_id` and current Review Request Key,
+  plus Review Identity after successful construction, before changing
+  `gate_decisions` or publishing a check. An older same-identity attempt
+  therefore cannot overwrite a newer result.
+- Provider-call retry controlled by `tenacity` remains inside one attempt.
+  Re-executing the complete review after `Error`, changed Compute Policy, or an
+  authorized GitHub retry always creates another attempt.
 - No Redis/SQS/NATS/Celery in stage one.
 
 The CLI is stateless except an optional local cache directory
@@ -229,6 +273,9 @@ palantir/policy-bot):
   server-rendered view of the database decision. A status or check forged by
   someone with repository write access cannot reproduce the current
   fingerprint.
+- The fingerprint is descriptive, not the concurrency guard. Authority comes
+  from the transactional `authoritative_attempt_id` compare-and-set in D8;
+  check output alone is never trusted to determine which attempt is current.
 - On every `status`/check webhook affecting a commit we gate, plus periodic
   sweeps, the server compares the platform-visible state with the
   `gate_decisions` table. A mismatch produces a `standing_state_tampered`
@@ -259,6 +306,10 @@ as the mechanism that keeps native overrides visible.
   destination, and known retention behavior, and requires that transmission
   to be explicitly permitted in trusted Compute Policy (§8.11). No feedback
   or telemetry leaves the CLI without explicit opt-in (§22).
+- Every invocation generates an attempt ID. Construction failures emit the
+  Review Request Key with `merge_tree_oid: null`; successful construction also
+  emits Merge Candidate Identity and Review Identity. No CLI attempt is marked
+  authoritative in server state.
 
 **D11 — Untrusted-content and secret hygiene.**
 All repository content is data (§8.10): context assembly inserts it as
@@ -300,6 +351,16 @@ following reviewdog's lead:
 - Checks annotations are batched at 50 per API request; annotation level
   (`notice`/`warning`/`failure`) maps from finding severity.
 
+**D14 — GitHub retry is a new authoritative attempt, not an identity mutation.**
+The first-stage App exposes an authorized retry action for the current review
+request. The initial interaction is a Checks requested action; a details-page
+action is an equivalent fallback. Processing re-resolves the current refs and
+Review Policy, then executes the D8 transaction. If those inputs changed, the
+new attempt naturally receives a new request key and later Review Identity; if
+they did not, it is a same-identity retry. Changed Compute Policy is recorded on
+the new attempt but never added to Review Identity. Authorization outcome,
+reason, prior attempt ID, and new attempt ID are append-only audit fields.
+
 ## 3. Third-party component selection
 
 | Concern | Choice | Why / notes |
@@ -311,11 +372,11 @@ following reviewdog's lead:
 | HTTP client | `httpx` (async) | Provider SDKs and GitHub calls share one async client discipline. |
 | YAML parsing | `pyyaml` | Policy documents; version hash computed over the canonicalized parsed form, not raw bytes. |
 | Schema/validation | `pydantic` v2 + `jsonschema` | JSON Schema is the single source of truth for policy and result formats; Python types generated from schemas; fail-closed on invalid input. |
-| Git operations | system `git` CLI ≥ 2.38 via `asyncio` subprocess | `merge-tree --write-tree`, `archive`, ref resolution. Exactness beats embedding (D2). |
+| Git operations | system `git` CLI ≥ 2.38 via `asyncio` subprocess | `merge-tree --write-tree`, raw tree/blob enumeration, ref resolution. Exactness beats embedding (D2). |
 | GitHub API + webhooks | `githubkit` | Async, generated from GitHub's OpenAPI spec; typed webhook models and HMAC-SHA256 signature validation. (`PyGithub` is the acceptable fallback.) |
 | Database | PostgreSQL 16 via `asyncpg` | Standing decisions, bypass audit, identities; hand-written SQL keeps queries auditable — no ORM. |
 | Migrations | `alembic` | Plain SQL migrations applied at server start. |
-| Job queue | `pgqueuer` | Postgres-backed, async-native; unique jobs by review identity; no extra infra (D8). |
+| Job queue | `pgqueuer` | Postgres-backed, async-native; unique jobs by attempt ID; no extra infra (D8). |
 | Anthropic SDK | `anthropic` (official) | Structured output via tool use; usage metering fields; token-count API. |
 | OpenAI SDK | `openai` (official) | Structured outputs; second permitted provider. |
 | Token counting | `tiktoken` (OpenAI models only) + Anthropic token-count endpoint | Pre-flight budget estimation is per-provider (D7); measured usage from API responses is always authoritative. |
@@ -339,15 +400,24 @@ and any hosted telemetry backend (opt-in only, §22).
 
 ## 4. Data model sketch (server)
 
-`installations`, `repositories`, `review_policies` (+`policy_versions`),
-`compute_policies` (+`policy_versions`), `review_identities` (repo, target
-ref, target head, proposed head, merge tree OID, policy version hash),
-`review_attempts` (attempt ID, surface, stage outcomes, models, usage,
-cost), `dimension_runs`, `findings` (fingerprint, severity, evidence band,
-grounded spans), `gate_decisions` (state, standing flag, validity window),
-`bypasses` (actor, reason, bound risk snapshot, expiry), `audit_events`
-(append-only). Full DDL is a follow-up design; the sketch exists to show
-that identity, standing state, and audit are first-class rows, not log
+`installations`, `repositories`, `change_requests` (current request key,
+current Review Identity when constructed, `authoritative_attempt_id`),
+`review_policies` (+`policy_versions`), `compute_policies`
+(+`policy_versions`), `review_request_keys` (repo, target ref, target head,
+proposed head, Review Policy version hash), `merge_candidate_identities`
+(request Git fields + merge tree OID), `review_identities` (merge candidate +
+Review Policy version hash), `review_attempts` (attempt ID, request key,
+optional Review Identity, authority/supersession status, surface, stage
+outcomes, models, usage, cost), `context_snapshots`, `dimension_runs`,
+`findings` (fingerprint, severity, evidence band, grounded spans),
+`gate_decisions` (Review Request Key, optional Review Identity, source Attempt
+ID, state, standing flag, validity window), `bypasses` (actor, reason, bound risk snapshot, expiry), and
+`audit_events` (append-only).
+
+Making `authoritative_attempt_id` an explicit change-request field is the key
+concurrency choice: completion timestamps never decide authority. Full DDL is a
+follow-up design; the sketch exists to show that request keys, successful
+identities, attempts, standing state, and audit are first-class rows, not log
 lines.
 
 ## 5. PRD compliance checkpoints
@@ -355,7 +425,7 @@ lines.
 | PRD invariant | Where enforced |
 | --- | --- |
 | Exact merge candidate or no review (§8.1) | D2: `git merge-tree`; conflict/missing objects → `Error`. |
-| Identity-bound decisions, immediate invalidation (§8.2) | D8: transactional invalidation + identity-currency check at publish. |
+| Identity-bound decisions, immediate invalidation, same-identity attempt ordering (§8.2) | D8: transactional authoritative-attempt replacement + request-attempt-identity compare-and-set at publish. |
 | Context-complete, no silent degradation (§8.3, §8.4) | D3 stage outcomes + coverage disclosure in the result model. |
 | Evidence before enforcement (§8.5, §13) | D6 grounded-span verification before `supported`/`verified`. |
 | Policy never from reviewed repo (§8.9) | D5 path restriction (CLI) / installation-scoped storage (GitHub). |
@@ -363,16 +433,18 @@ lines.
 | Deterministic gate (§9.5) | D4 pure evaluator. |
 | Budget fail-closed (§18, §20) | D7 three-point enforcement. |
 | Platform-state integrity, native override visibility (§16, §19) | D9 attempt-id fingerprints, tamper reconciliation, live permission verification for bypass. |
-| CLI one-shot semantics, exit codes (§13, §19, §21.3) | D10. |
+| CLI one-shot semantics, exit codes (§6, §19, §21.3) | D10. |
+| Unchanged-identity GitHub retry (§6, §21.2) | D14 + D8 new authoritative attempt transaction. |
 
 ## 6. Risks and open questions
 
 1. **`git merge-tree` edge cases** (octopus, submodule updates, LFS pointer
    diffs): needs an early spike with adversarial fixtures before the
    pipeline is built around it.
-2. **Queue supersede semantics** for in-flight (not just queued) reviews
-   rely on the publish-time identity check; race windows must be covered by
-   integration tests simulating force-push during a review.
+2. **Queue supersede semantics** for in-flight (not just queued) reviews rely on
+   the publish-time request-attempt-identity compare-and-set. Integration tests must
+   simulate force-push and same-identity retry during a review, including the
+   older attempt completing last.
 3. **Grounded-evidence verification** may reject legitimate findings whose
    evidence spans context rather than the diff; the span schema must cover
    all gathered context classes (§10), not just changed files.
@@ -431,3 +503,36 @@ lines.
    A third, further-out option is relatedness-aware re-review as an
    explicit Review Policy opt-in (fail-closed default); its unsoundness
    risk is why the PRD mandates complete re-review in stage one.
+
+## 7. Implementation adaptation checklist
+
+The current skeleton predates parts of this clarified contract. Implementation
+must converge in this order so intermediate states remain fail-closed:
+
+1. Add an explicit `ReviewRequestKey` model and Attempt ID. Construct
+   `MergeCandidateIdentity` and `ReviewIdentity` only after merge succeeds;
+   construction-error reports retain the request key and use a null merge-tree
+   field.
+2. Change pipeline stage 1 from claiming a completed Review Identity to
+   establishing the request key and Attempt. Preserve the nine externally
+   reported stages while making stage 2 finalize the successful identities.
+3. Add Attempt ID, request key, and optional successful identities to the
+   surface-neutral report and `mergegate.cli.result/v1`; update both human and
+   JSON CLI renderers together.
+4. Implement the GitHub `change_requests.authoritative_attempt_id` transaction,
+   attempt-keyed jobs, and stage-9 compare-and-set before enabling retries or
+   standing decisions. Tests must cover an older same-identity attempt finishing
+   last.
+5. Add the authorized GitHub retry action described by D14. Keep provider-call
+   retries within one Attempt and full-pipeline reruns as new Attempts.
+6. Replace archive-based workspace extraction with verified raw tree/blob
+   materialization. Keep product metadata outside the repository namespace and
+   add adversarial tests for marker-name collisions, absolute/relative symlinks,
+   `export-ignore`, `export-subst`, traversal, and unusual Git paths.
+7. Make Review Policy glob matching POSIX-path exact, including leading-dot
+   paths such as `.env` and `.github/**`; add coverage tests proving exclusions
+   and mandatory rules cannot silently miss dotfiles.
+
+English documents are normative. `docs/PRD.zh-CN.md` and
+`docs/TECH-DESIGN.zh-CN.md` are maintained translations and must change in the
+same commit whenever normative meaning changes.
