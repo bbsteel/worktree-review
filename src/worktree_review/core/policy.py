@@ -40,7 +40,7 @@ DEFAULT_OPTIONAL_CONTEXT_GLOBS: tuple[str, ...] = ("AGENTS.md", "CLAUDE.md")
 
 
 class ContextPolicy(BaseModel):
-    """How Review Policy classifies workspace and changed-file context (PRD §10)."""
+    """How Review Policy classifies Review Worktree and changed-file context (PRD §10)."""
 
     model_config = ConfigDict(frozen=True)
 

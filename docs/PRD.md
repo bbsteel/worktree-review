@@ -165,7 +165,7 @@ Worktree Review must:
    request key changes; invalidation happens before a replacement attempt starts.
    Starting another attempt for the same key also withdraws the prior standing
    decision until the new authoritative attempt completes.
-6. Prepare a complete, isolated, read-only workspace for the exact merge
+6. Prepare a complete, isolated, read-only Review Worktree for the exact merge
    candidate without executing code supplied by the proposed change.
 7. Gather relevant code and business context according to explicit mandatory,
    optional, excluded, and unreviewable-context rules.
@@ -354,8 +354,8 @@ findings, but it must never override policy or control reviewer tools.
 ### 8.11 First-stage analysis is read-only
 
 The first stage retrieves files and performs model analysis but does not execute
-proposed-change code, tests, build scripts, hooks, or binaries. The review
-workspace cannot access platform credentials, installation tokens, or
+proposed-change code, tests, build scripts, hooks, or binaries. The Review
+Worktree cannot access platform credentials, installation tokens, or
 model-provider credentials. Tool, file-system, and network permissions come only
 from trusted product policy. Findings and logs must redact complete credentials
 and other detected secrets.
@@ -375,16 +375,16 @@ comments, permissions, and events, but it must not weaken or reinterpret them.
 
 ## 9. Core concepts
 
-### 9.1 Merge Candidate Workspace
+### 9.1 Review Worktree
 
-Every execution of a review uses an isolated, complete, read-only workspace
-containing the exact merge result for its merge candidate identity. The
-workspace records both parent commits and the resulting tree or merge commit
-used for review.
+Every execution of a review uses an isolated, complete, read-only Review
+Worktree containing the exact merge result for its merge candidate identity. The
+Review Worktree records both parent commits and the resulting tree or merge
+commit used for review.
 
-The product requires workspace isolation, revision traceability, and protection
-from superseded reviews. The construction and storage mechanisms are deferred to
-technical design.
+The product requires Review Worktree isolation, revision traceability, and
+protection from superseded reviews. The construction and storage mechanisms are
+deferred to technical design.
 
 ### 9.2 Review Policy
 
@@ -679,7 +679,7 @@ If the configured budget cannot cover a complete review:
 
 The same fail-closed behavior applies to provider failure, an incomplete required
 review dimension, unavailable mandatory context, unreviewable in-scope content,
-missing workspace, merge conflict, or any other condition that prevents a
+missing Review Worktree, merge conflict, or any other condition that prevents a
 complete review. Successfully completing a later review supersedes `Error`;
 changing Compute Policy alone does not.
 
@@ -701,9 +701,9 @@ Every surface presents:
 - Review request key and attempt identifier.
 - Merge-candidate and Review Identity when construction succeeds; otherwise an
   explicit unavailable merge-tree identifier and construction failure.
-- Completion or failure status for candidate construction, workspace preparation,
-  context gathering, every review dimension required by Review Policy, and gate
-  evaluation.
+- Completion or failure status for candidate construction, Review Worktree
+  preparation, context gathering, every review dimension required by Review
+  Policy, and gate evaluation.
 - Mandatory, optional-missing, excluded, unreviewable, and reviewed coverage.
 - Review Policy and Compute Policy versions.
 - Models used, measured usage, estimated or actual cost, and failure information.
@@ -721,6 +721,12 @@ attempt identifier, Review Policy version, and merge-tree identifier when
 available so a result cannot be mistaken for a later local state. Construction
 failure represents the merge-tree identifier as unavailable. The first-stage
 CLI does not create a bypass or update a remote check.
+
+While the product is Pre-Alpha, the versioned CLI result schema
+`worktree-review.cli.result/v1` may receive in-place identifier updates instead
+of a new schema version. The shared pipeline stage that records Review Worktree
+preparation is `prepare-review-worktree`; that value replaces the earlier
+`prepare-workspace` identifier.
 
 Presentation details, machine-readable schema, and platform UI mechanisms are
 deferred to product interaction design and technical design.
@@ -757,10 +763,11 @@ failed, or not-started outcome; a fatal failure cannot be hidden by later output
    finalizes the merge candidate identity and Review Identity. Failure produces
    `Error` bound to the review request key and attempt identifier, with no
    merge-tree identifier or completed Review Identity.
-3. Prepare a complete, isolated, read-only Merge Candidate Workspace.
+3. Prepare a complete, isolated, read-only Review Worktree.
 4. Gather relevant context according to Review Policy.
 5. Execute every review dimension required by Review Policy against that same
-   workspace and context, recording the completion outcome of each dimension.
+   Review Worktree and context, recording the completion outcome of each
+   dimension.
 6. Verify, deduplicate, and classify findings from all completed dimensions.
 7. Check that every required dimension completed. If any did not, publish
    verified partial findings and coverage with `Error`; do not evaluate a passing
@@ -849,13 +856,13 @@ This PRD does not decide:
 - The internal adapter interface shared by GitHub, CLI, and future platforms.
 - CLI packaging, command syntax, configuration discovery, and machine-readable
   output schema.
-- Merge-candidate construction and workspace lifecycle mechanisms.
+- Merge-candidate construction and Review Worktree lifecycle mechanisms.
 - Queue, database, cache, or storage technology.
 - Review Policy and Compute Policy storage schemas.
 - Context retrieval implementation.
 - Model prompting and analysis algorithms.
 - Optional numerical-confidence calibration.
-- Credential brokering and read-only workspace isolation mechanisms.
+- Credential brokering and read-only Review Worktree isolation mechanisms.
 - GitHub API, webhook, checks, and comment mechanics.
 - Later repository-platform adapter mechanics.
 - Configuration file schema.

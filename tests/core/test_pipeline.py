@@ -58,7 +58,7 @@ async def test_missing_objects_fail_at_construct_merge(
     assert tuple(by_stage) == PIPELINE_STAGE_ORDER
     assert by_stage[StageName.DERIVE_IDENTITY].status is StageStatus.COMPLETED
     assert by_stage[StageName.CONSTRUCT_MERGE].status is StageStatus.FAILED
-    assert by_stage[StageName.PREPARE_WORKSPACE].status is StageStatus.NOT_STARTED
+    assert by_stage[StageName.PREPARE_REVIEW_WORKTREE].status is StageStatus.NOT_STARTED
     assert by_stage[StageName.RUN_DIMENSIONS].status is StageStatus.NOT_STARTED
     assert by_stage[StageName.EVALUATE_GATE].status is StageStatus.COMPLETED
     assert by_stage[StageName.PUBLISH].status is StageStatus.COMPLETED
@@ -93,7 +93,7 @@ async def test_clean_merge_runs_dimensions_then_stops_at_verify(
     by_stage = {outcome.stage: outcome for outcome in report.execution.outcomes}
     assert tuple(by_stage) == PIPELINE_STAGE_ORDER
     assert by_stage[StageName.CONSTRUCT_MERGE].status is StageStatus.COMPLETED
-    assert by_stage[StageName.PREPARE_WORKSPACE].status is StageStatus.COMPLETED
+    assert by_stage[StageName.PREPARE_REVIEW_WORKTREE].status is StageStatus.COMPLETED
     assert by_stage[StageName.GATHER_CONTEXT].status is StageStatus.COMPLETED
     assert by_stage[StageName.RUN_DIMENSIONS].status is StageStatus.COMPLETED
     assert by_stage[StageName.VERIFY_DEDUP].status is StageStatus.FAILED
@@ -217,7 +217,9 @@ async def test_in_flight_budget_stops_further_dimensions(
 
 
 @pytest.mark.asyncio
-async def test_conflict_does_not_prepare_workspace(git_repository: Path, policy_dir: Path) -> None:
+async def test_conflict_does_not_prepare_review_worktree(
+    git_repository: Path, policy_dir: Path
+) -> None:
     commit_files(git_repository, {"file.txt": "base\n"}, "base")
     checkout_new_branch(git_repository, "topic")
     proposed_oid = commit_files(git_repository, {"file.txt": "topic\n"}, "topic")
@@ -240,7 +242,7 @@ async def test_conflict_does_not_prepare_workspace(git_repository: Path, policy_
     by_stage = {outcome.stage: outcome for outcome in report.execution.outcomes}
     assert by_stage[StageName.CONSTRUCT_MERGE].status is StageStatus.FAILED
     assert "conflict" in (by_stage[StageName.CONSTRUCT_MERGE].detail or "").lower()
-    assert by_stage[StageName.PREPARE_WORKSPACE].status is StageStatus.NOT_STARTED
+    assert by_stage[StageName.PREPARE_REVIEW_WORKTREE].status is StageStatus.NOT_STARTED
 
 
 @pytest.mark.asyncio

@@ -39,7 +39,7 @@ DEFAULT_MINIMUM_BLOCKING_EVIDENCE_BAND = EvidenceBand.SUPPORTED
 
 
 class EvidenceSpan(BaseModel):
-    """A grounded span that must exist in the workspace or gathered context (D6)."""
+    """A grounded span that must exist in the Review Worktree or gathered context (D6)."""
 
     model_config = ConfigDict(frozen=True)
 

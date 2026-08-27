@@ -64,7 +64,7 @@ Adapters
   worktree_review.platform.cli
         │
 Core
-  identity / candidate / workspace / policy / context / dimension
+  identity / candidate / review_worktree / policy / context / dimension
   provider / findings / gate / report / pipeline
         │
 Infrastructure
@@ -107,8 +107,10 @@ invalid invocation 退出。
 
 **D3 — 一个共享九阶段 pipeline，并显式记录阶段结果。**
 
-顺序为：建立 Request Key/Attempt → merge 并完成身份 → workspace → context →
-dimensions → verify/dedup → completeness → gate → publish。每阶段追加 `completed`、
+顺序为：建立 Request Key/Attempt → merge 并完成身份 → Review Worktree → context →
+dimensions → verify/dedup → completeness → gate → publish。Review Worktree 准备的
+机器标识是 `prepare-review-worktree`；这是 Pre-Alpha 对 `worktree-review.cli.result/v1`
+的原位更新，原先 wire value 为 `prepare-workspace`。每阶段追加 `completed`、
 `failed`、`not-started`；fatal failure 短路为 `Error`，partial finding 可展示但不可
 bypass。
 
@@ -173,7 +175,9 @@ override 记录审计。
 
 **D10 — CLI 契约。**
 
-- stdout 人类报告；`--format json` 输出 `worktree-review.cli.result/v1`。
+- stdout 人类报告；`--format json` 输出 `worktree-review.cli.result/v1`。Pre-Alpha
+  允许该 schema 原位更新标识符；Review Worktree 准备阶段为
+  `prepare-review-worktree`，不再使用 `prepare-workspace`。
 - Exit code：0 Passed、1 Blocked、2 Error、3 invalid invocation；CLI 永不产生
   `Passed with bypass`。
 - 远程传输前打印 provider/model/destination/retention，并要求可信 Compute Policy
@@ -266,7 +270,7 @@ ORM、vector database 和默认 hosted telemetry backend。
 | 上下文完整、无静默降级（§8.3/8.4） | D3 stage outcome 与 coverage。 |
 | 证据先于 enforcement（§8.5/13） | D6 grounded span。 |
 | 策略不来自仓库（§8.9） | D5 CLI path restriction/GitHub installation storage。 |
-| 只读与凭据隔离（§8.11） | D2 workspace/env，D11 redaction。 |
+| 只读与凭据隔离（§8.11） | D2 Review Worktree/env，D11 redaction。 |
 | 确定性 gate（§9.5） | D4 pure evaluator。 |
 | 预算失败关闭（§18/20） | D7。 |
 | 平台状态完整性与 override 可见（§16/19） | D9 fingerprint、reconcile、live auth。 |
@@ -288,7 +292,7 @@ ORM、vector database 和默认 hosted telemetry backend。
 
 后续候选能力：
 
-- Input-identical revalidation：重新执行身份、构造、workspace、context，比较实际输入
+- Input-identical revalidation：重新执行身份、构造、Review Worktree、context，比较实际输入
   集合的 content hash；完全相同才恢复旧决定，否则完整重审。外部 discussion/issue/CI
   也必须快照并参与 hash。它需要 PRD 修订，第一阶段不启用。
 - GitHub Merge Queue：处理 `merge_group`，以 merge-group candidate 为 Review Identity。

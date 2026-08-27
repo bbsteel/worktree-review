@@ -25,7 +25,7 @@ from worktree_review.core.git import (
 from worktree_review.core.identity import MergeCandidateIdentity
 from worktree_review.core.policy import ReviewPolicy
 from worktree_review.core.report import CoverageRecord
-from worktree_review.core.workspace import ReviewWorkspace
+from worktree_review.core.review_worktree import ReviewWorktree
 
 MERGE_CANDIDATE_DIFF_PATH = "merge-candidate.diff"
 _NUL_SCAN_BYTES = 8192
@@ -123,7 +123,7 @@ def _change_kind(status: str) -> ChangeKind:
     return ChangeKind.MODIFIED
 
 
-def _list_workspace_relative_paths(root: Path) -> tuple[str, ...]:
+def _list_review_worktree_relative_paths(root: Path) -> tuple[str, ...]:
     relative_paths: list[str] = []
     for dirpath, _dirnames, filenames in os.walk(root, followlinks=False):
         for name in filenames:
@@ -133,7 +133,7 @@ def _list_workspace_relative_paths(root: Path) -> tuple[str, ...]:
     return tuple(sorted(relative_paths))
 
 
-def _read_workspace_bytes(root: Path, relative_path: str) -> bytes | None:
+def _read_review_worktree_bytes(root: Path, relative_path: str) -> bytes | None:
     path = root.joinpath(*relative_path.split("/"))
     try:
         resolved_root = root.resolve()
@@ -264,7 +264,7 @@ def _coverage_from_items(
 
 
 async def gather_context(
-    workspace: ReviewWorkspace,
+    review_worktree: ReviewWorktree,
     candidate: MergeCandidateIdentity,
     review_policy: ReviewPolicy,
 ) -> GatheredContext:
@@ -272,8 +272,8 @@ async def gather_context(
 
     repository = Path(candidate.source_repository)
     context_policy = review_policy.context
-    if not workspace.root.is_dir():
-        raise ContextGatherError(f"workspace does not exist: {workspace.root}")
+    if not review_worktree.root.is_dir():
+        raise ContextGatherError(f"Review Worktree does not exist: {review_worktree.root}")
 
     try:
         target_tree = await commit_tree_oid(candidate.target_head_oid, repository)
@@ -318,14 +318,14 @@ async def gather_context(
                 missing_reason="deleted path could not be read from the target head",
             )
         else:
-            data = _read_workspace_bytes(workspace.root, path)
+            data = _read_review_worktree_bytes(review_worktree.root, path)
             item = _item_from_bytes(
                 path=path,
                 data=data,
                 context_class=ContextClass.MANDATORY,
                 change_kind=kind,
                 max_file_bytes=context_policy.max_file_bytes,
-                missing_reason="changed path is missing from the merge-candidate workspace",
+                missing_reason="changed path is missing from the Review Worktree",
             )
         items.append(item)
 
@@ -338,11 +338,11 @@ async def gather_context(
     )
     items.insert(0, diff_item)
 
-    workspace_paths = _list_workspace_relative_paths(workspace.root)
+    review_worktree_paths = _list_review_worktree_relative_paths(review_worktree.root)
 
     mandatory_missing: list[str] = []
     for pattern in context_policy.mandatory_globs:
-        matches = [path for path in workspace_paths if path_matches_glob(path, pattern)]
+        matches = [path for path in review_worktree_paths if path_matches_glob(path, pattern)]
         if not matches:
             mandatory_missing.append(pattern)
             continue
@@ -352,7 +352,7 @@ async def gather_context(
             if path_matches_any_glob(path, context_policy.excluded_globs):
                 continue
             classified_paths.add(path)
-            data = _read_workspace_bytes(workspace.root, path)
+            data = _read_review_worktree_bytes(review_worktree.root, path)
             items.append(
                 _item_from_bytes(
                     path=path,
@@ -366,7 +366,7 @@ async def gather_context(
 
     optional_missing: list[str] = []
     for pattern in context_policy.optional_globs:
-        matches = [path for path in workspace_paths if path_matches_glob(path, pattern)]
+        matches = [path for path in review_worktree_paths if path_matches_glob(path, pattern)]
         if not matches:
             optional_missing.append(pattern)
             continue
@@ -376,7 +376,7 @@ async def gather_context(
             if path_matches_any_glob(path, context_policy.excluded_globs):
                 continue
             classified_paths.add(path)
-            data = _read_workspace_bytes(workspace.root, path)
+            data = _read_review_worktree_bytes(review_worktree.root, path)
             item = _item_from_bytes(
                 path=path,
                 data=data,

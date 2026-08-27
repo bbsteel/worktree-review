@@ -42,10 +42,10 @@ from worktree_review.core.report import (
     StageOutcome,
     StageStatus,
 )
-from worktree_review.core.workspace import (
-    ReviewWorkspace,
-    cleanup_review_workspace,
-    materialize_read_only_workspace,
+from worktree_review.core.review_worktree import (
+    ReviewWorktree,
+    cleanup_review_worktree,
+    materialize_review_worktree,
 )
 
 
@@ -193,7 +193,7 @@ async def run_review_pipeline(
     )
     candidate: MergeCandidateIdentity | None = None
     review_identity: ReviewIdentity | None = None
-    workspace: ReviewWorkspace | None = None
+    review_worktree: ReviewWorktree | None = None
     owner_note = "invoking user" if request.surface == "cli" else "unprivileged runtime user"
 
     try:
@@ -229,23 +229,23 @@ async def run_review_pipeline(
             )
 
         try:
-            workspace = await materialize_read_only_workspace(
+            review_worktree = await materialize_review_worktree(
                 candidate,
                 owner_note=owner_note,
             )
             execution = execution.with_outcome(
-                StageOutcome(stage=StageName.PREPARE_WORKSPACE, status=StageStatus.COMPLETED)
+                StageOutcome(stage=StageName.PREPARE_REVIEW_WORKTREE, status=StageStatus.COMPLETED)
             )
         except WorktreeReviewError as exc:
             execution = execution.with_outcome(
                 StageOutcome(
-                    stage=StageName.PREPARE_WORKSPACE,
+                    stage=StageName.PREPARE_REVIEW_WORKTREE,
                     status=StageStatus.FAILED,
                     detail=str(exc),
                 )
             )
             execution = _fill_unrecorded_stages(
-                execution, reason="short-circuited after prepare-workspace failure"
+                execution, reason="short-circuited after prepare-review-worktree failure"
             )
             return _complete_report(
                 request,
@@ -254,12 +254,12 @@ async def run_review_pipeline(
                 request_key=request_key,
                 merge_tree_oid=candidate.merge_tree_oid,
                 review_identity=review_identity,
-                summary="Review did not complete: workspace preparation failed.",
+                summary="Review did not complete: Review Worktree preparation failed.",
                 error_detail=str(exc),
             )
 
         try:
-            gathered = await gather_context(workspace, candidate, request.review_policy)
+            gathered = await gather_context(review_worktree, candidate, request.review_policy)
         except (WorktreeReviewError, UnimplementedStageError) as exc:
             execution = execution.with_outcome(
                 StageOutcome(
@@ -315,7 +315,7 @@ async def run_review_pipeline(
             if preflight_budget(request.compute_policy, estimated) is BudgetDecision.REFUSE:
                 raise refuse_preflight(request.compute_policy, estimated)
             dimension_runs = await run_required_dimensions(
-                workspace,
+                review_worktree,
                 gathered,
                 request.review_policy,
                 selected_provider,
@@ -411,5 +411,5 @@ async def run_review_pipeline(
         del verified
         raise UnimplementedStageError("pipeline stages after verification are not implemented")
     finally:
-        if workspace is not None:
-            await cleanup_review_workspace(workspace)
+        if review_worktree is not None:
+            await cleanup_review_worktree(review_worktree)

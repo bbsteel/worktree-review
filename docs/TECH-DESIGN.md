@@ -80,7 +80,7 @@ Rationale:
 | --- | --- |
 | Go | Best CLI distribution (single static binary) and strong static typing, but the primary maintainer is not fluent in it, and the churn-heavy parts of this codebase (prompting, context assembly, finding logic) iterate much faster in Python. Revisit if CLI distribution to non-developer users becomes a requirement. |
 | TypeScript/Node | Best GitHub API ergonomics (Octokit), but CLI distribution requires bundlers/SEA hacks, runtime type safety needs a validation layer everywhere, and two-runtime risk (bun vs node) adds support surface. Revisit only if the product pivots to a GitHub Action form. |
-| Rust | Best binary story and safety, but slows iteration on prompting/analysis code that will churn heavily in stage one; LLM SDK maturity is lowest. Keep as an option if the workspace-isolation layer ever needs a native sandbox helper. |
+| Rust | Best binary story and safety, but slows iteration on prompting/analysis code that will churn heavily in stage one; LLM SDK maturity is lowest. Keep as an option if Review Worktree isolation ever needs a native sandbox helper. |
 
 ## 2. Architecture selection
 
@@ -99,7 +99,7 @@ Rationale:
 │ Core (platform-independent; both surfaces import this)         │
 │   worktree_review.core.identity    merge-candidate / review identity │
 │   worktree_review.core.candidate   merge construction (git merge-tree)│
-│   worktree_review.core.workspace   isolated read-only materialization│
+│   worktree_review.core.review_worktree  isolated Review Worktree     │
 │   worktree_review.core.policy      Review/Compute Policy load+validate│
 │   worktree_review.core.context     mandatory/optional/excluded gather│
 │   worktree_review.core.dimension   required review dimensions        │
@@ -161,7 +161,7 @@ of a complete, isolated Git worktree. The implementation does not use
 would introduce repository metadata and checkout behavior that the exact
 merge-tree materialization contract does not need.
 
-The workspace is owned by a dedicated unprivileged runtime user (server) or the
+The Review Worktree is owned by a dedicated unprivileged runtime user (server) or the
 invoking user (CLI), with a scrubbed environment: no platform tokens, no
 installation tokens, no provider credentials inside the worker's reachable env
 (§8.11). We deliberately do **not** use go-git: merge fidelity, rename handling,
@@ -170,13 +170,15 @@ and LFS pointer behavior must match real git byte-for-byte. The CLI requires git
 
 **D3 — One shared 9-stage pipeline, explicit stage outcomes.**
 `worktree_review.core.pipeline` implements PRD §21.1 literally: establish request key
-and attempt → merge and finalize identities → workspace → context → dimensions
-→ verify/dedup → completeness check → gate → publish. Every stage writes an
-outcome record (`completed` / `failed` /
-`not-started`) into an append-only execution record, so a fatal failure can
-never be hidden by later output (§21.1) and every surface can render
-per-stage completion (§19). A fatal stage failure short-circuits to `Error`;
-partial findings from completed dimensions remain visible but carry the
+and attempt → merge and finalize identities → Review Worktree → context →
+dimensions → verify/dedup → completeness check → gate → publish. The machine
+identifier for Review Worktree preparation is `prepare-review-worktree`. That is a
+Pre-Alpha in-place update of `worktree-review.cli.result/v1`; the previous wire
+value was `prepare-workspace`. Every stage writes an outcome record
+(`completed` / `failed` / `not-started`) into an append-only execution record,
+so a fatal failure can never be hidden by later output (§21.1) and every surface
+can render per-stage completion (§19). A fatal stage failure short-circuits to
+`Error`; partial findings from completed dimensions remain visible but carry the
 review's `Error` state and cannot be bypassed (§16, §18).
 
 For GitHub, stage 1 transactionally creates the attempt and makes its ID
@@ -216,7 +218,7 @@ Each review dimension calls the model with a JSON-Schema-constrained
 response (provider-native structured outputs / tool use). The verify stage
 (§21.1 step 6) is partly deterministic: every finding's supporting evidence
 must reference spans (path + line range + quoted text) that actually exist
-in the workspace or gathered context; ungrounded claims cannot carry
+in the Review Worktree or gathered context; ungrounded claims cannot carry
 `supported` or `verified` bands (§8.5, §13). Deduplication is deterministic
 fingerprinting over (path, normalized span, category, problem hash). This
 keeps "self-reported model certainty is not evidence" (§13) enforceable in
@@ -305,7 +307,9 @@ as the mechanism that keeps native overrides visible.
 
 **D10 — CLI contract.**
 - Human-readable report to stdout; `--format json` emits the versioned
-  machine-readable schema `worktree-review.cli.result/v1` (§19).
+  machine-readable schema `worktree-review.cli.result/v1` (§19). Pre-Alpha
+  may update identifiers in that schema in place; Review Worktree
+  preparation is `prepare-review-worktree`, not `prepare-workspace`.
 - Exit codes: `0` = `Passed`, `1` = `Blocked`, `2` = `Error`,
   `3` = invalid invocation (dirty worktree, unresolvable refs, policy inside
   repo, git too old, bad flags). `Passed with bypass` is never produced by
@@ -437,7 +441,7 @@ lines.
 | Context-complete, no silent degradation (§8.3, §8.4) | D3 stage outcomes + coverage disclosure in the result model. |
 | Evidence before enforcement (§8.5, §13) | D6 grounded-span verification before `supported`/`verified`. |
 | Policy never from reviewed repo (§8.9) | D5 path restriction (CLI) / installation-scoped storage (GitHub). |
-| Read-only analysis, credential isolation (§8.11) | D2 workspace materialization + env scrubbing; D11 redaction. |
+| Read-only analysis, credential isolation (§8.11) | D2 Review Worktree materialization + env scrubbing; D11 redaction. |
 | Deterministic gate (§9.5) | D4 pure evaluator. |
 | Budget fail-closed (§18, §20) | D7 three-point enforcement. |
 | Platform-state integrity, native override visibility (§16, §19) | D9 attempt-id fingerprints, tamper reconciliation, live permission verification for bypass. |
@@ -480,7 +484,7 @@ lines.
    - *Input-identical revalidation* (supersedes an earlier "tree-identical"
      formulation, which was wrong for convoys: each merged PR enters the
      merge tree, so whole-tree OIDs almost never repeat). On invalidation,
-     re-run pipeline stages 1–4 (identity, merge construction, workspace,
+     re-run pipeline stages 1–4 (identity, merge construction, Review Worktree,
      context gathering) — a pure function of the tree OIDs and policy
      versions, seconds-scale even for large repos, with zero model calls.
      Compare content hashes of the review's actual input set (the
@@ -533,7 +537,7 @@ must converge in this order so intermediate states remain fail-closed:
    last.
 5. Add the authorized GitHub retry action described by D14. Keep provider-call
    retries within one Attempt and full-pipeline reruns as new Attempts.
-6. Replace archive-based workspace extraction with verified raw tree/blob
+6. Replace archive-based Review Worktree extraction with verified raw tree/blob
    materialization. Keep product metadata outside the repository namespace and
    add adversarial tests for marker-name collisions, absolute/relative symlinks,
    `export-ignore`, `export-subst`, traversal, and unusual Git paths.

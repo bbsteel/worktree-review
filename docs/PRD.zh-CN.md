@@ -104,7 +104,7 @@ Worktree Review 必须：
    Identity 与 Review Identity。构造失败必须明确 merge tree 不存在。
 5. Review Request Key 变化时立即撤销旧 standing gate；同键 retry 也先撤销旧决定，
    直到新权威 Attempt 完成。
-6. 在不执行 proposed-change 代码的前提下准备完整、隔离、只读的精确工作区。
+6. 在不执行 proposed-change 代码的前提下准备完整、隔离、只读的 Review Worktree。
 7. 按 mandatory、optional、excluded、unreviewable 规则收集代码和业务上下文。
 8. 完成 Review Policy 要求的每个维度；任何 required dimension 未完成即 `Error`。
 9. 发布包含严重度、证据强度、影响、支持证据和来源的 finding。
@@ -202,9 +202,9 @@ Review/Compute Policy 永不来自被审查 Git refs；仓库指令文件只是 
 
 ### 8.11 第一阶段分析只读
 
-不执行代码、测试、构建、hook 或 binary；凭据不可进入工作区，finding 与日志必须
-脱敏。CLI 向远程模型发送内容前必须展示 provider、model、目的地和已知保留行为，
-并由可信配置明确允许。
+不执行代码、测试、构建、hook 或 binary；凭据不可进入 Review Worktree，finding 与
+日志必须脱敏。CLI 向远程模型发送内容前必须展示 provider、model、目的地和已知保留
+行为，并由可信配置明确允许。
 
 ### 8.12 产品语义可移植
 
@@ -212,10 +212,11 @@ GitHub、CLI 和未来平台共享候选构造、策略、证据、覆盖、find
 
 ## 9. 核心概念
 
-### 9.1 Merge Candidate Workspace
+### 9.1 Review Worktree
 
-每个成功构造的 Attempt 使用隔离、完整、只读的精确 merge tree 工作区，记录两个
-parent commit 与结果 tree。机制由技术设计决定。
+每个成功构造的 Attempt 使用隔离、完整、只读的 Review Worktree，记录两个 parent
+commit 与结果 tree。它是产品层检视环境，不一定是 Git linked worktree。机制由技术
+设计决定。
 
 ### 9.2 Review Policy
 
@@ -349,7 +350,7 @@ optional-missing 和 unreviewed 范围；已发现 finding 可展示但不能 by
 pass。用户可修改 Compute Policy，并对同一 Review Request/Identity 创建新 Attempt。
 
 provider failure、required dimension 不完整、mandatory context 不可用、in-scope 内容
-unreviewable、workspace 缺失、merge conflict 等同样失败关闭。以后成功 Attempt 可
+unreviewable、Review Worktree 缺失、merge conflict 等同样失败关闭。以后成功 Attempt 可
 取代 `Error`；单纯修改 Compute Policy 不会自动改变状态。
 
 ## 19. 输出与本地化
@@ -362,7 +363,7 @@ unreviewable、workspace 缺失、merge conflict 等同样失败关闭。以后�
   适当修复建议。
 - summary、gate state、Review Request Key、Attempt ID。
 - merge 成功时的 Merge Candidate/Review Identity；失败时明确 tree 不可用及构造错误。
-- 候选构造、workspace、context、每个 dimension 和 gate 阶段的完成/失败状态。
+- 候选构造、Review Worktree 准备、context、每个 dimension 和 gate 阶段的完成/失败状态。
 - mandatory、optional-missing、excluded、unreviewable、reviewed coverage。
 - Review/Compute Policy 版本、模型、用量、估计/实际成本和失败信息。
 - 分析数据目的地、provider、model 和已知 retention。
@@ -370,7 +371,10 @@ unreviewable、workspace 缺失、merge conflict 等同样失败关闭。以后�
 GitHub 还发布 inline finding、持久 check、finding bypass 和可观察的原生 override。
 CLI 还输出 terminal report、稳定机器格式和退出码；包含 target ref/head、proposed head、
 Attempt ID、Review Policy 和可用的 merge-tree OID；构造失败以 unavailable/null 表示。
-CLI 不创建 bypass 或远程 check。
+CLI 不创建 bypass 或远程 check。Pre-Alpha 期间，版本化 CLI 结果 schema
+`worktree-review.cli.result/v1` 允许原位更新标识符，不必升主版本。记录 Review
+Worktree 准备的共享 pipeline stage 现为 `prepare-review-worktree`，取代原先的
+`prepare-workspace`。
 
 ## 20. 模型与成本控制
 
@@ -388,9 +392,9 @@ fallback 延后。
 2. 尝试把 proposed head 合入 target head。成功后完成 Merge Candidate/Review
    Identity；失败则输出绑定 Request Key 和 Attempt ID 的 `Error`，没有 tree/Review
    Identity。
-3. 准备完整、隔离、只读 workspace。
+3. 准备完整、隔离、只读 Review Worktree。
 4. 按 Review Policy 收集上下文。
-5. 针对同一 workspace/context 执行所有 required dimensions。
+5. 针对同一 Review Worktree/context 执行所有 required dimensions。
 6. 验证、去重和分类 finding。
 7. 检查所有 required dimension；不完整时发布 partial finding/coverage 和 `Error`。
 8. 执行确定性 gate 规则。
@@ -437,7 +441,7 @@ CLI 未显式 opt-in 时不得发送反馈、声明模型请求之外的源码�
 ## 23. 明确延后的技术决定
 
 本 PRD 不决定：GitHub App/Action 具体机制、托管拓扑、平台 adapter interface、CLI
-打包/语法/配置发现/机器 schema、候选构造与 workspace 机制、队列/数据库/cache、策略
+打包/语法/配置发现/机器 schema、候选构造与 Review Worktree 机制、队列/数据库/cache、策略
 schema、上下文检索、prompt/分析算法、可选置信校准、凭据代理和隔离、GitHub API/
 webhook/check/comment 细节、未来平台 adapter、外部 fork sandbox、私有仓库披露、增量
 审查、跨候选 finding、Deep Review、互动重评和多 provider 路由。

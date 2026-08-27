@@ -25,7 +25,7 @@ from worktree_review.core.provider import (
     estimate_structured_call,
 )
 from worktree_review.core.report import DimensionOutcome, StageStatus
-from worktree_review.core.workspace import ReviewWorkspace
+from worktree_review.core.review_worktree import ReviewWorktree
 from worktree_review.schemas import DIMENSION_FINDINGS_SCHEMA_ID, load_schema
 
 DIMENSION_FOCUS: dict[str, str] = {
@@ -233,7 +233,7 @@ async def _run_one_dimension(
 
 
 async def run_required_dimensions(
-    workspace: ReviewWorkspace,
+    review_worktree: ReviewWorktree,
     context: GatheredContext,
     review_policy: ReviewPolicy,
     provider: ProviderClient,
@@ -241,7 +241,7 @@ async def run_required_dimensions(
 ) -> tuple[DimensionRunResult, ...]:
     """Run required dimensions sequentially so in-flight budget can stop further calls."""
 
-    del workspace
+    del review_worktree
     remaining_budget = compute_policy.max_budget_usd
     spent = Decimal("0")
     results: list[DimensionRunResult] = []

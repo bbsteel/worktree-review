@@ -114,7 +114,10 @@
       "additionalProperties": false,
       "required": ["stage", "status"],
       "properties": {
-        "stage": { "type": "string" },
+        "stage": {
+          "type": "string",
+          "$comment": "Pre-Alpha in-place identifiers. Review Worktree preparation is prepare-review-worktree (renamed from prepare-workspace)."
+        },
         "status": { "type": "string", "enum": ["completed", "failed", "not-started"] },
         "detail": { "type": ["string", "null"] }
       }

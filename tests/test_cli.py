@@ -69,7 +69,7 @@ def test_review_json_is_error_and_matches_schema(
     assert len(document["target_head_oid"]) == 40
     stages = {item["stage"]: item["status"] for item in document["stage_outcomes"]}
     assert stages["construct-merge"] == "completed"
-    assert stages["prepare-workspace"] == "completed"
+    assert stages["prepare-review-worktree"] == "completed"
     assert stages["gather-context"] == "completed"
     assert stages["run-dimensions"] == "failed"
     assert document["coverage"]["required_coverage_complete"] is True

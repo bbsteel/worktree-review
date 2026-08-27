@@ -49,10 +49,12 @@ class MergeCandidateIdentity(BaseModel):
 
 
 class ReviewIdentity(BaseModel):
-    """Standing-decision identity. Compute Policy is not part of this key (PRD §8.2)."""
+    """What a completed review conclusion applies to: candidate plus Review Policy version.
 
-    model_config = ConfigDict(frozen=True)
+    Platform change-request identifiers are provenance, not identity (PRD terminology).
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     candidate: MergeCandidateIdentity
     review_policy_version: PolicyVersionIdentity
-    platform_change_request_id: str | None = None

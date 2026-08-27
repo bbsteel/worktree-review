@@ -42,7 +42,7 @@ class StageName(StrEnum):
 
     DERIVE_IDENTITY = "derive-identity"
     CONSTRUCT_MERGE = "construct-merge"
-    PREPARE_WORKSPACE = "prepare-workspace"
+    PREPARE_REVIEW_WORKTREE = "prepare-review-worktree"  # Pre-Alpha in-place; was prepare-workspace
     GATHER_CONTEXT = "gather-context"
     RUN_DIMENSIONS = "run-dimensions"
     VERIFY_DEDUP = "verify-dedup"

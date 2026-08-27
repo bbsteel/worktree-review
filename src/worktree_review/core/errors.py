@@ -33,8 +33,8 @@ class MergeConflictError(MergeConstructionError):
         self.conflicted_paths = conflicted_paths
 
 
-class WorkspaceError(WorktreeReviewError):
-    """The read-only merge-candidate workspace could not be prepared."""
+class ReviewWorktreeError(WorktreeReviewError):
+    """The read-only Review Worktree could not be prepared."""
 
 
 class ContextGatherError(WorktreeReviewError):

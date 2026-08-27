@@ -15,7 +15,10 @@ from worktree_review.core.context import (
 )
 from worktree_review.core.identity import ResolvedCommitPair
 from worktree_review.core.policy import ReviewPolicy
-from worktree_review.core.workspace import cleanup_review_workspace, materialize_read_only_workspace
+from worktree_review.core.review_worktree import (
+    cleanup_review_worktree,
+    materialize_review_worktree,
+)
 
 
 def _policy(**context: object) -> ReviewPolicy:
@@ -46,13 +49,13 @@ async def _gather(
     tmp_path: Path,
 ):
     candidate = await construct_merge_candidate(_pair(repository, target_oid, proposed_oid))
-    workspace = await materialize_read_only_workspace(
-        candidate, destination=tmp_path / "worktree-review-ws-ctx"
+    review_worktree = await materialize_review_worktree(
+        candidate, destination=tmp_path / "worktree-review-ctx"
     )
     try:
-        return await gather_context(workspace, candidate, policy)
+        return await gather_context(review_worktree, candidate, policy)
     finally:
-        await cleanup_review_workspace(workspace)
+        await cleanup_review_worktree(review_worktree)
 
 
 def test_path_glob_matching() -> None:
@@ -287,18 +290,18 @@ async def test_dotfile_exclusion_glob_matches(git_repository: Path, tmp_path: Pa
 
 
 @pytest.mark.asyncio
-async def test_repo_workspace_marker_path_is_not_skipped(
+async def test_repo_review_worktree_marker_path_is_not_skipped(
     git_repository: Path, tmp_path: Path
 ) -> None:
     target_oid = head_oid(git_repository)
     checkout_new_branch(git_repository, "topic")
     proposed_oid = commit_files(
         git_repository,
-        {".worktree-review-workspace": "not-a-marker\n"},
+        {".worktree-review-marker": "not-a-marker\n"},
         "add colliding marker name",
     )
     git(git_repository, "checkout", "main")
     gathered = await _gather(git_repository, _policy(), target_oid, proposed_oid, tmp_path)
     by_path = {item.path: item for item in gathered.items}
-    assert ".worktree-review-workspace" in by_path
-    assert by_path[".worktree-review-workspace"].body == "not-a-marker\n"
+    assert ".worktree-review-marker" in by_path
+    assert by_path[".worktree-review-marker"].body == "not-a-marker\n"

@@ -9,8 +9,8 @@ from worktree_review.core.errors import (
     MergeConstructionError,
     PolicyValidationError,
     ProviderError,
+    ReviewWorktreeError,
     UnimplementedStageError,
-    WorkspaceError,
     WorktreeReviewError,
 )
 from worktree_review.core.findings import EvidenceBand, Finding, Severity
@@ -62,12 +62,12 @@ __all__ = [
     "ReviewReport",
     "ReviewRequest",
     "ReviewRequestKey",
+    "ReviewWorktreeError",
     "Severity",
     "StageName",
     "StageOutcome",
     "StageStatus",
     "UnimplementedStageError",
-    "WorkspaceError",
     "WorktreeReviewError",
     "evaluate_gate",
     "finding_blocks_under_policy",

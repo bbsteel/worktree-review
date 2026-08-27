@@ -10,7 +10,7 @@ from worktree_review.core.errors import ProviderError
 from worktree_review.core.policy import ComputePolicy, ReviewPolicy
 from worktree_review.core.provider import ScriptedProvider
 from worktree_review.core.report import CoverageRecord, StageStatus
-from worktree_review.core.workspace import ReviewWorkspace
+from worktree_review.core.review_worktree import ReviewWorktree
 
 
 def _policy() -> ReviewPolicy:
@@ -52,10 +52,10 @@ def _compute_policy() -> ComputePolicy:
     )
 
 
-def _workspace(tmp_path: Path) -> ReviewWorkspace:
+def _review_worktree(tmp_path: Path) -> ReviewWorktree:
     tree = tmp_path / "tree"
     tree.mkdir()
-    return ReviewWorkspace(
+    return ReviewWorktree(
         root=tree,
         container_root=tmp_path,
         merge_tree_oid="a" * 40,
@@ -134,7 +134,7 @@ async def test_required_dimensions_run_concurrently_and_keep_partial_results(
         }
     )
     results = await run_required_dimensions(
-        _workspace(tmp_path), _context(), _policy(), provider, _compute_policy()
+        _review_worktree(tmp_path), _context(), _policy(), provider, _compute_policy()
     )
     by_id = {item.outcome.dimension_id: item for item in results}
     assert by_id["correctness"].outcome.status is StageStatus.COMPLETED
