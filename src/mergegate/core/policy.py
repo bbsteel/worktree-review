@@ -83,6 +83,9 @@ class ComputePolicy(BaseModel):
     model: str
     max_budget_usd: Annotated[Decimal, Field(ge=0)]
     allow_start_under_uncertain_price: bool = False
+    permit_remote_transmission: bool = False
+    input_usd_per_million_tokens: Annotated[Decimal, Field(ge=0)] | None = None
+    output_usd_per_million_tokens: Annotated[Decimal, Field(ge=0)] | None = None
     data_destination: str
     known_retention: str
 

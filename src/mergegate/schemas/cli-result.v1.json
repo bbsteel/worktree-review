@@ -7,6 +7,8 @@
   "required": [
     "schema",
     "gate_state",
+    "attempt_id",
+    "request_key",
     "source_repository",
     "target_ref",
     "target_head_oid",
@@ -17,11 +19,24 @@
     "compute_policy_version",
     "stage_outcomes",
     "findings",
+    "draft_findings",
     "coverage",
+    "usage",
     "summary"
   ],
   "properties": {
     "schema": { "const": "mergegate.cli.result/v1" },
+    "attempt_id": { "type": "string", "minLength": 1 },
+    "request_key": { "$ref": "#/$defs/requestKey" },
+    "review_identity": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": ["merge_tree_oid", "review_policy_version"],
+      "properties": {
+        "merge_tree_oid": { "type": "string" },
+        "review_policy_version": { "$ref": "#/$defs/policyVersion" }
+      }
+    },
     "gate_state": {
       "type": "string",
       "enum": [
@@ -46,11 +61,45 @@
       "items": { "$ref": "#/$defs/stageOutcome" }
     },
     "findings": { "type": "array", "items": { "type": "object" } },
+    "draft_findings": { "type": "array", "items": { "type": "object" } },
     "coverage": { "$ref": "#/$defs/coverage" },
+    "usage": { "type": "array", "items": { "$ref": "#/$defs/usageRecord" } },
     "summary": { "type": "string" },
     "error_detail": { "type": ["string", "null"] }
   },
   "$defs": {
+    "requestKey": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source_repository",
+        "target_ref",
+        "target_head_oid",
+        "proposed_head_oid",
+        "review_policy_version"
+      ],
+      "properties": {
+        "source_repository": { "type": "string" },
+        "target_ref": { "type": "string" },
+        "target_head_oid": { "type": "string" },
+        "proposed_head_oid": { "type": "string" },
+        "review_policy_version": { "$ref": "#/$defs/policyVersion" }
+      }
+    },
+    "usageRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "provider", "model"],
+      "properties": {
+        "kind": { "type": "string", "enum": ["measured", "declared", "estimated"] },
+        "input_tokens": { "type": ["integer", "null"] },
+        "output_tokens": { "type": ["integer", "null"] },
+        "cost_usd": { "type": ["number", "string", "null"] },
+        "provider": { "type": "string" },
+        "model": { "type": "string" },
+        "note": { "type": ["string", "null"] }
+      }
+    },
     "policyVersion": {
       "type": "object",
       "additionalProperties": false,

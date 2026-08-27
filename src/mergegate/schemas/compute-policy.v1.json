@@ -23,6 +23,9 @@
     "model": { "type": "string", "minLength": 1 },
     "max_budget_usd": { "type": "number", "minimum": 0 },
     "allow_start_under_uncertain_price": { "type": "boolean" },
+    "permit_remote_transmission": { "type": "boolean" },
+    "input_usd_per_million_tokens": { "type": "number", "minimum": 0 },
+    "output_usd_per_million_tokens": { "type": "number", "minimum": 0 },
     "data_destination": { "type": "string", "minLength": 1 },
     "known_retention": { "type": "string", "minLength": 1 }
   }

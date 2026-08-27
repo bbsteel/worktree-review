@@ -23,6 +23,9 @@ provider: anthropic
 model: claude-sonnet-4-5
 max_budget_usd: 1
 allow_start_under_uncertain_price: false
+permit_remote_transmission: true
+input_usd_per_million_tokens: 3
+output_usd_per_million_tokens: 15
 data_destination: https://api.anthropic.com
 known_retention: none-in-skeleton
 """

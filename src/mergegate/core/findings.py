@@ -63,6 +63,7 @@ class Finding(BaseModel):
     evidence_spans: tuple[EvidenceSpan, ...] = ()
     repair_guidance: str | None = None
     bypass_applied: bool = False
+    dimension_id: str | None = None
 
 
 def fingerprint_finding(

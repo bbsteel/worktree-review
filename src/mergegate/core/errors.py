@@ -39,3 +39,15 @@ class WorkspaceError(MergeGateError):
 
 class ContextGatherError(MergeGateError):
     """Context gathering could not produce a reliable coverage record."""
+
+
+class BudgetExhaustedError(MergeGateError):
+    """The review cannot start or continue within Compute Policy's budget."""
+
+
+class ProviderError(MergeGateError):
+    """The configured model provider could not complete a required call."""
+
+    def __init__(self, message: str, usage: object | None = None) -> None:
+        super().__init__(message)
+        self.usage = usage

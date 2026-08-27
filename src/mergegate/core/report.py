@@ -7,7 +7,13 @@ from enum import StrEnum
 from pydantic import BaseModel, ConfigDict
 
 from mergegate.core.findings import Finding
-from mergegate.core.identity import PolicyVersionIdentity, ResolvedCommitPair
+from mergegate.core.identity import (
+    PolicyVersionIdentity,
+    ResolvedCommitPair,
+    ReviewIdentity,
+    ReviewRequestKey,
+)
+from mergegate.core.provider import UsageRecord
 
 
 class GateState(StrEnum):
@@ -100,13 +106,18 @@ class ReviewReport(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     gate_state: GateState
+    attempt_id: str
+    request_key: ReviewRequestKey
     resolved: ResolvedCommitPair
     merge_tree_oid: str | None
+    review_identity: ReviewIdentity | None
     review_policy_version: PolicyVersionIdentity
     compute_policy_version: PolicyVersionIdentity
     execution: ExecutionRecord
     findings: tuple[Finding, ...] = ()
+    draft_findings: tuple[Finding, ...] = ()
     coverage: CoverageRecord | None = None
     dimension_outcomes: tuple[DimensionOutcome, ...] = ()
+    usage: tuple[UsageRecord, ...] = ()
     summary: str
     error_detail: str | None = None

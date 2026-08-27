@@ -1,6 +1,7 @@
 """Platform-independent product semantics. Adapters must not reinterpret these types."""
 
 from mergegate.core.errors import (
+    BudgetExhaustedError,
     ContextGatherError,
     GitRequiredError,
     InvalidInvocationError,
@@ -8,6 +9,7 @@ from mergegate.core.errors import (
     MergeConstructionError,
     MergeGateError,
     PolicyValidationError,
+    ProviderError,
     UnimplementedStageError,
     WorkspaceError,
 )
@@ -22,6 +24,7 @@ from mergegate.core.identity import (
     PolicyVersionIdentity,
     ResolvedCommitPair,
     ReviewIdentity,
+    ReviewRequestKey,
 )
 from mergegate.core.pipeline import ReviewRequest, run_review_pipeline
 from mergegate.core.policy import ComputePolicy, ReviewPolicy
@@ -36,6 +39,7 @@ from mergegate.core.report import (
 )
 
 __all__ = [
+    "BudgetExhaustedError",
     "ComputePolicy",
     "ContextGatherError",
     "CoverageRecord",
@@ -52,11 +56,13 @@ __all__ = [
     "MergeGateError",
     "PolicyValidationError",
     "PolicyVersionIdentity",
+    "ProviderError",
     "ResolvedCommitPair",
     "ReviewIdentity",
     "ReviewPolicy",
     "ReviewReport",
     "ReviewRequest",
+    "ReviewRequestKey",
     "Severity",
     "StageName",
     "StageOutcome",

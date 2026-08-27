@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mergegate.dev/schemas/dimension-findings.v1.json",
+  "title": "MergeGate dimension findings v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["findings"],
+  "properties": {
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "path",
+          "start_line",
+          "end_line",
+          "quoted_text",
+          "severity",
+          "evidence_band",
+          "problem_statement",
+          "expected_impact",
+          "repair_guidance"
+        ],
+        "properties": {
+          "path": { "type": "string", "minLength": 1 },
+          "start_line": { "type": "integer", "minimum": 1 },
+          "end_line": { "type": "integer", "minimum": 1 },
+          "quoted_text": { "type": "string" },
+          "severity": {
+            "type": "string",
+            "enum": ["critical", "major", "minor", "suggestion"]
+          },
+          "evidence_band": {
+            "type": "string",
+            "enum": ["insufficient", "supported", "verified"]
+          },
+          "problem_statement": { "type": "string", "minLength": 1 },
+          "expected_impact": { "type": "string", "minLength": 1 },
+          "repair_guidance": { "type": ["string", "null"] }
+        }
+      }
+    }
+  }
+}

@@ -15,7 +15,11 @@ from mergegate.core.pipeline import ReviewRequest, run_review_pipeline
 from mergegate.core.report import ReviewReport
 from mergegate.observability import configure_logging
 from mergegate.platform.cli.exit_codes import CliExitCode, exit_code_for_gate_state
-from mergegate.platform.cli.invocation import prepare_cli_review
+from mergegate.platform.cli.invocation import (
+    prepare_cli_review,
+    remote_transmission_disclosure,
+    require_remote_transmission_permit,
+)
 from mergegate.platform.cli.result import cli_result_document
 from mergegate.platform.cli.terminal import render_text_report
 
@@ -107,6 +111,8 @@ def review(
             policy_path=policy,
             compute_policy_path=compute_policy,
         )
+        require_remote_transmission_permit(prepared.compute_policy)
+        typer.secho(remote_transmission_disclosure(prepared.compute_policy), err=True)
         return await run_review_pipeline(
             ReviewRequest(
                 resolved=prepared.resolved,

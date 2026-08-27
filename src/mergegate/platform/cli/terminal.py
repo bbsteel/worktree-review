@@ -7,12 +7,17 @@ def render_text_report(report: ReviewReport) -> str:
     lines = [
         "MergeGate review",
         f"Gate: {report.gate_state.value}",
+        f"Attempt: {report.attempt_id}",
         f"Repository: {report.resolved.source_repository}",
         f"Target ref: {report.resolved.target_ref}",
         f"Target head: {report.resolved.target_head_oid}",
         f"Proposed ref: {report.resolved.proposed_ref}",
         f"Proposed head: {report.resolved.proposed_head_oid}",
-        f"Merge tree: {report.merge_tree_oid or '(not constructed)'}",
+        (
+            f"Merge tree: {report.merge_tree_oid or '(not constructed)'}"
+            if report.review_identity is None
+            else f"Merge tree: {report.review_identity.candidate.merge_tree_oid}"
+        ),
         (
             "Review policy: "
             f"{report.review_policy_version.semver} "
@@ -43,6 +48,19 @@ def render_text_report(report: ReviewReport) -> str:
             lines.append("  mandatory missing: " + ", ".join(report.coverage.mandatory_missing))
         if report.coverage.optional_missing:
             lines.append("  optional missing: " + ", ".join(report.coverage.optional_missing))
+    if report.draft_findings:
+        lines.append(
+            f"Unverified draft findings: {len(report.draft_findings)} "
+            "(not evidence; verification did not complete)"
+        )
+    if report.usage:
+        lines.append("Usage:")
+        for record in report.usage:
+            cost = "unknown" if record.cost_usd is None else f"${record.cost_usd}"
+            lines.append(
+                f"  {record.kind.value} {record.provider}/{record.model} "
+                f"in={record.input_tokens} out={record.output_tokens} cost={cost}"
+            )
     lines.append(f"Summary: {report.summary}")
     if report.error_detail:
         lines.append(f"Error: {report.error_detail}")

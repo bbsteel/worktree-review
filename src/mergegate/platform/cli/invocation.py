@@ -22,6 +22,27 @@ from mergegate.core.policy import (
     load_review_policy,
 )
 
+
+def remote_transmission_disclosure(compute_policy: ComputePolicy) -> str:
+    return (
+        "MergeGate remote transmission (Compute Policy):\n"
+        f"  provider: {compute_policy.provider}\n"
+        f"  model: {compute_policy.model}\n"
+        f"  data_destination: {compute_policy.data_destination}\n"
+        f"  known_retention: {compute_policy.known_retention}"
+    )
+
+
+def require_remote_transmission_permit(compute_policy: ComputePolicy) -> None:
+    if compute_policy.permit_remote_transmission:
+        return
+    raise InvalidInvocationError(
+        remote_transmission_disclosure(compute_policy)
+        + "\nCompute Policy does not permit remote transmission "
+        "(set permit_remote_transmission: true in a trusted Compute Policy)."
+    )
+
+
 REVIEW_POLICY_FILENAME = "review-policy.yaml"
 COMPUTE_POLICY_FILENAME = "compute-policy.yaml"
 

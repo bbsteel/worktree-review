@@ -5,6 +5,7 @@ import subprocess
 from pathlib import Path
 
 import jsonschema
+import pytest
 from typer.testing import CliRunner
 
 from mergegate.cli import app
@@ -36,7 +37,11 @@ def test_version() -> None:
     assert result.stdout.strip() == "0.0.1"
 
 
-def test_review_json_is_error_and_matches_schema(git_repository: Path, policy_dir: Path) -> None:
+def test_review_json_is_error_and_matches_schema(
+    git_repository: Path, policy_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     result = runner.invoke(
         app,
         [
@@ -67,6 +72,42 @@ def test_review_json_is_error_and_matches_schema(git_repository: Path, policy_di
     assert stages["gather-context"] == "completed"
     assert stages["run-dimensions"] == "failed"
     assert document["coverage"]["required_coverage_complete"] is True
+    assert document["attempt_id"]
+    assert document["request_key"]["target_ref"] == "main"
+    assert "usage" in document
+    assert "data_destination" in result.stderr
+    assert "claude-sonnet-4-5" in result.stderr
+
+
+def test_remote_transmission_requires_compute_policy_permit(
+    git_repository: Path, policy_dir: Path
+) -> None:
+    compute_path = policy_dir / "no-transmit.yaml"
+    compute_path.write_text(
+        (policy_dir / "compute-policy.yaml")
+        .read_text(encoding="utf-8")
+        .replace(
+            "permit_remote_transmission: true",
+            "permit_remote_transmission: false",
+        ),
+        encoding="utf-8",
+    )
+    result = runner.invoke(
+        app,
+        [
+            "review",
+            "--target",
+            "main",
+            "--repository",
+            str(git_repository),
+            "--policy",
+            str(policy_dir / "review-policy.yaml"),
+            "--compute-policy",
+            str(compute_path),
+        ],
+    )
+    assert result.exit_code == int(CliExitCode.INVALID_INVOCATION)
+    assert "permit remote transmission" in result.stderr
 
 
 def test_dirty_worktree_is_invalid_invocation(git_repository: Path, policy_dir: Path) -> None:

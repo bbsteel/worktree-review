@@ -12,6 +12,18 @@ class PolicyVersionIdentity(BaseModel):
     sha256: str = Field(min_length=64, max_length=64)
 
 
+class ReviewRequestKey(BaseModel):
+    """Pre-construction key (PRD terminology). Exists even when merge construction fails."""
+
+    model_config = ConfigDict(frozen=True)
+
+    source_repository: str
+    target_ref: str
+    target_head_oid: str
+    proposed_head_oid: str
+    review_policy_version: PolicyVersionIdentity
+
+
 class ResolvedCommitPair(BaseModel):
     """Target and proposed heads resolved to immutable commits, before merge."""
 
