@@ -14,9 +14,10 @@ Product semantics live in `worktree_review.core`. Platform adapters only map tra
 This repository currently contains the **stage-one core**: domain identities,
 policy validation, exact merge construction, verified read-only Review Worktree
 materialization, context gathering, provider-backed review dimensions, budget
-metering, deterministic gate evaluation, CLI output, and fail-closed stage
-records. Finding verification and the authoritative GitHub worker remain to be
-implemented.
+metering, finding verification, deterministic gate evaluation, CLI output, and
+fail-closed stage records. The server also has the authoritative Attempt/CAS
+state transitions and authorized retry boundary; GitHub Checks publication and
+the embedded pgqueuer review worker remain to be implemented.
 
 ## Requirements
 
@@ -81,7 +82,10 @@ uv sync --extra server
 docker compose up --build
 ```
 
-The image runs `worktree-review-server`. `GET /healthz` is the liveness probe. Webhook handling and the review worker are not implemented in this skeleton.
+The image runs `worktree-review-server`. `GET /healthz` is the liveness probe.
+The server validates GitHub webhook signatures and maps authorized retry
+actions into new Attempts; GitHub Checks publication and the review worker are
+not implemented in this skeleton.
 
 ## Layout
 

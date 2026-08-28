@@ -542,12 +542,13 @@ must converge in this order so intermediate states remain fail-closed:
 3. Add Attempt ID, request key, and optional successful identities to the
    surface-neutral report and `worktree-review.cli.result/v1`; update both human and
    JSON CLI renderers together.
-4. Implement the GitHub `change_requests.authoritative_attempt_id` transaction,
-   attempt-keyed jobs, and stage-9 compare-and-set before enabling retries or
-   standing decisions. Tests must cover an older same-identity attempt finishing
-   last.
-5. Add the authorized GitHub retry action described by D14. Keep provider-call
-   retries within one Attempt and full-pipeline reruns as new Attempts.
+4. Implemented in `worktree_review.server.state`: the GitHub
+   `change_requests.authoritative_attempt_id` transaction, attempt-keyed jobs,
+   and stage-9 compare-and-set. Tests cover an older same-identity Attempt
+   finishing last.
+5. Implemented in `worktree_review.platform.github.retry` and `webhooks`: the
+   authorized GitHub retry action described by D14. Provider-call retries stay
+   within one Attempt and full-pipeline reruns create new Attempts.
 6. Replace archive-based Review Worktree extraction with verified raw tree/blob
    materialization. Keep product metadata outside the repository namespace and
    add adversarial tests for marker-name collisions, absolute/relative symlinks,

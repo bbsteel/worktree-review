@@ -315,10 +315,11 @@ ORM、vector database 和默认 hosted telemetry backend。
    完成成功身份，同时保留九个外部 stage。
 3. Surface-neutral report 与 `worktree-review.cli.result/v1` 同步增加 Attempt ID、Request Key
    和可选成功身份；terminal/JSON renderer 同时更新。
-4. 启用 retry/standing decision 前，先实现 GitHub
+4. 已在 `worktree_review.server.state` 实现 GitHub
    `change_requests.authoritative_attempt_id` 事务、Attempt-keyed job 和 stage-9 CAS；测试
-   旧同身份 Attempt 最后完成。
-5. 实现 D14 授权 retry；provider call retry 留在同一 Attempt，完整 rerun 为新 Attempt。
+   覆盖旧同身份 Attempt 最后完成。
+5. 已在 `worktree_review.platform.github.retry` 与 `webhooks` 实现 D14 授权 retry；provider
+   call retry 留在同一 Attempt，完整 rerun 创建新 Attempt。
 6. 用 verified raw tree/blob materialization 替换 archive；metadata 放在 repo namespace
    外；测试 marker collision、absolute/relative symlink、`export-ignore`、`export-subst`、
    traversal 和 unusual Git paths。
