@@ -268,6 +268,13 @@ infrastructure:
   plus Review Identity after successful construction, before changing
   `gate_decisions` or publishing a check. An older same-identity attempt
   therefore cannot overwrite a newer result.
+- Publication is a single-use `RUNNING → PUBLISHED` CAS. Repeating the same
+  result for the still-standing Attempt returns the original result without a
+  second decision; a different result is a state conflict. Each Attempt has at
+  most one gate decision by database uniqueness constraint.
+- GitHub retry deliveries are idempotent by `(installation_id, delivery_id)`.
+  The delivery record and its new Attempt are inserted in the same transaction;
+  a redelivery returns the first Attempt and never supersedes it again.
 - Provider-call retry controlled by `tenacity` remains inside one attempt.
   Re-executing the complete review after `Error`, changed Compute Policy, or an
   authorized GitHub retry always creates another attempt.
@@ -382,7 +389,8 @@ Review Policy, then executes the D8 transaction. If those inputs changed, the
 new attempt naturally receives a new request key and later Review Identity; if
 they did not, it is a same-identity retry. Changed Compute Policy is recorded on
 the new attempt but never added to Review Identity. Authorization outcome,
-reason, prior attempt ID, and new attempt ID are append-only audit fields.
+reason, delivery ID, prior attempt ID, and new attempt ID are append-only audit
+fields. GitHub redelivery is acknowledged idempotently by the delivery key.
 
 ## 3. Third-party component selection
 

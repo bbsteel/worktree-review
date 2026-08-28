@@ -166,6 +166,12 @@ Request Key，构造成功时再比较 Review Identity，之后才能修改 `gat
 check。旧同身份 Attempt 不能覆盖新结果。`tenacity` provider-call retry 留在同一
 Attempt；完整 pipeline 重跑总是新 Attempt。第一阶段不引入 Redis/SQS/NATS/Celery。
 
+发布是单次 `RUNNING → PUBLISHED` CAS。对仍是 standing 的 Attempt 重复发布相同结果时，
+返回原结果且不新增 decision；不同结果返回 state conflict。数据库唯一约束保证每个
+Attempt 最多有一个 gate decision。GitHub retry delivery 按 `(installation_id, delivery_id)`
+幂等；delivery 记录与新 Attempt 在同一事务写入，重投直接返回第一次的 Attempt，不会再次
+取代它。
+
 CLI 除可选 immutable content cache 外无状态；cache 不得缩减范围或复用结论。
 
 **D9 — Append-only audit 与已发布状态自审计。**
@@ -216,8 +222,8 @@ API 最多 50 条，级别由严重度映射。
 第一阶段 App 提供当前 Review Request 的授权 retry，首选 Checks requested action，
 details-page action 可替代。处理时重新解析 refs 和 Review Policy，再执行 D8 事务。
 输入变化自然形成新 Request/Identity；未变化则是 same-identity retry。新 Compute
-Policy 记录在 Attempt，不加入 Review Identity。授权结果、原因、旧/新 Attempt ID
-追加审计。
+Policy 记录在 Attempt，不加入 Review Identity。授权结果、原因、delivery ID、旧/新 Attempt ID
+追加审计；GitHub 重投按 delivery key 幂等确认。
 
 ## 3. 第三方组件选择
 

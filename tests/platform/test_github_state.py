@@ -119,6 +119,70 @@ async def test_older_same_identity_attempt_cannot_publish_after_newer_attempt() 
     )
 
 
+@pytest.mark.asyncio
+async def test_publication_is_idempotent_for_same_result_and_rejects_changes() -> None:
+    state = InMemoryAuthoritativeAttemptStore()
+    change_request = _change_request()
+    request_key = _request_key()
+    identity = _review_identity(request_key)
+    attempt = await state.start_authoritative_attempt(
+        change_request=change_request,
+        request_key=request_key,
+    )
+    await state.record_review_identity(attempt_id=attempt.attempt_id, review_identity=identity)
+    assert await state.claim_attempt_job(attempt.attempt_id) is not None
+
+    first_result = await state.publish_if_authoritative(
+        attempt_id=attempt.attempt_id,
+        request_key=request_key,
+        review_identity=identity,
+        gate_state=GateState.PASSED,
+    )
+    repeated_result = await state.publish_if_authoritative(
+        attempt_id=attempt.attempt_id,
+        request_key=request_key,
+        review_identity=identity,
+        gate_state=GateState.PASSED,
+    )
+
+    assert first_result.disposition is PublishDisposition.PUBLISHED
+    assert repeated_result.disposition is PublishDisposition.PUBLISHED
+    assert repeated_result.gate_state is GateState.PASSED
+    with pytest.raises(StateConflictError, match="different gate state"):
+        await state.publish_if_authoritative(
+            attempt_id=attempt.attempt_id,
+            request_key=request_key,
+            review_identity=identity,
+            gate_state=GateState.BLOCKED,
+        )
+    standing_state = await state.get_change_request_state(change_request)
+    assert standing_state.standing_gate_state is GateState.PASSED
+    assert [
+        event["event_type"]
+        for event in await state.audit_events()
+        if event["event_type"] == "standing_decision_published"
+    ] == ["standing_decision_published"]
+
+
+@pytest.mark.asyncio
+async def test_queued_attempt_cannot_publish_before_job_claim() -> None:
+    state = InMemoryAuthoritativeAttemptStore()
+    change_request = _change_request()
+    request_key = _request_key()
+    attempt = await state.start_authoritative_attempt(
+        change_request=change_request,
+        request_key=request_key,
+    )
+
+    with pytest.raises(StateConflictError, match="must be running"):
+        await state.publish_if_authoritative(
+            attempt_id=attempt.attempt_id,
+            request_key=request_key,
+            review_identity=None,
+            gate_state=GateState.ERROR,
+        )
+
+
 class _StaticRetryAuthorizer:
     def __init__(self, authorized: bool) -> None:
         self.authorized = authorized
@@ -188,6 +252,44 @@ async def test_authorized_retry_creates_new_attempt_and_enqueues_it() -> None:
         and event["attempt_id"] == accepted.lease.attempt_id
         for event in await state.audit_events()
     )
+
+
+@pytest.mark.asyncio
+async def test_replayed_delivery_returns_original_attempt_without_replacing_it() -> None:
+    state = InMemoryAuthoritativeAttemptStore()
+    change_request = _change_request()
+    request_key = _request_key()
+    initial_attempt = await state.start_authoritative_attempt(
+        change_request=change_request,
+        request_key=request_key,
+    )
+    resolver = _StaticRetryResolver(request_key)
+    coordinator = GitHubRetryCoordinator(
+        state=state,
+        authorizer=_StaticRetryAuthorizer(authorized=True),
+        resolver=resolver,
+    )
+    first_request = RetryRequest(
+        change_request=change_request,
+        actor="maintainer",
+        reason="retry once",
+        prior_attempt_id=initial_attempt.attempt_id,
+        delivery_id="delivery-42",
+    )
+
+    first_accepted = await coordinator.request_retry(first_request)
+    second_accepted = await coordinator.request_retry(first_request)
+
+    assert second_accepted.replayed is True
+    assert second_accepted.lease.attempt_id == first_accepted.lease.attempt_id
+    assert resolver.calls == 1
+    current_state = await state.get_change_request_state(change_request)
+    assert current_state.authoritative_attempt_id == first_accepted.lease.attempt_id
+    assert [
+        event["event_type"]
+        for event in await state.audit_events()
+        if event["event_type"] == "attempt_authoritative"
+    ] == ["attempt_authoritative", "attempt_authoritative"]
 
 
 @pytest.mark.asyncio

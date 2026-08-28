@@ -86,6 +86,7 @@ async def test_requested_action_webhook_maps_to_retry_request_after_signature_ch
         pull_request_number=42,
     )
     assert coordinator.requests[0].actor == "maintainer"
+    assert coordinator.requests[0].delivery_id == "delivery-1"
 
 
 @pytest.mark.asyncio
@@ -116,3 +117,16 @@ async def test_non_requested_action_webhook_is_ignored() -> None:
 
     assert result.status == "ignored"
     assert result.attempt_id is None
+
+
+@pytest.mark.asyncio
+async def test_retry_webhook_requires_delivery_id_for_idempotency() -> None:
+    body, signature = _signed_payload(_retry_payload(), "webhook-secret")
+
+    with pytest.raises(WebhookValidationError, match="delivery ID"):
+        await handle_github_webhook(
+            payload=body,
+            signature_header=signature,
+            webhook_secret="webhook-secret",
+            retry_coordinator=_RecordingRetryCoordinator(),  # type: ignore[arg-type]
+        )

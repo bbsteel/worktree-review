@@ -85,7 +85,11 @@ docker compose up --build
 The image runs `worktree-review-server`. `GET /healthz` is the liveness probe.
 The server validates GitHub webhook signatures and maps authorized retry
 actions into new Attempts; GitHub Checks publication and the review worker are
-not implemented in this skeleton.
+not implemented in this skeleton. To enable the retry runtime, configure
+`WORKTREE_REVIEW_GITHUB_WEBHOOK_SECRET`,
+`WORKTREE_REVIEW_DATABASE_URL`, `WORKTREE_REVIEW_GITHUB_TOKEN`, and
+`WORKTREE_REVIEW_REVIEW_POLICY_PATH`; without the webhook secret retry is
+explicitly disabled, while an incomplete enabled configuration fails startup.
 
 ## Layout
 

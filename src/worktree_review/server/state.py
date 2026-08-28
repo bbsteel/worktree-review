@@ -64,6 +64,7 @@ class AttemptLease(BaseModel):
     change_request: GitHubChangeRequestLocator
     request_key: ReviewRequestKey
     prior_authoritative_attempt_id: str | None = None
+    delivery_replayed: bool = False
 
 
 class PublishResult(BaseModel):
@@ -102,8 +103,18 @@ class AuthoritativeAttemptStore(Protocol):
         change_request: GitHubChangeRequestLocator,
         request_key: ReviewRequestKey,
         expected_authoritative_attempt_id: str | None = None,
+        delivery_id: str | None = None,
     ) -> AttemptLease:
         """Create and designate an Attempt while invalidating the prior standing state."""
+        ...
+
+    async def get_delivery_attempt(
+        self,
+        *,
+        installation_id: int,
+        delivery_id: str,
+    ) -> AttemptLease | None:
+        """Return the Attempt already created for one GitHub delivery, if any."""
         ...
 
     async def record_review_identity(
@@ -183,6 +194,12 @@ class _MutableChangeRequest:
     standing_gate_state: GateState | None = None
 
 
+def _delivery_key(installation_id: int, delivery_id: str) -> tuple[int, str]:
+    if not delivery_id:
+        raise StateConflictError("GitHub delivery ID must not be empty")
+    return installation_id, delivery_id
+
+
 class InMemoryAuthoritativeAttemptStore:
     """Small transactional model for race tests and local server development."""
 
@@ -191,6 +208,7 @@ class InMemoryAuthoritativeAttemptStore:
         self._change_requests: dict[GitHubChangeRequestLocator, _MutableChangeRequest] = {}
         self._attempts: dict[str, _MutableAttempt] = {}
         self._jobs: dict[str, _MutableJob] = {}
+        self._delivery_attempts: dict[tuple[int, str], AttemptLease] = {}
         self._audit_events: list[dict[str, object]] = []
 
     async def start_authoritative_attempt(
@@ -199,8 +217,21 @@ class InMemoryAuthoritativeAttemptStore:
         change_request: GitHubChangeRequestLocator,
         request_key: ReviewRequestKey,
         expected_authoritative_attempt_id: str | None = None,
+        delivery_id: str | None = None,
     ) -> AttemptLease:
         async with self._lock:
+            delivery_key = (
+                None
+                if delivery_id is None
+                else _delivery_key(
+                    change_request.installation_id,
+                    delivery_id,
+                )
+            )
+            if delivery_key is not None:
+                previous_delivery_attempt = self._delivery_attempts.get(delivery_key)
+                if previous_delivery_attempt is not None:
+                    return previous_delivery_attempt.model_copy(update={"delivery_replayed": True})
             current_state = self._change_requests.get(change_request)
             prior_attempt_id = (
                 current_state.authoritative_attempt_id if current_state is not None else None
@@ -237,20 +268,38 @@ class InMemoryAuthoritativeAttemptStore:
                 attempt_id=attempt_id,
                 status=JobStatus.QUEUED,
             )
+            attempt_lease = AttemptLease(
+                attempt_id=attempt_id,
+                change_request=change_request,
+                request_key=request_key,
+                prior_authoritative_attempt_id=prior_attempt_id,
+            )
+            if delivery_key is not None:
+                self._delivery_attempts[delivery_key] = attempt_lease
             self._audit_events.append(
                 {
                     "event_type": "attempt_authoritative",
                     "attempt_id": attempt_id,
                     "change_request": change_request.model_dump(mode="json"),
                     "prior_attempt_id": prior_attempt_id,
+                    "delivery_id": delivery_id,
                 }
             )
-            return AttemptLease(
-                attempt_id=attempt_id,
-                change_request=change_request,
-                request_key=request_key,
-                prior_authoritative_attempt_id=prior_attempt_id,
+            return attempt_lease
+
+    async def get_delivery_attempt(
+        self,
+        *,
+        installation_id: int,
+        delivery_id: str,
+    ) -> AttemptLease | None:
+        async with self._lock:
+            previous_delivery_attempt = self._delivery_attempts.get(
+                _delivery_key(installation_id, delivery_id)
             )
+            if previous_delivery_attempt is None:
+                return None
+            return previous_delivery_attempt.model_copy(update={"delivery_replayed": True})
 
     async def record_review_identity(
         self,
@@ -266,6 +315,8 @@ class InMemoryAuthoritativeAttemptStore:
                 raise StateConflictError(
                     "Review Identity does not match the Attempt's Review Request Key"
                 )
+            if attempt.review_identity is not None and attempt.review_identity != review_identity:
+                raise StateConflictError("Review Identity for an Attempt is immutable")
             attempt.review_identity = review_identity
 
     async def claim_attempt_job(self, attempt_id: str) -> AttemptLease | None:
@@ -310,7 +361,44 @@ class InMemoryAuthoritativeAttemptStore:
                     review_identity,
                     request_key,
                 )
-            if not (authority_matches and request_key_matches and identity_matches):
+            publication_inputs_match = (
+                authority_matches and request_key_matches and identity_matches
+            )
+
+            if attempt.status is AttemptStatus.PUBLISHED:
+                if not publication_inputs_match or current_state.standing_attempt_id != attempt_id:
+                    raise StateConflictError(
+                        "published Attempt is no longer the standing authoritative Attempt"
+                    )
+                published_gate_state = current_state.standing_gate_state
+                if published_gate_state is None:
+                    raise StateConflictError(
+                        "published Attempt has no persisted standing gate state"
+                    )
+                if published_gate_state is not gate_state:
+                    raise StateConflictError(
+                        "published Attempt cannot be changed to a different gate state"
+                    )
+                return PublishResult(
+                    disposition=PublishDisposition.PUBLISHED,
+                    attempt_id=attempt_id,
+                    gate_state=published_gate_state,
+                    detail="authoritative gate decision was already published",
+                )
+
+            if attempt.status is not AttemptStatus.RUNNING:
+                if publication_inputs_match:
+                    raise StateConflictError(
+                        "Attempt must be running before its gate decision can be published"
+                    )
+                if attempt.status is AttemptStatus.AUDIT_ONLY:
+                    return PublishResult(
+                        disposition=PublishDisposition.SUPERSEDED,
+                        attempt_id=attempt_id,
+                        detail="Attempt was superseded before publication",
+                    )
+
+            if not publication_inputs_match:
                 attempt.status = AttemptStatus.AUDIT_ONLY
                 job = self._jobs.get(attempt_id)
                 if job is not None and job.status is JobStatus.RUNNING:
@@ -432,7 +520,20 @@ CREATE TABLE IF NOT EXISTS gate_decisions (
     review_identity JSONB,
     gate_state TEXT NOT NULL,
     standing BOOLEAN NOT NULL,
+    UNIQUE (attempt_id),
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS gate_decisions_one_per_attempt
+    ON gate_decisions (attempt_id);
+
+CREATE TABLE IF NOT EXISTS retry_deliveries (
+    installation_id BIGINT NOT NULL,
+    delivery_id TEXT NOT NULL,
+    attempt_id UUID NOT NULL REFERENCES review_attempts(attempt_id),
+    prior_authoritative_attempt_id UUID,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (installation_id, delivery_id)
 );
 
 CREATE TABLE IF NOT EXISTS audit_events (
@@ -467,17 +568,99 @@ class PostgresAuthoritativeAttemptStore:
         async with self._pool.acquire() as connection:
             await connection.execute(POSTGRES_SCHEMA_SQL)
 
+    async def get_delivery_attempt(
+        self,
+        *,
+        installation_id: int,
+        delivery_id: str,
+    ) -> AttemptLease | None:
+        delivery_key = _delivery_key(installation_id, delivery_id)
+        async with self._pool.acquire() as connection:
+            row = await connection.fetchrow(
+                """
+                SELECT d.attempt_id, d.prior_authoritative_attempt_id,
+                       a.installation_id, a.repository, a.pull_request_number,
+                       a.request_key
+                FROM retry_deliveries AS d
+                JOIN review_attempts AS a ON a.attempt_id = d.attempt_id
+                WHERE d.installation_id = $1 AND d.delivery_id = $2
+                """,
+                delivery_key[0],
+                delivery_key[1],
+            )
+        if row is None:
+            return None
+        return AttemptLease(
+            attempt_id=str(row["attempt_id"]),
+            change_request=GitHubChangeRequestLocator(
+                installation_id=row["installation_id"],
+                repository=row["repository"],
+                pull_request_number=row["pull_request_number"],
+            ),
+            request_key=ReviewRequestKey.model_validate(_json_object(row["request_key"])),
+            prior_authoritative_attempt_id=(
+                None
+                if row["prior_authoritative_attempt_id"] is None
+                else str(row["prior_authoritative_attempt_id"])
+            ),
+            delivery_replayed=True,
+        )
+
     async def start_authoritative_attempt(
         self,
         *,
         change_request: GitHubChangeRequestLocator,
         request_key: ReviewRequestKey,
         expected_authoritative_attempt_id: str | None = None,
+        delivery_id: str | None = None,
     ) -> AttemptLease:
         attempt_id = str(uuid4())
         request_key_json = request_key.model_dump_json()
         async with self._pool.acquire() as connection:
             async with connection.transaction():
+                delivery_key = (
+                    None
+                    if delivery_id is None
+                    else _delivery_key(
+                        change_request.installation_id,
+                        delivery_id,
+                    )
+                )
+                if delivery_key is not None:
+                    await connection.fetchval(
+                        "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+                        f"{delivery_key[0]}:{delivery_key[1]}",
+                    )
+                    previous_delivery = await connection.fetchrow(
+                        """
+                        SELECT d.attempt_id, d.prior_authoritative_attempt_id,
+                               a.installation_id, a.repository, a.pull_request_number,
+                               a.request_key
+                        FROM retry_deliveries AS d
+                        JOIN review_attempts AS a ON a.attempt_id = d.attempt_id
+                        WHERE d.installation_id = $1 AND d.delivery_id = $2
+                        """,
+                        delivery_key[0],
+                        delivery_key[1],
+                    )
+                    if previous_delivery is not None:
+                        return AttemptLease(
+                            attempt_id=str(previous_delivery["attempt_id"]),
+                            change_request=GitHubChangeRequestLocator(
+                                installation_id=previous_delivery["installation_id"],
+                                repository=previous_delivery["repository"],
+                                pull_request_number=previous_delivery["pull_request_number"],
+                            ),
+                            request_key=ReviewRequestKey.model_validate(
+                                _json_object(previous_delivery["request_key"])
+                            ),
+                            prior_authoritative_attempt_id=(
+                                None
+                                if previous_delivery["prior_authoritative_attempt_id"] is None
+                                else str(previous_delivery["prior_authoritative_attempt_id"])
+                            ),
+                            delivery_replayed=True,
+                        )
                 inserted_row = await connection.fetchrow(
                     """
                     INSERT INTO change_requests (
@@ -519,27 +702,27 @@ class PostgresAuthoritativeAttemptStore:
                         "retry target is no longer the authoritative Attempt: "
                         f"expected {expected_authoritative_attempt_id}, found {prior_attempt_id}"
                     )
-                await connection.execute(
-                    """
-                    UPDATE review_attempts
-                    SET status = $1
-                    WHERE attempt_id = $2::uuid AND status IN ($3, $4)
-                    """,
-                    AttemptStatus.SUPERSEDED.value,
-                    prior_attempt_id,
-                    AttemptStatus.QUEUED.value,
-                    AttemptStatus.RUNNING.value,
-                )
-                await connection.execute(
-                    """
-                    UPDATE review_jobs
-                    SET status = $1
-                    WHERE attempt_id = $2::uuid AND status = $3
-                    """,
-                    JobStatus.SUPERSEDED.value,
-                    prior_attempt_id,
-                    JobStatus.QUEUED.value,
-                )
+                if prior_attempt_id is not None:
+                    await connection.execute(
+                        """
+                        UPDATE review_attempts
+                        SET status = $1
+                        WHERE attempt_id = $2::uuid AND status <> $3
+                        """,
+                        AttemptStatus.SUPERSEDED.value,
+                        prior_attempt_id,
+                        AttemptStatus.AUDIT_ONLY.value,
+                    )
+                    await connection.execute(
+                        """
+                        UPDATE review_jobs
+                        SET status = $1
+                        WHERE attempt_id = $2::uuid AND status = $3
+                        """,
+                        JobStatus.SUPERSEDED.value,
+                        prior_attempt_id,
+                        JobStatus.QUEUED.value,
+                    )
                 await connection.execute(
                     """
                     UPDATE gate_decisions
@@ -587,12 +770,28 @@ class PostgresAuthoritativeAttemptStore:
                     attempt_id,
                     JobStatus.QUEUED.value,
                 )
+                if delivery_key is not None:
+                    await connection.execute(
+                        """
+                        INSERT INTO retry_deliveries (
+                            installation_id, delivery_id, attempt_id,
+                            prior_authoritative_attempt_id
+                        ) VALUES ($1, $2, $3::uuid, $4::uuid)
+                        """,
+                        delivery_key[0],
+                        delivery_key[1],
+                        attempt_id,
+                        prior_attempt_id,
+                    )
                 await self._append_audit_event_on_connection(
                     connection,
                     event_type="attempt_authoritative",
                     change_request=change_request,
                     attempt_id=attempt_id,
-                    payload={"prior_attempt_id": prior_attempt_id},
+                    payload={
+                        "prior_attempt_id": prior_attempt_id,
+                        "delivery_id": delivery_id,
+                    },
                 )
         return AttemptLease(
             attempt_id=attempt_id,
@@ -611,7 +810,7 @@ class PostgresAuthoritativeAttemptStore:
             async with connection.transaction():
                 attempt_row = await connection.fetchrow(
                     """
-                    SELECT request_key
+                    SELECT request_key, review_identity
                     FROM review_attempts
                     WHERE attempt_id = $1::uuid
                     FOR UPDATE
@@ -627,6 +826,12 @@ class PostgresAuthoritativeAttemptStore:
                     raise StateConflictError(
                         "Review Identity does not match the Attempt's Review Request Key"
                     )
+                if attempt_row["review_identity"] is not None:
+                    persisted_identity = ReviewIdentity.model_validate(
+                        _json_object(attempt_row["review_identity"])
+                    )
+                    if persisted_identity != review_identity:
+                        raise StateConflictError("Review Identity for an Attempt is immutable")
                 await connection.execute(
                     """
                     UPDATE review_attempts
@@ -705,7 +910,7 @@ class PostgresAuthoritativeAttemptStore:
                 attempt_row = await connection.fetchrow(
                     """
                     SELECT installation_id, repository, pull_request_number,
-                           request_key, review_identity
+                           request_key, review_identity, status
                     FROM review_attempts
                     WHERE attempt_id = $1::uuid
                     FOR UPDATE
@@ -716,7 +921,8 @@ class PostgresAuthoritativeAttemptStore:
                     raise StateConflictError(f"unknown Attempt: {attempt_id}")
                 change_request_row = await connection.fetchrow(
                     """
-                    SELECT request_key, authoritative_attempt_id
+                    SELECT request_key, authoritative_attempt_id,
+                           standing_attempt_id, standing_gate_state
                     FROM change_requests
                     WHERE installation_id = $1 AND repository = $2
                       AND pull_request_number = $3
@@ -739,13 +945,65 @@ class PostgresAuthoritativeAttemptStore:
                     if attempt_row["review_identity"] is None
                     else ReviewIdentity.model_validate(_json_object(attempt_row["review_identity"]))
                 )
+                change_request = GitHubChangeRequestLocator(
+                    installation_id=attempt_row["installation_id"],
+                    repository=attempt_row["repository"],
+                    pull_request_number=attempt_row["pull_request_number"],
+                )
                 is_authoritative = str(change_request_row["authoritative_attempt_id"]) == attempt_id
                 identities_match = persisted_identity == review_identity
-                if not (is_authoritative and current_request_key == request_key):
-                    identities_match = False
-                if persisted_attempt_key != request_key:
-                    identities_match = False
-                if not identities_match:
+                if persisted_identity is not None:
+                    identities_match = identities_match and _review_identity_matches_request_key(
+                        persisted_identity,
+                        request_key,
+                    )
+                publication_inputs_match = (
+                    is_authoritative
+                    and current_request_key == request_key
+                    and persisted_attempt_key == request_key
+                    and identities_match
+                )
+                attempt_status = AttemptStatus(attempt_row["status"])
+                current_standing_attempt_id = change_request_row["standing_attempt_id"]
+                if attempt_status is AttemptStatus.PUBLISHED:
+                    if (
+                        publication_inputs_match
+                        and current_standing_attempt_id is not None
+                        and str(current_standing_attempt_id) == attempt_id
+                    ):
+                        published_gate_state_value = change_request_row["standing_gate_state"]
+                        if published_gate_state_value is None:
+                            raise StateConflictError(
+                                "published Attempt has no persisted standing gate state"
+                            )
+                        published_gate_state = GateState(published_gate_state_value)
+                        if published_gate_state is not gate_state:
+                            raise StateConflictError(
+                                "published Attempt cannot be changed to a different gate state"
+                            )
+                        return PublishResult(
+                            disposition=PublishDisposition.PUBLISHED,
+                            attempt_id=attempt_id,
+                            gate_state=published_gate_state,
+                            detail="authoritative gate decision was already published",
+                        )
+                    if publication_inputs_match:
+                        raise StateConflictError(
+                            "published Attempt is no longer the standing authoritative Attempt"
+                        )
+
+                if attempt_status is not AttemptStatus.RUNNING:
+                    if publication_inputs_match:
+                        raise StateConflictError(
+                            "Attempt must be running before its gate decision can be published"
+                        )
+                    if attempt_status is AttemptStatus.AUDIT_ONLY:
+                        return PublishResult(
+                            disposition=PublishDisposition.SUPERSEDED,
+                            attempt_id=attempt_id,
+                            detail="Attempt was superseded before publication",
+                        )
+                if not publication_inputs_match:
                     await connection.execute(
                         "UPDATE review_attempts SET status = $1 WHERE attempt_id = $2::uuid",
                         AttemptStatus.AUDIT_ONLY.value,
@@ -772,11 +1030,6 @@ class PostgresAuthoritativeAttemptStore:
                         attempt_id=attempt_id,
                         detail="Attempt was superseded before publication",
                     )
-                change_request = GitHubChangeRequestLocator(
-                    installation_id=attempt_row["installation_id"],
-                    repository=attempt_row["repository"],
-                    pull_request_number=attempt_row["pull_request_number"],
-                )
                 await connection.execute(
                     """
                     UPDATE gate_decisions

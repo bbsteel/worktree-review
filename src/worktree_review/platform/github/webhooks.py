@@ -138,6 +138,8 @@ def _retry_request_from_event(event: GitHubWebhookEvent) -> RetryRequest:
         raise WebhookValidationError("GitHub webhook repository.full_name is required")
     if not isinstance(actor, str) or not actor:
         raise WebhookValidationError("GitHub webhook sender.login is required")
+    if not event.delivery_id:
+        raise WebhookValidationError("GitHub webhook delivery ID is required for retry actions")
     return RetryRequest(
         change_request=GitHubChangeRequestLocator(
             installation_id=_positive_integer(installation.get("id"), "installation.id"),
@@ -149,6 +151,7 @@ def _retry_request_from_event(event: GitHubWebhookEvent) -> RetryRequest:
         ),
         actor=actor,
         reason="GitHub Checks requested action",
+        delivery_id=event.delivery_id,
     )
 
 
@@ -181,5 +184,9 @@ async def handle_github_webhook(
         status="accepted",
         event_name=event.event_name,
         attempt_id=accepted.lease.attempt_id,
-        detail="authorized retry scheduled",
+        detail=(
+            "retry delivery was already processed"
+            if accepted.replayed
+            else "authorized retry scheduled"
+        ),
     )

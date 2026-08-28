@@ -43,6 +43,7 @@ class RetryRequest(BaseModel):
     actor: str = Field(min_length=1)
     reason: str = Field(min_length=1)
     prior_attempt_id: str | None = Field(default=None, min_length=1)
+    delivery_id: str | None = Field(default=None, min_length=1)
 
 
 class RetryAccepted(BaseModel):
@@ -53,6 +54,7 @@ class RetryAccepted(BaseModel):
     lease: AttemptLease
     actor: str
     reason: str
+    replayed: bool = False
 
 
 class RetryAuthorizer(Protocol):
@@ -95,6 +97,19 @@ class GitHubRetryCoordinator:
         self._enqueue_attempt = enqueue_attempt
 
     async def request_retry(self, retry_request: RetryRequest) -> RetryAccepted:
+        if retry_request.delivery_id is not None:
+            previous_delivery_attempt = await self._state.get_delivery_attempt(
+                installation_id=retry_request.change_request.installation_id,
+                delivery_id=retry_request.delivery_id,
+            )
+            if previous_delivery_attempt is not None:
+                return RetryAccepted(
+                    lease=previous_delivery_attempt,
+                    actor=retry_request.actor,
+                    reason=retry_request.reason,
+                    replayed=True,
+                )
+
         authorized = await self._authorizer.may_retry(
             change_request=retry_request.change_request,
             actor=retry_request.actor,
@@ -124,7 +139,15 @@ class GitHubRetryCoordinator:
             change_request=retry_request.change_request,
             request_key=resolution.request_key,
             expected_authoritative_attempt_id=prior_attempt_id,
+            delivery_id=retry_request.delivery_id,
         )
+        if lease.delivery_replayed:
+            return RetryAccepted(
+                lease=lease,
+                actor=retry_request.actor,
+                reason=retry_request.reason,
+                replayed=True,
+            )
         await self._state.append_audit_event(
             event_type="retry_authorized",
             change_request=retry_request.change_request,
@@ -133,6 +156,7 @@ class GitHubRetryCoordinator:
                 "actor": retry_request.actor,
                 "reason": retry_request.reason,
                 "prior_attempt_id": prior_attempt_id,
+                "delivery_id": retry_request.delivery_id,
                 "request_key": resolution.request_key.model_dump(mode="json"),
             },
         )
