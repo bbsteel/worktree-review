@@ -27,6 +27,15 @@
           "start_line": { "type": "integer", "minimum": 1 },
           "end_line": { "type": "integer", "minimum": 1 },
           "quoted_text": { "type": "string" },
+          "source": {
+            "type": "string",
+            "enum": ["review-worktree", "target-tree", "merge-diff", "metadata"]
+          },
+          "snapshot_identity": { "type": ["string", "null"] },
+          "change_kind": {
+            "type": ["string", "null"],
+            "enum": ["added", "modified", "deleted", null]
+          },
           "severity": {
             "type": "string",
             "enum": ["critical", "major", "minor", "suggestion"]

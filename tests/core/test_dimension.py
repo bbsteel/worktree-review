@@ -7,6 +7,7 @@ import pytest
 from worktree_review.core.context import ContextClass, ContextItem, GatheredContext
 from worktree_review.core.dimension import findings_from_payload, run_required_dimensions
 from worktree_review.core.errors import ProviderError
+from worktree_review.core.findings import EvidenceSource
 from worktree_review.core.policy import ComputePolicy, ReviewPolicy
 from worktree_review.core.provider import ScriptedProvider
 from worktree_review.core.report import CoverageRecord, StageStatus
@@ -140,4 +141,7 @@ async def test_required_dimensions_run_concurrently_and_keep_partial_results(
     assert by_id["correctness"].outcome.status is StageStatus.COMPLETED
     assert by_id["security"].outcome.status is StageStatus.FAILED
     assert len(by_id["correctness"].findings) == 1
+    correctness_span = by_id["correctness"].findings[0].evidence_spans[0]
+    assert correctness_span.source is EvidenceSource.REVIEW_WORKTREE
+    assert correctness_span.snapshot_identity == "a" * 40
     assert set(provider.dimension_ids_called) == {"correctness", "security"}

@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 from tests.gitutil import checkout_new_branch, commit_files, git, head_oid
 
+from worktree_review.core.findings import EvidenceBand
 from worktree_review.core.identity import ResolvedCommitPair
 from worktree_review.core.pipeline import ReviewRequest, run_review_pipeline
 from worktree_review.core.policy import load_compute_policy, load_review_policy
@@ -65,9 +66,7 @@ async def test_missing_objects_fail_at_construct_merge(
 
 
 @pytest.mark.asyncio
-async def test_clean_merge_runs_dimensions_then_stops_at_verify(
-    git_repository: Path, policy_dir: Path
-) -> None:
+async def test_clean_merge_reaches_gate_and_publish(git_repository: Path, policy_dir: Path) -> None:
     oid = head_oid(git_repository)
     provider = ScriptedProvider(payloads={"correctness": {"findings": []}})
     report = await run_review_pipeline(
@@ -83,7 +82,7 @@ async def test_clean_merge_runs_dimensions_then_stops_at_verify(
         ),
         provider=provider,
     )
-    assert report.gate_state is GateState.ERROR
+    assert report.gate_state is GateState.PASSED
     assert report.merge_tree_oid is not None
     assert report.review_identity is not None
     assert report.review_identity.candidate.merge_tree_oid == report.merge_tree_oid
@@ -96,13 +95,15 @@ async def test_clean_merge_runs_dimensions_then_stops_at_verify(
     assert by_stage[StageName.PREPARE_REVIEW_WORKTREE].status is StageStatus.COMPLETED
     assert by_stage[StageName.GATHER_CONTEXT].status is StageStatus.COMPLETED
     assert by_stage[StageName.RUN_DIMENSIONS].status is StageStatus.COMPLETED
-    assert by_stage[StageName.VERIFY_DEDUP].status is StageStatus.FAILED
-    assert "not implemented" in (by_stage[StageName.VERIFY_DEDUP].detail or "")
+    assert by_stage[StageName.VERIFY_DEDUP].status is StageStatus.COMPLETED
+    assert by_stage[StageName.CHECK_COMPLETENESS].status is StageStatus.COMPLETED
+    assert by_stage[StageName.EVALUATE_GATE].status is StageStatus.COMPLETED
+    assert by_stage[StageName.PUBLISH].status is StageStatus.COMPLETED
     assert provider.dimension_ids_called == ["correctness"]
 
 
 @pytest.mark.asyncio
-async def test_scripted_findings_are_visible_but_cannot_pass(
+async def test_grounded_scripted_findings_are_published_and_block(
     git_repository: Path, policy_dir: Path
 ) -> None:
     oid = head_oid(git_repository)
@@ -116,7 +117,7 @@ async def test_scripted_findings_are_visible_but_cannot_pass(
                         "end_line": 1,
                         "quoted_text": "hello",
                         "severity": "major",
-                        "evidence_band": "supported",
+                        "evidence_band": "verified",
                         "problem_statement": "placeholder",
                         "expected_impact": "none",
                         "repair_guidance": None,
@@ -138,11 +139,57 @@ async def test_scripted_findings_are_visible_but_cannot_pass(
         ),
         provider=provider,
     )
-    assert report.gate_state is GateState.ERROR
-    assert report.findings == ()
-    assert len(report.draft_findings) == 1
-    assert report.draft_findings[0].problem_statement == "placeholder"
+    assert report.gate_state is GateState.BLOCKED
+    assert len(report.findings) == 1
+    assert report.findings[0].problem_statement == "placeholder"
+    assert report.findings[0].evidence_band is EvidenceBand.SUPPORTED
+    assert report.draft_findings == ()
     assert report.usage
+
+
+@pytest.mark.asyncio
+async def test_ungrounded_scripted_findings_are_downgraded_before_gate(
+    git_repository: Path, policy_dir: Path
+) -> None:
+    oid = head_oid(git_repository)
+    provider = ScriptedProvider(
+        payloads={
+            "correctness": {
+                "findings": [
+                    {
+                        "path": "README",
+                        "start_line": 1,
+                        "end_line": 1,
+                        "quoted_text": "not present",
+                        "severity": "major",
+                        "evidence_band": "supported",
+                        "problem_statement": "unsubstantiated",
+                        "expected_impact": "unknown",
+                        "repair_guidance": None,
+                    }
+                ]
+            }
+        }
+    )
+
+    report = await run_review_pipeline(
+        _request(
+            policy_dir,
+            ResolvedCommitPair(
+                source_repository=str(git_repository),
+                target_ref="main",
+                target_head_oid=oid,
+                proposed_ref="HEAD",
+                proposed_head_oid=oid,
+            ),
+        ),
+        provider=provider,
+    )
+
+    assert report.gate_state is GateState.PASSED
+    assert len(report.findings) == 1
+    assert report.findings[0].evidence_band is EvidenceBand.INSUFFICIENT
+    assert report.draft_findings == ()
 
 
 @pytest.mark.asyncio
@@ -212,6 +259,10 @@ async def test_in_flight_budget_stops_further_dimensions(
     by_id = {outcome.dimension_id: outcome for outcome in report.dimension_outcomes}
     assert by_id["correctness"].status is StageStatus.COMPLETED
     assert by_id["security"].status is StageStatus.NOT_STARTED
+    by_stage = {outcome.stage: outcome for outcome in report.execution.outcomes}
+    assert by_stage[StageName.RUN_DIMENSIONS].status is StageStatus.FAILED
+    assert by_stage[StageName.VERIFY_DEDUP].status is StageStatus.COMPLETED
+    assert report.gate_state is GateState.ERROR
     assert provider.dimension_ids_called == ["correctness"]
     assert any(record.kind.value == "measured" for record in report.usage)
 

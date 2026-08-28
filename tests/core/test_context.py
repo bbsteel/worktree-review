@@ -13,6 +13,7 @@ from worktree_review.core.context import (
     path_matches_glob,
     unreviewable_reason,
 )
+from worktree_review.core.findings import EvidenceSource
 from worktree_review.core.identity import ResolvedCommitPair
 from worktree_review.core.policy import ReviewPolicy
 from worktree_review.core.review_worktree import (
@@ -99,6 +100,10 @@ async def test_changed_text_file_is_reviewed(git_repository: Path, tmp_path: Pat
     gathered = await _gather(git_repository, _policy(), target_oid, proposed_oid, tmp_path)
     by_path = {item.path: item for item in gathered.items}
     assert by_path["src/app.py"].context_class is ContextClass.MANDATORY
+    assert by_path["src/app.py"].source is EvidenceSource.REVIEW_WORKTREE
+    assert by_path["src/app.py"].snapshot_identity is not None
+    assert by_path[MERGE_CANDIDATE_DIFF_PATH].source is EvidenceSource.MERGE_DIFF
+    assert by_path[MERGE_CANDIDATE_DIFF_PATH].snapshot_identity is not None
     assert by_path["src/app.py"].body == "print(1)\n"
     assert "src/app.py" in gathered.coverage.reviewed
     assert gathered.coverage.required_coverage_complete is True
@@ -263,6 +268,8 @@ async def test_deleted_file_includes_target_body(git_repository: Path, tmp_path:
     by_path = {item.path: item for item in gathered.items}
     assert by_path["README"].change_kind is not None
     assert by_path["README"].change_kind.value == "deleted"
+    assert by_path["README"].source is EvidenceSource.TARGET_TREE
+    assert by_path["README"].snapshot_identity is not None
     assert by_path["README"].body == "hello\n"
     assert gathered.coverage.required_coverage_complete is True
 

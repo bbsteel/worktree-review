@@ -134,8 +134,15 @@ untrusted context。
 **D6 — Provider 约束的结构化 finding，加 grounded evidence 校验。**
 
 每个 dimension 要求 provider-native JSON Schema 输出。verify 阶段检查 evidence span
-的路径、行范围和 quote 确实存在；未 grounded 的 claim 不得标为 `supported` 或
-`verified`。按 path、normalized span、category 和 problem hash 确定性去重。
+的路径、行范围和 quote 确实存在于声明的强类型 source 及匹配的不可变 snapshot；第一阶段
+source 包括 `review-worktree`、`target-tree`、`merge-diff` 和 `metadata`，已知时同时携带
+`change_kind`。`context_class` 只是展示标签，不是 provenance。因此 target-tree body 中的
+quote 不能为声明来自 Review Worktree 的 span 建立证据，即使文本相同。未 grounded 的 claim
+不得标为 `supported` 或 `verified`。grounding 最多派生 `supported`；`verified` 需要 provider
+输出之外的独立可信验证 provenance，所以第一阶段会封顶 provider 自报的 `verified`。
+所有 finding 先完成验证再分组；重复组采用最强证据和最高严重度的保守合并，输入/provider
+顺序不能丢弃更强 finding。按 path、normalized span、category 和 problem hash 确定性重算
+fingerprint；没有合法 span 时使用 sentinel path，绝不信任 provider fingerprint。
 
 **D7 — 三点预算控制并失败关闭。**
 

@@ -174,7 +174,7 @@ async def run_review_pipeline(
     *,
     provider: ProviderClient | None = None,
 ) -> ReviewReport:
-    """Run the shared pipeline through required dimensions. Verification is not implemented."""
+    """Run the shared pipeline through verification, gate evaluation, and publication."""
 
     request_key = ReviewRequestKey(
         source_repository=request.resolved.source_repository,
@@ -352,7 +352,10 @@ async def run_review_pipeline(
             for record in (estimated, *(run.usage for run in dimension_runs))
             if record is not None
         )
-        if any(outcome.status is not StageStatus.COMPLETED for outcome in dimension_outcomes):
+        dimensions_complete = all(
+            outcome.status is StageStatus.COMPLETED for outcome in dimension_outcomes
+        )
+        if not dimensions_complete:
             execution = execution.with_outcome(
                 StageOutcome(
                     stage=StageName.RUN_DIMENSIONS,
@@ -360,30 +363,17 @@ async def run_review_pipeline(
                     detail="one or more required dimensions did not complete",
                 )
             )
-            execution = _fill_unrecorded_stages(
-                execution, reason="short-circuited after run-dimensions failure"
+        else:
+            execution = execution.with_outcome(
+                StageOutcome(stage=StageName.RUN_DIMENSIONS, status=StageStatus.COMPLETED)
             )
-            return _complete_report(
-                request,
-                execution,
-                attempt_id=attempt_id,
-                request_key=request_key,
-                merge_tree_oid=candidate.merge_tree_oid,
-                review_identity=review_identity,
-                summary="Review did not complete: a required dimension failed.",
-                error_detail="one or more required dimensions did not complete",
-                coverage=gathered.coverage,
-                draft_findings=draft_findings,
-                dimension_outcomes=dimension_outcomes,
-                usage=usage_records,
-            )
-
-        execution = execution.with_outcome(
-            StageOutcome(stage=StageName.RUN_DIMENSIONS, status=StageStatus.COMPLETED)
-        )
         try:
-            verified = verify_and_deduplicate(draft_findings)
-        except UnimplementedStageError as exc:
+            validated_findings = verify_and_deduplicate(
+                draft_findings,
+                review_worktree=review_worktree,
+                gathered_context=gathered,
+            )
+        except WorktreeReviewError as exc:
             execution = execution.with_outcome(
                 StageOutcome(
                     stage=StageName.VERIFY_DEDUP,
@@ -401,15 +391,51 @@ async def run_review_pipeline(
                 request_key=request_key,
                 merge_tree_oid=candidate.merge_tree_oid,
                 review_identity=review_identity,
-                summary="Review did not complete: finding verification is not implemented.",
+                summary="Review did not complete: finding verification failed.",
                 error_detail=str(exc),
                 coverage=gathered.coverage,
                 draft_findings=draft_findings,
                 dimension_outcomes=dimension_outcomes,
                 usage=usage_records,
             )
-        del verified
-        raise UnimplementedStageError("pipeline stages after verification are not implemented")
+        execution = execution.with_outcome(
+            StageOutcome(
+                stage=StageName.VERIFY_DEDUP,
+                status=StageStatus.COMPLETED,
+                detail=f"validated and deduplicated {len(validated_findings)} findings",
+            )
+        )
+        if not dimensions_complete:
+            return _complete_report(
+                request,
+                execution,
+                attempt_id=attempt_id,
+                request_key=request_key,
+                merge_tree_oid=candidate.merge_tree_oid,
+                review_identity=review_identity,
+                summary="Review did not complete: a required dimension failed.",
+                error_detail="one or more required dimensions did not complete",
+                coverage=gathered.coverage,
+                findings=validated_findings,
+                dimension_outcomes=dimension_outcomes,
+                usage=usage_records,
+                allow_passing_gate=True,
+            )
+        return _complete_report(
+            request,
+            execution,
+            attempt_id=attempt_id,
+            request_key=request_key,
+            merge_tree_oid=candidate.merge_tree_oid,
+            review_identity=review_identity,
+            summary="Review completed.",
+            error_detail=None,
+            coverage=gathered.coverage,
+            findings=validated_findings,
+            dimension_outcomes=dimension_outcomes,
+            usage=usage_records,
+            allow_passing_gate=True,
+        )
     finally:
         if review_worktree is not None:
             await cleanup_review_worktree(review_worktree)

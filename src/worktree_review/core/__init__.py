@@ -13,7 +13,14 @@ from worktree_review.core.errors import (
     UnimplementedStageError,
     WorktreeReviewError,
 )
-from worktree_review.core.findings import EvidenceBand, Finding, Severity
+from worktree_review.core.findings import (
+    ChangeKind,
+    EvidenceBand,
+    EvidenceSource,
+    EvidenceSpan,
+    Finding,
+    Severity,
+)
 from worktree_review.core.gate import (
     GateEvaluationInput,
     evaluate_gate,
@@ -40,10 +47,13 @@ from worktree_review.core.report import (
 
 __all__ = [
     "BudgetExhaustedError",
+    "ChangeKind",
     "ComputePolicy",
     "ContextGatherError",
     "CoverageRecord",
     "EvidenceBand",
+    "EvidenceSource",
+    "EvidenceSpan",
     "ExecutionRecord",
     "Finding",
     "GateEvaluationInput",

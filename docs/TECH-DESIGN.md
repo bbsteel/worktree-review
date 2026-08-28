@@ -217,12 +217,23 @@ evidence checks.**
 Each review dimension calls the model with a JSON-Schema-constrained
 response (provider-native structured outputs / tool use). The verify stage
 (§21.1 step 6) is partly deterministic: every finding's supporting evidence
-must reference spans (path + line range + quoted text) that actually exist
-in the Review Worktree or gathered context; ungrounded claims cannot carry
-`supported` or `verified` bands (§8.5, §13). Deduplication is deterministic
-fingerprinting over (path, normalized span, category, problem hash). This
-keeps "self-reported model certainty is not evidence" (§13) enforceable in
-code rather than in prompts.
+must reference spans (path + line range + quoted text) that actually exist in
+the declared typed source and matching immutable snapshot. The first-stage
+sources are `review-worktree`, `target-tree`, `merge-diff`, and `metadata`;
+`change_kind` is carried when it is known. `context_class` is a presentation
+label, not provenance. A target-tree body therefore cannot ground a span
+declared against the Review Worktree, even when the quote is identical.
+Ungrounded claims cannot carry `supported` or `verified` bands (§8.5, §13).
+Grounding derives at most `supported`; `verified` requires independent trusted
+verification provenance outside the provider output, so provider-declared
+`verified` is capped in the first-stage pipeline. All findings are verified
+before grouping, and duplicate groups merge conservatively (strongest
+evidence and severity) so input/provider order cannot discard a stronger
+finding. Deduplication is deterministic fingerprinting over (path, normalized
+span, category, problem hash); fingerprints are always recomputed locally,
+using a sentinel path when no valid span exists. This keeps "self-reported
+model certainty is not evidence" (§13) enforceable in code rather than in
+prompts.
 
 **D7 — Budget enforcement in three points, fail-closed.**
 Compute Policy carries a max per-review budget (§9.3, §20):

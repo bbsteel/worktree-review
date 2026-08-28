@@ -564,6 +564,23 @@ Evidence may include:
 - A conflicting test, type, configuration, or established repository pattern.
 - Independent confirmation when policy requires it.
 
+Every evidence span carries a typed evidence source (for example
+`review-worktree`, `target-tree`, `merge-diff`, or `metadata`), an immutable
+snapshot identity, and, when applicable, the path's change kind. Verification
+may ground a span only against the declared source and matching snapshot;
+`context_class` describes the context presentation and is not evidence
+provenance. A quote found in another source, such as a deleted target-tree
+file, does not ground a span declared against the Review Worktree.
+
+The first-stage verifier derives the enforcement band locally. Grounded spans
+provide at most the basis for `supported`; a provider's self-reported band can
+never establish `verified`. `verified` requires independent trusted
+verification provenance recorded outside the provider finding, so the
+first-stage pipeline caps provider-produced findings at `supported` unless a
+later verifier supplies that provenance. Fingerprints are also recomputed
+locally, including a sentinel path for findings with no valid span; provider
+fingerprints are never used for deduplication.
+
 Self-reported model certainty is not evidence. Review Policy defines the minimum
 evidence band required for blocking, and that definition remains stable across
 models.

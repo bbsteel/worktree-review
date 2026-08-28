@@ -15,6 +15,7 @@ from pathlib import Path
 from pydantic import BaseModel, ConfigDict
 
 from worktree_review.core.errors import ContextGatherError
+from worktree_review.core.findings import ChangeKind, EvidenceSource
 from worktree_review.core.git import (
     GitCliError,
     commit_tree_oid,
@@ -38,12 +39,6 @@ class ContextClass(StrEnum):
     UNREVIEWABLE = "unreviewable"
 
 
-class ChangeKind(StrEnum):
-    ADDED = "added"
-    MODIFIED = "modified"
-    DELETED = "deleted"
-
-
 class ContextItem(BaseModel):
     """One gathered unit. Body is omitted for excluded, unreviewable, and missing paths."""
 
@@ -51,13 +46,21 @@ class ContextItem(BaseModel):
 
     path: str
     context_class: ContextClass
+    source: EvidenceSource = EvidenceSource.REVIEW_WORKTREE
+    snapshot_identity: str | None = None
     change_kind: ChangeKind | None = None
     body: str | None = None
     untrusted: bool = True
     omission_reason: str | None = None
 
     def as_delimited(self) -> str:
-        header = f"----- BEGIN CONTEXT path={self.path} class={self.context_class.value} -----"
+        snapshot_identity = self.snapshot_identity or "unspecified"
+        change_kind = self.change_kind.value if self.change_kind else "unspecified"
+        header = (
+            f"----- BEGIN CONTEXT path={self.path} class={self.context_class.value} "
+            f"source={self.source.value} snapshot={snapshot_identity} "
+            f"change_kind={change_kind} -----"
+        )
         if self.body is None:
             reason = self.omission_reason or "omitted"
             inner = f"(omitted: {reason})"
@@ -159,6 +162,8 @@ def _item_from_bytes(
     path: str,
     data: bytes | None,
     context_class: ContextClass,
+    source: EvidenceSource,
+    snapshot_identity: str,
     change_kind: ChangeKind | None,
     max_file_bytes: int,
     missing_reason: str,
@@ -169,6 +174,8 @@ def _item_from_bytes(
             context_class=ContextClass.UNREVIEWABLE
             if context_class is ContextClass.MANDATORY
             else context_class,
+            source=source,
+            snapshot_identity=snapshot_identity,
             change_kind=change_kind,
             omission_reason=missing_reason,
         )
@@ -177,12 +184,16 @@ def _item_from_bytes(
         return ContextItem(
             path=path,
             context_class=ContextClass.UNREVIEWABLE,
+            source=source,
+            snapshot_identity=snapshot_identity,
             change_kind=change_kind,
             omission_reason=reason,
         )
     return ContextItem(
         path=path,
         context_class=context_class,
+        source=source,
+        snapshot_identity=snapshot_identity,
         change_kind=change_kind,
         body=data.decode("utf-8"),
         untrusted=True,
@@ -201,6 +212,8 @@ async def _unified_diff(
         return ContextItem(
             path=MERGE_CANDIDATE_DIFF_PATH,
             context_class=ContextClass.MANDATORY,
+            source=EvidenceSource.MERGE_DIFF,
+            snapshot_identity=f"{from_tree}..{to_tree}",
             body="",
             untrusted=True,
         )
@@ -224,11 +237,15 @@ async def _unified_diff(
         return ContextItem(
             path=MERGE_CANDIDATE_DIFF_PATH,
             context_class=ContextClass.UNREVIEWABLE,
+            source=EvidenceSource.MERGE_DIFF,
+            snapshot_identity=f"{from_tree}..{to_tree}",
             omission_reason=reason,
         )
     return ContextItem(
         path=MERGE_CANDIDATE_DIFF_PATH,
         context_class=ContextClass.MANDATORY,
+        source=EvidenceSource.MERGE_DIFF,
+        snapshot_identity=f"{from_tree}..{to_tree}",
         body=stdout,
         untrusted=True,
     )
@@ -297,6 +314,8 @@ async def gather_context(
                 ContextItem(
                     path=path,
                     context_class=ContextClass.EXCLUDED,
+                    source=EvidenceSource.REVIEW_WORKTREE,
+                    snapshot_identity=candidate.merge_tree_oid,
                     change_kind=kind,
                     omission_reason="excluded by Review Policy",
                 )
@@ -313,6 +332,8 @@ async def gather_context(
                 path=path,
                 data=data,
                 context_class=ContextClass.MANDATORY,
+                source=EvidenceSource.TARGET_TREE,
+                snapshot_identity=target_tree,
                 change_kind=kind,
                 max_file_bytes=context_policy.max_file_bytes,
                 missing_reason="deleted path could not be read from the target head",
@@ -323,6 +344,8 @@ async def gather_context(
                 path=path,
                 data=data,
                 context_class=ContextClass.MANDATORY,
+                source=EvidenceSource.REVIEW_WORKTREE,
+                snapshot_identity=candidate.merge_tree_oid,
                 change_kind=kind,
                 max_file_bytes=context_policy.max_file_bytes,
                 missing_reason="changed path is missing from the Review Worktree",
@@ -358,6 +381,8 @@ async def gather_context(
                     path=path,
                     data=data,
                     context_class=ContextClass.MANDATORY,
+                    source=EvidenceSource.REVIEW_WORKTREE,
+                    snapshot_identity=candidate.merge_tree_oid,
                     change_kind=None,
                     max_file_bytes=context_policy.max_file_bytes,
                     missing_reason="mandatory path could not be read",
@@ -381,6 +406,8 @@ async def gather_context(
                 path=path,
                 data=data,
                 context_class=ContextClass.OPTIONAL,
+                source=EvidenceSource.REVIEW_WORKTREE,
+                snapshot_identity=candidate.merge_tree_oid,
                 change_kind=None,
                 max_file_bytes=context_policy.max_file_bytes,
                 missing_reason="optional path could not be read",
@@ -390,6 +417,9 @@ async def gather_context(
                     ContextItem(
                         path=path,
                         context_class=ContextClass.OPTIONAL,
+                        source=item.source,
+                        snapshot_identity=item.snapshot_identity,
+                        change_kind=item.change_kind,
                         omission_reason=item.omission_reason,
                     )
                 )

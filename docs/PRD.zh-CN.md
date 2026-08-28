@@ -297,6 +297,18 @@ GitHub identity 变化或显式 retry 时，新 Attempt 先成为权威并撤销
 仓库惯例或独立确认。模型自报确定度不是证据。数值置信度只能作为带模型来源的诊断，
 第一阶段不能作为 blocking threshold。
 
+每个 evidence span 都必须带有强类型 evidence source（例如
+`review-worktree`、`target-tree`、`merge-diff` 或 `metadata`）、不可变 snapshot identity，
+以及适用时的路径 change kind。验证只能在声明的 source 和匹配的 snapshot 上建立
+grounding；`context_class` 只是上下文展示分类，不是证据 provenance。比如，已删除的
+target-tree 文件中虽然有相同 quote，也不能为声明来自 Review Worktree 的 span 建立证据。
+
+第一阶段由本地 verifier 派生 enforcement band。grounded span 最多只能成为 `supported`
+的基础；provider 自报的 band 不能建立 `verified`。`verified` 需要记录在 provider finding
+之外的独立可信验证 provenance，因此第一阶段 pipeline 对 provider 产出的 finding 上限为
+`supported`，除非后续 verifier 提供该 provenance。fingerprint 也始终由本地重算；没有合法
+span 时使用 sentinel path，不使用 provider fingerprint 去重。
+
 ## 14. Gate 状态
 
 | 状态 | 含义 |
