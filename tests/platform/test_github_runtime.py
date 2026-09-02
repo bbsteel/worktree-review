@@ -1,8 +1,16 @@
 from __future__ import annotations
 
+import json
+
 import httpx
 import pytest
 
+from worktree_review.platform.github.checks import (
+    CheckRunConclusion,
+    CheckRunOutput,
+    CheckRunPayload,
+    CheckRunStatus,
+)
 from worktree_review.platform.github.runtime import (
     GitHubPullRequestResolver,
     GitHubRestClient,
@@ -79,3 +87,48 @@ async def test_github_rest_client_sends_bearer_token_and_maps_repository_role() 
     assert role == "write"
     assert requests[0].url.path == "/repos/octo/example/collaborators/maintainer/permission"
     assert requests[0].headers["authorization"] == "Bearer installation-token"
+
+
+@pytest.mark.asyncio
+async def test_github_rest_client_publishes_and_updates_check_runs() -> None:
+    requests: list[httpx.Request] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if request.method == "POST":
+            return httpx.Response(201, json={"id": 321})
+        return httpx.Response(200, json={"id": 321})
+
+    payload = CheckRunPayload(
+        head_sha="c" * 40,
+        status=CheckRunStatus.COMPLETED,
+        conclusion=CheckRunConclusion.SUCCESS,
+        external_id="worktree-review:attempt-123",
+        output=CheckRunOutput(
+            title="Worktree Review: Passed",
+            summary="passed",
+            text="details",
+        ),
+    )
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(respond),
+        base_url="https://api.github.test",
+    ) as http_client:
+        github_api = GitHubRestClient(http_client=http_client, token="installation-token")
+        check_run_id = await github_api.create_check_run(
+            repository="octo/example",
+            payload=payload,
+        )
+        await github_api.update_check_run(
+            repository="octo/example",
+            check_run_id=check_run_id,
+            payload=payload,
+        )
+
+    assert check_run_id == 321
+    assert [request.method for request in requests] == ["POST", "PATCH"]
+    assert requests[0].url.path == "/repos/octo/example/check-runs"
+    assert requests[1].url.path == "/repos/octo/example/check-runs/321"
+    assert requests[0].headers["authorization"] == "Bearer installation-token"
+    request_payload = json.loads(requests[0].content)
+    assert request_payload["external_id"] == "worktree-review:attempt-123"

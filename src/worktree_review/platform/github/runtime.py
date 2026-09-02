@@ -1,4 +1,4 @@
-"""Concrete GitHub retry dependencies for the server lifecycle (D8, D14).
+"""Concrete GitHub server dependencies for retry and Checks publication (D8, D13, D14).
 
 The runtime adapter owns transport and deployment configuration. It resolves
 only trusted GitHub API data and an externally stored Review Policy version;
@@ -22,6 +22,7 @@ from worktree_review.platform.github.authz import (
     GitHubRepositoryRoleLookup,
     GitHubRoleRetryAuthorizer,
 )
+from worktree_review.platform.github.checks import CheckRunPayload
 from worktree_review.platform.github.retry import (
     GitHubRetryCoordinator,
     RetryResolution,
@@ -52,7 +53,7 @@ class GitHubApiTransport(Protocol):
 
 
 class GitHubRestClient:
-    """Minimal authenticated GitHub REST client used by retry dependencies."""
+    """Minimal authenticated GitHub REST client for retry and Checks adapters."""
 
     def __init__(
         self,
@@ -63,24 +64,57 @@ class GitHubRestClient:
         self._http_client = http_client
         self._token = token
 
+    def _headers(self) -> dict[str, str]:
+        return {
+            "Accept": "application/vnd.github+json",
+            "Authorization": f"Bearer {self._token}",
+            "X-GitHub-Api-Version": "2022-11-28",
+        }
+
     async def get_json(self, path: str) -> dict[str, object]:
         response = await self._http_client.get(
             path,
-            headers={
-                "Accept": "application/vnd.github+json",
-                "Authorization": f"Bearer {self._token}",
-                "X-GitHub-Api-Version": "2022-11-28",
-            },
+            headers=self._headers(),
         )
-        if response.is_error:
-            raise GitHubApiError(f"GitHub API request failed with HTTP {response.status_code}")
-        try:
-            decoded_payload = response.json()
-        except ValueError as exc:
-            raise GitHubApiError("GitHub API returned invalid JSON") from exc
-        if not isinstance(decoded_payload, dict):
-            raise GitHubApiError("GitHub API response must be a JSON object")
-        return decoded_payload
+        return _decode_github_json_response(response)
+
+    async def _send_json(
+        self,
+        method: str,
+        path: str,
+        payload: dict[str, object],
+    ) -> dict[str, object]:
+        response = await self._http_client.request(
+            method,
+            path,
+            headers=self._headers(),
+            json=payload,
+        )
+        return _decode_github_json_response(response)
+
+    async def create_check_run(self, *, repository: str, payload: CheckRunPayload) -> int:
+        response_payload = await self._send_json(
+            "POST",
+            f"/repos/{quote(repository, safe='/')}/check-runs",
+            payload.as_github_payload(),
+        )
+        check_run_id = response_payload.get("id")
+        if isinstance(check_run_id, bool) or not isinstance(check_run_id, int) or check_run_id <= 0:
+            raise GitHubApiError("GitHub check-run response is missing a positive numeric id")
+        return check_run_id
+
+    async def update_check_run(
+        self,
+        *,
+        repository: str,
+        check_run_id: int,
+        payload: CheckRunPayload,
+    ) -> None:
+        await self._send_json(
+            "PATCH",
+            f"/repos/{quote(repository, safe='/')}/check-runs/{check_run_id}",
+            payload.as_github_payload(),
+        )
 
     async def repository_role(
         self,
@@ -95,6 +129,18 @@ class GitHubRestClient:
         )
         permission = payload.get("permission")
         return permission if isinstance(permission, str) else None
+
+
+def _decode_github_json_response(response: httpx.Response) -> dict[str, object]:
+    if response.is_error:
+        raise GitHubApiError(f"GitHub API request failed with HTTP {response.status_code}")
+    try:
+        decoded_payload = response.json()
+    except ValueError as exc:
+        raise GitHubApiError("GitHub API returned invalid JSON") from exc
+    if not isinstance(decoded_payload, dict):
+        raise GitHubApiError("GitHub API response must be a JSON object")
+    return decoded_payload
 
 
 def _nested_object(payload: dict[str, object], field_name: str) -> dict[str, object]:

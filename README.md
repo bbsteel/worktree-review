@@ -16,8 +16,9 @@ policy validation, exact merge construction, verified read-only Review Worktree
 materialization, context gathering, provider-backed review dimensions, budget
 metering, finding verification, deterministic gate evaluation, CLI output, and
 fail-closed stage records. The server also has the authoritative Attempt/CAS
-state transitions and authorized retry boundary; GitHub Checks publication and
-the embedded pgqueuer review worker remain to be implemented.
+state transitions, authorized retry boundary, and an injected GitHub Checks
+payload/publication adapter; the embedded pgqueuer review worker and end-to-end
+publication wiring remain to be implemented.
 
 ## Requirements
 
@@ -84,8 +85,9 @@ docker compose up --build
 
 The image runs `worktree-review-server`. `GET /healthz` is the liveness probe.
 The server validates GitHub webhook signatures and maps authorized retry
-actions into new Attempts; GitHub Checks publication and the review worker are
-not implemented in this skeleton. To enable the retry runtime, configure
+actions into new Attempts. GitHub Checks payloads and authenticated create/update
+transport are implemented behind an adapter, but the review worker has not yet
+connected the shared pipeline to that adapter. To enable the retry runtime, configure
 `WORKTREE_REVIEW_GITHUB_WEBHOOK_SECRET`,
 `WORKTREE_REVIEW_DATABASE_URL`, `WORKTREE_REVIEW_GITHUB_TOKEN`, and
 `WORKTREE_REVIEW_REVIEW_POLICY_PATH`; without the webhook secret retry is
