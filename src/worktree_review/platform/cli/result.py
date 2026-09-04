@@ -15,10 +15,27 @@ class PolicyVersionPayload(BaseModel):
     sha256: str
 
 
+class ComputePolicyDisclosurePayload(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    provider: str
+    model: str
+    data_destination: str
+    known_retention: str
+
+
 class StageOutcomePayload(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     stage: str
+    status: str
+    detail: str | None = None
+
+
+class DimensionOutcomePayload(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    dimension_id: str
     status: str
     detail: str | None = None
 
@@ -78,11 +95,14 @@ class CliResultDocument(BaseModel):
     target_ref: str
     target_head_oid: str
     proposed_ref: str
+    proposed_source: str
     proposed_head_oid: str
     merge_tree_oid: str | None
     review_policy_version: PolicyVersionPayload
     compute_policy_version: PolicyVersionPayload
+    compute_policy_disclosure: ComputePolicyDisclosurePayload
     stage_outcomes: tuple[StageOutcomePayload, ...]
+    dimension_outcomes: tuple[DimensionOutcomePayload, ...]
     findings: tuple[dict[str, Any], ...]
     draft_findings: tuple[dict[str, Any], ...]
     coverage: CoveragePayload
@@ -122,6 +142,7 @@ def cli_result_document(report: ReviewReport) -> CliResultDocument:
             "target_ref": report.resolved.target_ref,
             "target_head_oid": report.resolved.target_head_oid,
             "proposed_ref": report.resolved.proposed_ref,
+            "proposed_source": report.resolved.proposed_source.value,
             "proposed_head_oid": report.resolved.proposed_head_oid,
             "merge_tree_oid": report.merge_tree_oid,
             "review_policy_version": {
@@ -132,6 +153,12 @@ def cli_result_document(report: ReviewReport) -> CliResultDocument:
                 "semver": report.compute_policy_version.semver,
                 "sha256": report.compute_policy_version.sha256,
             },
+            "compute_policy_disclosure": {
+                "provider": report.compute_policy_disclosure.provider,
+                "model": report.compute_policy_disclosure.model,
+                "data_destination": report.compute_policy_disclosure.data_destination,
+                "known_retention": report.compute_policy_disclosure.known_retention,
+            },
             "stage_outcomes": [
                 {
                     "stage": outcome.stage.value,
@@ -139,6 +166,14 @@ def cli_result_document(report: ReviewReport) -> CliResultDocument:
                     "detail": outcome.detail,
                 }
                 for outcome in report.execution.outcomes
+            ],
+            "dimension_outcomes": [
+                {
+                    "dimension_id": outcome.dimension_id,
+                    "status": outcome.status.value,
+                    "detail": outcome.detail,
+                }
+                for outcome in report.dimension_outcomes
             ],
             "findings": [finding.model_dump(mode="json") for finding in report.findings],
             "draft_findings": [

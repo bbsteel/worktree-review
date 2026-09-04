@@ -1,6 +1,15 @@
 """Merge-candidate and review identity (PRD §6.4, §8.2; TECH-DESIGN D2, D5)."""
 
+from enum import StrEnum
+
 from pydantic import BaseModel, ConfigDict, Field
+
+
+class ProposedSource(StrEnum):
+    """How the proposed commit was selected; this is provenance, not identity."""
+
+    COMMITTED_REF = "committed-ref"
+    CURRENT_WORKTREE_SNAPSHOT = "current-worktree-snapshot"
 
 
 class PolicyVersionIdentity(BaseModel):
@@ -34,6 +43,7 @@ class ResolvedCommitPair(BaseModel):
     target_head_oid: str
     proposed_ref: str
     proposed_head_oid: str
+    proposed_source: ProposedSource = ProposedSource.COMMITTED_REF
 
 
 class MergeCandidateIdentity(BaseModel):

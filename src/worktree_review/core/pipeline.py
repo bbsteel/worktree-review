@@ -33,6 +33,7 @@ from worktree_review.core.provider import (
 )
 from worktree_review.core.report import (
     PIPELINE_STAGE_ORDER,
+    ComputePolicyDisclosure,
     CoverageRecord,
     DimensionOutcome,
     ExecutionRecord,
@@ -158,6 +159,12 @@ def _complete_report(
         review_identity=review_identity,
         review_policy_version=request.review_policy_version,
         compute_policy_version=request.compute_policy_version,
+        compute_policy_disclosure=ComputePolicyDisclosure(
+            provider=request.compute_policy.provider,
+            model=request.compute_policy.model,
+            data_destination=request.compute_policy.data_destination,
+            known_retention=request.compute_policy.known_retention,
+        ),
         execution=execution,
         findings=findings,
         draft_findings=draft_findings,

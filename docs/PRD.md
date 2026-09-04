@@ -20,7 +20,7 @@ gate a platform change request:
 | --- | --- |
 | Worktree Review | A review method that evaluates a proposed change in a complete, isolated materialization of the resulting repository tree. The diff locates the change; the full tree supplies the context needed to understand and verify it. The method does not require the materialization to be created by `git worktree add`. |
 | Review Worktree | The immutable filesystem view materialized for one successfully constructed merge candidate. It is a product-level review environment, not necessarily a Git linked worktree. |
-| Review Request Key | The pre-construction key consisting of source repository, target ref, resolved target-head commit, proposed-head commit, and Review Policy version. It identifies what Worktree Review was asked to construct and review even when merge construction fails. |
+| Review Request Key | The pre-construction key consisting of source repository, target ref, resolved target-head commit, proposed-head commit or immutable worktree snapshot commit, and Review Policy version. It identifies what Worktree Review was asked to construct and review even when merge construction fails. |
 | Merge Candidate Identity | The source repository, target ref, resolved target-head commit, proposed-head commit, and resulting merge-tree identifier. It exists only after merge construction succeeds. |
 | Review Identity | The Merge Candidate Identity plus the applied Review Policy version. It defines exactly what a completed review conclusion applies to. |
 | Review Context | The code, diff, tests, documentation, change-request metadata, external results, and other evidence gathered for one Attempt. Context informs a review but is not its identity. |
@@ -96,7 +96,7 @@ surfaces:
 | Surface | First-stage role | Result authority |
 | --- | --- | --- |
 | GitHub integration | Automatically reviews eligible pull requests, publishes inline findings and a durable check, and supports auditable finding bypass. | A standing gate decision bound to the current review identity. |
-| Local CLI | Reviews an explicitly selected local merge candidate on demand and emits human-readable and machine-readable results. | A one-shot result and process exit status for the reviewed identity; it does not create or change a remote standing gate. |
+| Local CLI | Reviews a selected local merge candidate on demand, including the current worktree snapshot, and emits human-readable and machine-readable results. | A one-shot result and process exit status for the reviewed identity; it does not create or change a remote standing gate. |
 | Other repository platforms | Later integrations map native change requests, checks, comments, and authorization onto the same Worktree Review semantics. | Must preserve the same identity, evidence, coverage, and fail-closed rules. |
 
 GitHub-specific triggers, presentation, and authorization may differ from those
@@ -134,9 +134,11 @@ The first product stage supports two entry points:
 
 - Ready-for-review pull requests whose head branch belongs to the same public
   GitHub repository as the target branch.
-- On-demand CLI review of a committed local Git head against an explicitly
-  selected target ref. The local worktree must be clean so the candidate is
-  reproducible from Git objects.
+- On-demand CLI review of the current local worktree snapshot against a target
+  ref. The target defaults to `HEAD`, may be selected explicitly, or may be
+  expressed as the last N commits from `HEAD`; an explicit committed proposed
+  ref remains available. The CLI captures tracked and non-ignored untracked
+  files into an immutable Git snapshot before construction.
 
 The GitHub entry point, including authoritative invalidation, retry, publication,
 and merge blocking, has delivery priority over convenience features on either
@@ -152,8 +154,10 @@ Worktree Review must:
 
 1. Automatically review an eligible GitHub pull request when it is opened,
    reopened, marked ready for review, or updated.
-2. Let a user start the same review locally through the CLI by selecting a target
-   ref and committed proposed head.
+2. Let a user start the same review locally through the CLI. By default it
+   reviews current worktree changes against `HEAD`; the user may select a target
+   ref, review the last N commits plus current changes, or select a committed
+   proposed ref explicitly.
 3. Review the merge candidate produced by merging the proposed head into the
    resolved target head, rather than reviewing the proposed head alone.
 4. Bind every attempt and result to its review request key. After merge
@@ -207,7 +211,6 @@ requirements for the first product stage:
 
 - Reviews of pull requests from external forks.
 - Hosted reviews of private repositories.
-- Local review of uncommitted or dirty-worktree snapshots.
 - Integrations with repository platforms other than GitHub.
 - Incremental reuse of review conclusions across merge candidates.
 - Finding identity and lifecycle across merge candidates.
@@ -242,11 +245,12 @@ apply, commit, or push that fix in the first stage.
 
 ### 8.1 Exact merge candidate or no review
 
-The review subject is the result of merging a committed proposed head into a
-resolved target head. The target head is not the historical merge-base. GitHub
-resolves these commits from the current pull request; the CLI resolves them from
-the explicitly selected target ref and proposed head. If either resolved commit
-changes, a new merge candidate exists.
+The review subject is the result of merging a committed proposed head or an
+immutable invocation-captured worktree snapshot into a resolved target head.
+The target head is not the historical merge-base. GitHub resolves these commits
+from the current pull request; the CLI resolves its target and captures its
+proposed snapshot once at invocation time. If either resolved commit changes, a
+new merge candidate exists.
 
 If Worktree Review cannot construct the merge candidate, including because of a merge
 conflict, the review ends with `Error`. A head-only worktree has no gate value and
@@ -522,10 +526,12 @@ work for cost control. If an older attempt cannot be stopped, its result remains
 audit-only and must fail the atomic authority check at publication even when it
 has the same Review Identity as the newer attempt.
 
-The CLI resolves its target and proposed head once at invocation time and reviews
-those immutable Git objects. It must refuse a dirty worktree in the first stage,
-report the resolved identities, and never imply that its result covers commits or
-working-tree changes created after that resolution.
+The CLI resolves its target once and captures its proposed source once at
+invocation time. A committed proposed ref is used directly; otherwise the
+current worktree (tracked and non-ignored untracked files) is captured as an
+immutable Git snapshot, while a clean worktree resolves to the current `HEAD`.
+The CLI reports the resolved identities and never implies that its result covers
+commits or working-tree changes created after that capture.
 
 Draft pull requests are not eligible for review. Marking a pull request ready
 starts review; converting it back to draft invalidates any standing Worktree Review
@@ -733,11 +739,11 @@ where observable.
 
 The CLI additionally emits a human-readable terminal report, a stable
 machine-readable result, and a documented process exit status. Its output must
-include the resolved target ref, target-head commit, proposed-head commit,
-attempt identifier, Review Policy version, and merge-tree identifier when
-available so a result cannot be mistaken for a later local state. Construction
-failure represents the merge-tree identifier as unavailable. The first-stage
-CLI does not create a bypass or update a remote check.
+include the resolved target ref, target-head commit, proposed-head or snapshot
+commit, attempt identifier, Review Policy version, and merge-tree identifier
+when available so a result cannot be mistaken for a later local state.
+Construction failure represents the merge-tree identifier as unavailable. The
+first-stage CLI does not create a bypass or update a remote check.
 
 While the product is Pre-Alpha, the versioned CLI result schema
 `worktree-review.cli.result/v1` may receive in-place identifier updates instead
@@ -826,22 +832,26 @@ first product stage rather than entering this lifecycle.
 
 ### 21.3 Local CLI lifecycle
 
-1. The user invokes Worktree Review inside a local Git repository and explicitly
-   selects a target ref; the proposed head defaults to the committed `HEAD` but
-   may be another committed ref.
-2. The CLI verifies that the worktree is clean, resolves both refs to immutable
-   commits, loads trusted policy from outside the reviewed repository, and
+1. The user invokes Worktree Review inside a local Git repository. The target
+   defaults to `HEAD`, may be selected with `--target`, or may be selected as
+   `HEAD~N` with `--commits N` to review the last N commits. The proposed source
+   defaults to the current worktree snapshot; `--proposed` selects an explicit
+   committed ref.
+2. The CLI resolves the target and captures the proposed source once. A dirty
+   worktree is represented by an immutable snapshot commit containing tracked
+   and non-ignored untracked files; a clean worktree uses the current `HEAD`.
+   It then loads trusted policy from outside the reviewed repository and
    identifies the configured model provider, data destination, and known
    retention behavior.
 3. The CLI creates an independent attempt identifier and runs the shared review
-   pipeline against those resolved Git objects.
+   pipeline against those immutable Git objects.
 4. The CLI writes human-readable and machine-readable results and exits with the
    documented status for `Passed`, `Blocked`, `Error`, or invalid invocation.
 
 A CLI result applies only to the review request key, attempt identifier, and any
 successfully constructed identities printed in that result. It neither creates a
-standing remote gate nor claims to cover later commits or uncommitted
-working-tree changes.
+standing remote gate nor claims to cover commits or working-tree changes created
+after the proposed source was captured.
 
 ## 22. Feedback and product validation
 

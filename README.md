@@ -6,7 +6,7 @@ decision for local use or authoritative GitHub gating.
 
 | Entry point | Role |
 | --- | --- |
-| `worktree-review` | Local CLI. One-shot review of a committed head against an explicit target ref. |
+| `worktree-review` | Local CLI. One-shot review of current worktree changes, recent commits, or an explicit committed head. |
 | `worktree-review-server` | GitHub App: webhook receiver and review workers in one process. |
 
 Product semantics live in `worktree_review.core`. Platform adapters only map transport (terminal, GitHub checks/webhooks) onto core types. See `docs/PRD.md` and `docs/TECH-DESIGN.md`.
@@ -52,16 +52,24 @@ uv run pre-commit install
 
 ## CLI
 
-Review a committed local head. Policy files must live **outside** the reviewed worktree.
+By default the CLI reviews current worktree changes against `HEAD`. Policy files must
+live **outside** the reviewed worktree.
 
 ```bash
 uv run worktree-review review \
-  --target main \
   --policy /path/to/review-policy.yaml \
   --compute-policy /path/to/compute-policy.yaml
 ```
 
-`--proposed` defaults to `HEAD`. `--format json` emits `worktree-review.cli.result/v1`.
+Use `--target main` to review the current worktree as it would merge into `main`,
+`--commits 3` to review the last three commits plus current worktree changes, or
+`--proposed feature` to review an explicit committed ref. The explicit `--proposed`
+form requires a clean worktree; omit it to include current changes. A clean worktree
+means the current change set is empty. `--format json` emits
+`worktree-review.cli.result/v1`. For the default source, the result labels
+`proposed_ref` as `WORKTREE` and reports the immutable snapshot commit in
+`proposed_head_oid`; `proposed_source` distinguishes this from a committed ref
+with the same display name.
 
 Exit codes (TECH-DESIGN D10):
 
@@ -70,7 +78,7 @@ Exit codes (TECH-DESIGN D10):
 | 0 | `Passed` |
 | 1 | `Blocked` |
 | 2 | `Error` |
-| 3 | Invalid invocation (dirty worktree, unresolvable refs, policy inside the repo, git too old, bad flags) |
+| 3 | Invalid invocation (unresolvable refs, policy inside the repo, git too old, incompatible source-selection flags, or an unrepresentable worktree snapshot) |
 
 The CLI never produces `Passed with bypass`.
 

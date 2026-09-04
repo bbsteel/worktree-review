@@ -29,6 +29,7 @@ from worktree_review.core.gate import (
 from worktree_review.core.identity import (
     MergeCandidateIdentity,
     PolicyVersionIdentity,
+    ProposedSource,
     ResolvedCommitPair,
     ReviewIdentity,
     ReviewRequestKey,
@@ -36,6 +37,7 @@ from worktree_review.core.identity import (
 from worktree_review.core.pipeline import ReviewRequest, run_review_pipeline
 from worktree_review.core.policy import ComputePolicy, ReviewPolicy
 from worktree_review.core.report import (
+    ComputePolicyDisclosure,
     CoverageRecord,
     ExecutionRecord,
     GateState,
@@ -49,6 +51,7 @@ __all__ = [
     "BudgetExhaustedError",
     "ChangeKind",
     "ComputePolicy",
+    "ComputePolicyDisclosure",
     "ContextGatherError",
     "CoverageRecord",
     "EvidenceBand",
@@ -65,6 +68,7 @@ __all__ = [
     "MergeConstructionError",
     "PolicyValidationError",
     "PolicyVersionIdentity",
+    "ProposedSource",
     "ProviderError",
     "ResolvedCommitPair",
     "ReviewIdentity",

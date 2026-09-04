@@ -1,4 +1,4 @@
-"""CLI pre-pipeline checks: git version, clean worktree, trusted policy paths (D2, D5, D10)."""
+"""CLI resolution: current worktree snapshots, Git refs, and trusted policies."""
 
 from __future__ import annotations
 
@@ -9,12 +9,18 @@ from pydantic import BaseModel, ConfigDict
 
 from worktree_review.core.errors import InvalidInvocationError
 from worktree_review.core.git import (
+    GitCliError,
     repository_root,
     require_git_version,
     resolve_commit,
+    snapshot_git_working_tree_as_commit,
     worktree_is_clean,
 )
-from worktree_review.core.identity import PolicyVersionIdentity, ResolvedCommitPair
+from worktree_review.core.identity import (
+    PolicyVersionIdentity,
+    ProposedSource,
+    ResolvedCommitPair,
+)
 from worktree_review.core.policy import (
     ComputePolicy,
     ReviewPolicy,
@@ -97,16 +103,41 @@ def _resolve_policy_path(
 async def prepare_cli_review(
     *,
     repository: Path,
-    target_ref: str,
-    proposed_ref: str,
-    policy_path: Path | None,
-    compute_policy_path: Path | None,
+    target_ref: str | None = None,
+    recent_commit_count: int | None = None,
+    proposed_ref: str | None = None,
+    policy_path: Path | None = None,
+    compute_policy_path: Path | None = None,
 ) -> PreparedCliReview:
     await require_git_version()
     root = await repository_root(repository)
-    if not await worktree_is_clean(root):
+    if target_ref is not None and recent_commit_count is not None:
         raise InvalidInvocationError(
-            f"worktree {root} is dirty; the first-stage CLI only reviews committed Git objects"
+            "--target and --commits cannot be used together; use --commits N to review "
+            "the last N commits plus current worktree changes"
+        )
+    if recent_commit_count is not None and recent_commit_count < 0:
+        raise InvalidInvocationError("--commits must be zero or greater")
+
+    resolved_target_ref = (
+        target_ref
+        if target_ref is not None
+        else "HEAD"
+        if recent_commit_count is None or recent_commit_count == 0
+        else f"HEAD~{recent_commit_count}"
+    )
+    if proposed_ref is not None and recent_commit_count is not None:
+        raise InvalidInvocationError(
+            "--proposed cannot be combined with --commits; --commits reviews the current "
+            "worktree snapshot"
+        )
+    current_head_oid: str | None = None
+    if proposed_ref is None or target_ref is None:
+        current_head_oid = await resolve_commit("HEAD", root)
+    if proposed_ref is not None and not await worktree_is_clean(root):
+        raise InvalidInvocationError(
+            f"worktree {root} has current changes; omit --proposed to review them, or "
+            "clean the worktree before selecting an explicit committed proposed ref"
         )
 
     review_path = _resolve_policy_path(
@@ -126,16 +157,33 @@ async def prepare_cli_review(
 
     review_policy, review_version = load_review_policy(review_path)
     compute_policy, compute_version = load_compute_policy(compute_path)
-    target_head_oid = await resolve_commit(target_ref, root)
-    proposed_head_oid = await resolve_commit(proposed_ref, root)
+    target_head_oid = await resolve_commit(resolved_target_ref, root)
+    if proposed_ref is not None:
+        resolved_proposed_ref = proposed_ref
+        proposed_head_oid = await resolve_commit(proposed_ref, root)
+    else:
+        resolved_proposed_ref = "WORKTREE"
+        if current_head_oid is None:
+            raise InvalidInvocationError(
+                "cannot capture the current worktree without resolving its current HEAD"
+            )
+        try:
+            proposed_head_oid = await snapshot_git_working_tree_as_commit(root, current_head_oid)
+        except GitCliError as exc:
+            raise InvalidInvocationError(f"cannot snapshot current worktree: {exc}") from exc
 
     return PreparedCliReview(
         resolved=ResolvedCommitPair(
             source_repository=str(root),
-            target_ref=target_ref,
+            target_ref=resolved_target_ref,
             target_head_oid=target_head_oid,
-            proposed_ref=proposed_ref,
+            proposed_ref=resolved_proposed_ref,
             proposed_head_oid=proposed_head_oid,
+            proposed_source=(
+                ProposedSource.COMMITTED_REF
+                if proposed_ref is not None
+                else ProposedSource.CURRENT_WORKTREE_SNAPSHOT
+            ),
         ),
         review_policy=review_policy,
         review_policy_version=review_version,

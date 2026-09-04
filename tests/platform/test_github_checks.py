@@ -17,6 +17,7 @@ from worktree_review.core.identity import (
     ReviewRequestKey,
 )
 from worktree_review.core.report import (
+    ComputePolicyDisclosure,
     CoverageRecord,
     ExecutionRecord,
     GateState,
@@ -77,6 +78,12 @@ def _report(
         ),
         review_policy_version=policy_version,
         compute_policy_version=PolicyVersionIdentity(semver="1.0.0", sha256="e" * 64),
+        compute_policy_disclosure=ComputePolicyDisclosure(
+            provider="anthropic",
+            model="scripted",
+            data_destination="https://api.anthropic.com",
+            known_retention="test retention",
+        ),
         execution=ExecutionRecord(),
         findings=findings,
         draft_findings=draft_findings,

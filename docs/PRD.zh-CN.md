@@ -18,7 +18,7 @@
 | --- | --- |
 | 工作树检视（Worktree Review） | 在完整、隔离物化的结果仓库树中评估拟议变更的方法。diff 用于定位变化，完整代码树提供理解和验证所需的上下文；该方法不要求必须由 `git worktree add` 创建目录。 |
 | 检视工作树（Review Worktree） | 为一个成功构造的合并候选物化出的不可变文件系统视图。它是产品层的检视环境，不一定是 Git linked worktree。 |
-| 审查请求键（Review Request Key） | merge 构造前即可确定的键：源仓库、目标 ref、解析后的目标 head commit、提议 head commit、Review Policy 版本。即使 merge 构造失败，也能标识系统被要求构造和审查的对象。 |
+| 审查请求键（Review Request Key） | merge 构造前即可确定的键：源仓库、目标 ref、解析后的目标 head commit、提议 head commit 或调用时捕获的不可变工作树 snapshot commit、Review Policy 版本。即使 merge 构造失败，也能标识系统被要求构造和审查的对象。 |
 | 合并候选身份（Merge Candidate Identity） | 源仓库、目标 ref、目标 head commit、提议 head commit及结果 merge-tree 标识。仅在 merge 构造成功后存在。 |
 | 审查身份（Review Identity） | 合并候选身份加所应用的 Review Policy 版本，精确限定一个完整审查结论适用的对象。 |
 | 审查上下文（Review Context） | 某次 Attempt 收集的代码、diff、测试、文档、变更请求元数据、外部结果及其他证据。它影响审查，但不构成审查身份。 |
@@ -65,7 +65,7 @@ Worktree Review 将 Review Policy、Compute Policy、merge-candidate 上下文�
 | 界面 | 第一阶段职责 | 结果权威 |
 | --- | --- | --- |
 | GitHub 集成 | 自动审查符合条件的 PR，发布 inline finding 与持久 check，并支持可审计的 finding bypass。 | 绑定当前 Review Identity 与权威 Attempt 的 standing decision。 |
-| 本地 CLI | 按需审查明确选择的本地合并候选，输出人类可读及机器可读结果。 | 仅针对所打印身份的一次性结果和进程退出码，不修改远程门禁。 |
+| 本地 CLI | 按需审查选定的本地合并候选（包括当前工作树 snapshot），输出人类可读及机器可读结果。 | 仅针对所打印身份的一次性结果和进程退出码，不修改远程门禁。 |
 | 其他平台 | 后续把原生变更请求、check、评论和授权映射到同一语义。 | 必须保留相同身份、证据、覆盖及失败关闭规则。 |
 
 平台可以采用不同触发方式、展示和授权，但不得重新定义 Review Policy、证据等级、
@@ -86,8 +86,10 @@ PR 上都获得审查；审查本人或可信协作者分支；希望复用审�
 
 ## 6. 第一阶段范围与要求
 
-入口包括：同一公开 GitHub 仓库内、已 ready-for-review 的 PR；以及在 clean worktree
-中，把明确目标 ref 与已提交 proposed head 进行比较的本地 CLI。
+入口包括：同一公开 GitHub 仓库内、已 ready-for-review 的 PR；以及本地 CLI 对当前
+工作树 snapshot 的按需检视。target 默认是 `HEAD`，也可以明确选择，或选择从 `HEAD`
+开始的最近 N 次提交；仍支持显式选择已提交的 proposed ref。CLI 会在构造前把已跟踪
+和未被忽略的未跟踪文件捕获为不可变 Git snapshot。
 
 GitHub 入口的权威失效、重试、发布和阻止合并能力，其交付优先级高于两个界面的便利性
 功能。本地 CLI 仍属于第一阶段，因为它在本地执行并暴露同一套检视和确定性门禁语义。
@@ -98,7 +100,8 @@ GitHub 入口的权威失效、重试、发布和阻止合并能力，其交付�
 Worktree Review 必须：
 
 1. 在符合条件的 GitHub PR 打开、重新打开、转为 ready 或更新时自动审查。
-2. 允许 CLI 选择目标 ref 与已提交 proposed head，执行相同语义。
+2. 允许 CLI 默认检视相对于 `HEAD` 的当前工作树变化；也可以选择 target ref、检视最近
+   N 次提交加当前变化，或显式选择已提交的 proposed ref，执行相同语义。
 3. 审查“把 proposed head 合入已解析 target head”产生的结果，而不是只审查 head。
 4. 每个 Attempt 和结果绑定 Review Request Key；merge 成功后再绑定 Merge Candidate
    Identity 与 Review Identity。构造失败必须明确 merge tree 不存在。
@@ -126,7 +129,7 @@ Worktree Review 必须：
 
 ### 7.1 延后能力
 
-外部 fork PR、托管私有仓库、dirty snapshot、其他平台、跨候选增量结论、跨候选
+外部 fork PR、托管私有仓库、其他平台、跨候选增量结论、跨候选
 finding 生命周期、只根据讨论重评、Deep Review、多 provider 路由/配额 fallback/
 定时调度，以及校准数值置信度均延后。
 
@@ -140,9 +143,9 @@ Worktree Review 不是通用 coding agent、IDE 补全工具、自动修复系�
 
 ### 8.1 要么是精确合并候选，要么不审查
 
-审查对象是 proposed head 合入 resolved target head 的结果，不是历史 merge-base。
-任何 resolved commit 变化都会形成新候选。构造失败或冲突必须为 `Error`；只看 head
-的 worktree 没有门禁价值。
+审查对象是已提交的 proposed head 或调用时捕获的不可变工作树 snapshot 合入 resolved
+target head 的结果，不是历史 merge-base。任何 resolved commit 变化都会形成新候选。
+构造失败或冲突必须为 `Error`；只看 head 的 worktree 没有门禁价值。
 
 ### 8.2 决定受身份与权威 Attempt 约束
 
@@ -270,9 +273,9 @@ dimension；每个候选完整审查一次。
 immutable artifact/retrieval cache。
 
 GitHub identity 变化或显式 retry 时，新 Attempt 先成为权威并撤销旧 standing decision。
-无法停止的旧 Attempt 只能保留审计结果，发布时必须无法通过原子权威检查。CLI 固定
-解析一次 refs，拒绝 dirty worktree。Draft PR 无 passing decision；外部 fork 第一阶段
-明确 unsupported。
+无法停止的旧 Attempt 只能保留审计结果，发布时必须无法通过原子权威检查。CLI 在调用时
+固定解析 target，并捕获一次 proposed source；Draft PR 无 passing decision；外部 fork
+第一阶段明确 unsupported。
 
 ## 12. 严重度模型
 
@@ -381,9 +384,9 @@ unreviewable、Review Worktree 缺失、merge conflict 等同样失败关闭。�
 - 分析数据目的地、provider、model 和已知 retention。
 
 GitHub 还发布 inline finding、持久 check、finding bypass 和可观察的原生 override。
-CLI 还输出 terminal report、稳定机器格式和退出码；包含 target ref/head、proposed head、
-Attempt ID、Review Policy 和可用的 merge-tree OID；构造失败以 unavailable/null 表示。
-CLI 不创建 bypass 或远程 check。Pre-Alpha 期间，版本化 CLI 结果 schema
+CLI 还输出 terminal report、稳定机器格式和退出码；包含 target ref/head、proposed head
+或 snapshot commit、Attempt ID、Review Policy 和可用的 merge-tree OID；构造失败以
+unavailable/null 表示。CLI 不创建 bypass 或远程 check。Pre-Alpha 期间，版本化 CLI 结果 schema
 `worktree-review.cli.result/v1` 允许原位更新标识符，不必升主版本。记录 Review
 Worktree 准备的共享 pipeline stage 现为 `prepare-review-worktree`，取代原先的
 `prepare-workspace`。
@@ -433,14 +436,17 @@ Draft PR 无 standing pass；外部 fork 与托管私有仓库第一阶段明确
 
 ### 21.3 本地 CLI 生命周期
 
-1. 用户在本地 Git 仓库明确选择 target ref；proposed 默认为 committed `HEAD`。
-2. CLI 检查 clean worktree，解析 refs，加载仓库外可信策略，并展示 provider/目的地/
-   retention。
-3. 创建独立 Attempt ID，对不可变 Git objects 运行共享 pipeline。
+1. 用户在本地 Git 仓库调用 Worktree Review。target 默认为 `HEAD`，可以用 `--target`
+   选择，也可以用 `--commits N` 选择 `HEAD~N`，从而检视最近 N 次提交。proposed source
+   默认是当前工作树 snapshot；`--proposed` 用于选择显式的已提交 ref。
+2. CLI 在调用时一次性解析 target 并捕获 proposed source。dirty worktree 会被表示为包含
+   已跟踪和未被忽略未跟踪文件的不可变 snapshot commit；clean worktree 则使用当前
+   `HEAD`。随后加载仓库外可信策略，并展示 provider/目的地/retention。
+3. 创建独立 Attempt ID，对这些不可变 Git objects 运行共享 pipeline。
 4. 写人类/机器结果，以 `Passed`、`Blocked`、`Error` 或 invalid invocation 对应退出。
 
 结果只适用于打印的 Request Key、Attempt ID 和成功构造的身份；不建立远程 standing
-gate，也不覆盖以后 commit 或未提交变化。
+gate，也不覆盖 proposed source 捕获之后产生的 commit 或工作树变化。
 
 ## 22. 反馈与产品验证
 

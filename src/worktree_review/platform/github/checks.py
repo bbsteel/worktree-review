@@ -253,6 +253,13 @@ def _render_provenance(report: ReviewReport) -> str:
         "**Compute Policy:** "
         f"{_escape_markdown(report.compute_policy_version.semver)} "
         f"`{_escape_markdown(report.compute_policy_version.sha256)}`",
+        "**Provider/model:** "
+        f"`{_escape_markdown(report.compute_policy_disclosure.provider)}` / "
+        f"`{_escape_markdown(report.compute_policy_disclosure.model)}`",
+        "**Data destination:** "
+        f"`{_escape_markdown(report.compute_policy_disclosure.data_destination)}`",
+        "**Known retention:** "
+        f"{_escape_markdown(report.compute_policy_disclosure.known_retention)}",
     ]
     if report.review_identity is not None:
         lines.append(

@@ -103,7 +103,11 @@ metadata 和 checkout 行为。
 
 Server 使用专用无特权用户，CLI 使用调用用户；环境移除平台、installation 和 provider
 凭据。Git fidelity 必须逐 byte 匹配真实 Git，因此不采用 go-git。CLI 在 Git 过旧时以
-invalid invocation 退出。
+invalid invocation 退出。对于默认的 proposed source，CLI 通过临时 index 捕获当前工作树，
+创建不可达但不可变的 snapshot commit：跟踪文件使用当前文件系统字节，包含未被忽略的
+未跟踪文件，排除被忽略文件，并在 hash 时禁用 clean/smudge filter。用户的 index 和工作树
+不会被修改。clean worktree 直接复用当前 `HEAD` commit。显式 committed proposed ref 不得
+与未提交工作树变化同时使用，以免静默遗漏变化。
 
 **D3 — 一个共享九阶段 pipeline，并显式记录阶段结果。**
 
@@ -191,8 +195,15 @@ override 记录审计。
 - stdout 人类报告；`--format json` 输出 `worktree-review.cli.result/v1`。Pre-Alpha
   允许该 schema 原位更新标识符；Review Worktree 准备阶段为
   `prepare-review-worktree`，不再使用 `prepare-workspace`。
-- Exit code：0 Passed、1 Blocked、2 Error、3 invalid invocation；CLI 永不产生
-  `Passed with bypass`。
+- Exit code：0 Passed、1 Blocked、2 Error、3 invalid invocation。invalid invocation 包括
+  无法解析 ref、策略位于仓库内、Git 过旧、互斥的 source 选择参数，或无法表示的工作树
+  snapshot；CLI 永不产生 `Passed with bypass`。
+- 默认 CLI 检视相对于 `HEAD` 的当前工作树 snapshot；`--target` 选择其他 target ref，
+  `--commits N` 检视从 `HEAD~N` 到当前工作树 snapshot 的内容，`--proposed` 在 clean
+  worktree 上选择显式 committed proposed ref。机器结果会把默认 source 标记为
+  `proposed_ref=WORKTREE`，报告 `proposed_source=current-worktree-snapshot`，并在
+  `proposed_head_oid` 报告其不可变 snapshot commit。target 和 proposed source 在共享
+  pipeline 启动前只捕获一次，之后的变化不属于该结果。
 - 远程传输前打印 provider/model/destination/retention，并要求可信 Compute Policy
   明确允许；feedback/telemetry 默认不发送。
 - 每次调用生成 Attempt ID。构造失败输出 Request Key 和 `merge_tree_oid: null`；成功

@@ -13,11 +13,14 @@
     "target_ref",
     "target_head_oid",
     "proposed_ref",
+    "proposed_source",
     "proposed_head_oid",
     "merge_tree_oid",
     "review_policy_version",
     "compute_policy_version",
+    "compute_policy_disclosure",
     "stage_outcomes",
+    "dimension_outcomes",
     "findings",
     "draft_findings",
     "coverage",
@@ -52,16 +55,25 @@
     "target_ref": { "type": "string" },
     "target_head_oid": { "type": "string" },
     "proposed_ref": { "type": "string" },
+    "proposed_source": {
+      "type": "string",
+      "enum": ["committed-ref", "current-worktree-snapshot"]
+    },
     "proposed_head_oid": { "type": "string" },
     "merge_tree_oid": { "type": ["string", "null"] },
     "review_policy_version": { "$ref": "#/$defs/policyVersion" },
     "compute_policy_version": { "$ref": "#/$defs/policyVersion" },
+    "compute_policy_disclosure": { "$ref": "#/$defs/computePolicyDisclosure" },
     "stage_outcomes": {
       "type": "array",
       "items": { "$ref": "#/$defs/stageOutcome" }
     },
-    "findings": { "type": "array", "items": { "type": "object" } },
-    "draft_findings": { "type": "array", "items": { "type": "object" } },
+    "dimension_outcomes": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/dimensionOutcome" }
+    },
+    "findings": { "type": "array", "items": { "$ref": "#/$defs/finding" } },
+    "draft_findings": { "type": "array", "items": { "$ref": "#/$defs/finding" } },
     "coverage": { "$ref": "#/$defs/coverage" },
     "usage": { "type": "array", "items": { "$ref": "#/$defs/usageRecord" } },
     "summary": { "type": "string" },
@@ -109,6 +121,17 @@
         "sha256": { "type": "string", "minLength": 64, "maxLength": 64 }
       }
     },
+    "computePolicyDisclosure": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["provider", "model", "data_destination", "known_retention"],
+      "properties": {
+        "provider": { "type": "string", "minLength": 1 },
+        "model": { "type": "string", "minLength": 1 },
+        "data_destination": { "type": "string", "minLength": 1 },
+        "known_retention": { "type": "string", "minLength": 1 }
+      }
+    },
     "stageOutcome": {
       "type": "object",
       "additionalProperties": false,
@@ -120,6 +143,81 @@
         },
         "status": { "type": "string", "enum": ["completed", "failed", "not-started"] },
         "detail": { "type": ["string", "null"] }
+      }
+    },
+    "dimensionOutcome": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["dimension_id", "status"],
+      "properties": {
+        "dimension_id": { "type": "string", "minLength": 1 },
+        "status": { "type": "string", "enum": ["completed", "failed", "not-started"] },
+        "detail": { "type": ["string", "null"] }
+      }
+    },
+    "evidenceSpan": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "start_line",
+        "end_line",
+        "quoted_text",
+        "context_class",
+        "source",
+        "snapshot_identity",
+        "change_kind"
+      ],
+      "properties": {
+        "path": { "type": "string", "minLength": 1 },
+        "start_line": { "type": "integer", "minimum": 1 },
+        "end_line": { "type": "integer", "minimum": 1 },
+        "quoted_text": { "type": "string" },
+        "context_class": { "type": "string" },
+        "source": {
+          "type": "string",
+          "enum": ["review-worktree", "target-tree", "merge-diff", "metadata"]
+        },
+        "snapshot_identity": { "type": ["string", "null"] },
+        "change_kind": {
+          "type": ["string", "null"],
+          "enum": ["added", "modified", "deleted", null]
+        }
+      }
+    },
+    "finding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "fingerprint",
+        "severity",
+        "evidence_band",
+        "problem_statement",
+        "expected_impact",
+        "evidence_spans",
+        "repair_guidance",
+        "bypass_applied",
+        "dimension_id"
+      ],
+      "properties": {
+        "fingerprint": { "type": "string", "minLength": 64, "maxLength": 64 },
+        "severity": {
+          "type": "string",
+          "enum": ["critical", "major", "minor", "suggestion"]
+        },
+        "evidence_band": {
+          "type": "string",
+          "enum": ["insufficient", "supported", "verified"]
+        },
+        "problem_statement": { "type": "string", "minLength": 1 },
+        "expected_impact": { "type": "string", "minLength": 1 },
+        "evidence_spans": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/evidenceSpan" }
+        },
+        "repair_guidance": { "type": ["string", "null"] },
+        "bypass_applied": { "type": "boolean" },
+        "dimension_id": { "type": ["string", "null"] }
       }
     },
     "coverage": {

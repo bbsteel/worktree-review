@@ -62,16 +62,29 @@ def _root(
 @app.command()
 def review(
     target: Annotated[
-        str,
-        typer.Option("--target", help="Target ref to merge the proposed head into."),
-    ],
+        str | None,
+        typer.Option(
+            "--target",
+            help="Target ref to merge the current worktree into. Defaults to HEAD.",
+        ),
+    ] = None,
+    commits: Annotated[
+        int | None,
+        typer.Option(
+            "--commits",
+            help=(
+                "Review the last N commits plus current worktree changes "
+                "(equivalent to --target HEAD~N)."
+            ),
+        ),
+    ] = None,
     proposed: Annotated[
-        str,
+        str | None,
         typer.Option(
             "--proposed",
-            help="Committed proposed head. Defaults to HEAD.",
+            help="Explicit committed proposed ref. Defaults to the current worktree snapshot.",
         ),
-    ] = "HEAD",
+    ] = None,
     policy: Annotated[
         Path | None,
         typer.Option(
@@ -99,7 +112,7 @@ def review(
         typer.Option("--repository", help="Git worktree to review. Defaults to cwd."),
     ] = Path("."),
 ) -> None:
-    """Review a committed local head against an explicit target ref."""
+    """Review current worktree changes or an explicitly selected Git commit."""
 
     configure_logging(json_output=output_format is OutputFormat.JSON)
 
@@ -107,6 +120,7 @@ def review(
         prepared = await prepare_cli_review(
             repository=repository,
             target_ref=target,
+            recent_commit_count=commits,
             proposed_ref=proposed,
             policy_path=policy,
             compute_policy_path=compute_policy,
@@ -142,7 +156,7 @@ def review(
     raise typer.Exit(int(exit_code_for_gate_state(report.gate_state)))
 
 
-def main() -> None:
+def main() -> int:
     """Map usage errors to exit 3 so bad flags are not confused with review Error.
 
     Typer vendors Click exception classes under ``typer._click``, so this matches
@@ -150,7 +164,8 @@ def main() -> None:
     """
 
     try:
-        app(standalone_mode=False)
+        result = app(standalone_mode=False)
+        return int(result) if isinstance(result, int) else 0
     except SystemExit:
         raise
     except Exception as exc:

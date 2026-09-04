@@ -100,6 +100,17 @@ class CoverageRecord(BaseModel):
     reviewed: tuple[str, ...] = ()
 
 
+class ComputePolicyDisclosure(BaseModel):
+    """Provider transmission details that every surface must make visible."""
+
+    model_config = ConfigDict(frozen=True)
+
+    provider: str
+    model: str
+    data_destination: str
+    known_retention: str
+
+
 class ReviewReport(BaseModel):
     """Platform-independent result. Both CLI and GitHub adapters render this model."""
 
@@ -113,6 +124,7 @@ class ReviewReport(BaseModel):
     review_identity: ReviewIdentity | None
     review_policy_version: PolicyVersionIdentity
     compute_policy_version: PolicyVersionIdentity
+    compute_policy_disclosure: ComputePolicyDisclosure
     execution: ExecutionRecord
     findings: tuple[Finding, ...] = ()
     draft_findings: tuple[Finding, ...] = ()

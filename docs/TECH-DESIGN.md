@@ -166,7 +166,13 @@ invoking user (CLI), with a scrubbed environment: no platform tokens, no
 installation tokens, no provider credentials inside the worker's reachable env
 (§8.11). We deliberately do **not** use go-git: merge fidelity, rename handling,
 and LFS pointer behavior must match real git byte-for-byte. The CLI requires git
-≥ 2.38 and fails invocation (exit 3) otherwise.
+≥ 2.38 and fails invocation (exit 3) otherwise. For its default proposed source,
+the CLI captures the current worktree through a temporary index and an immutable,
+unreachable snapshot commit: tracked files use current filesystem bytes, non-ignored
+untracked files are included, ignored files are excluded, and clean/smudge filters
+are disabled while hashing. The user's index and worktree are never changed. A
+clean worktree reuses its current `HEAD` commit. An explicit committed proposed ref
+cannot be combined with uncommitted worktree changes, preventing silent omission.
 
 **D3 — One shared 9-stage pipeline, explicit stage outcomes.**
 `worktree_review.core.pipeline` implements PRD §21.1 literally: establish request key
@@ -329,9 +335,17 @@ as the mechanism that keeps native overrides visible.
   may update identifiers in that schema in place; Review Worktree
   preparation is `prepare-review-worktree`, not `prepare-workspace`.
 - Exit codes: `0` = `Passed`, `1` = `Blocked`, `2` = `Error`,
-  `3` = invalid invocation (dirty worktree, unresolvable refs, policy inside
-  repo, git too old, bad flags). `Passed with bypass` is never produced by
-  the CLI (§4, §11).
+  `3` = invalid invocation (unresolvable refs, policy inside repo, git too
+  old, incompatible source-selection flags, or an unrepresentable worktree
+  snapshot). `Passed with bypass` is never produced by the CLI (§4, §11).
+- By default the CLI reviews the current worktree snapshot against `HEAD`.
+  `--target` selects another target ref, `--commits N` reviews `HEAD~N` through
+  the current worktree snapshot, and `--proposed` selects an explicit committed
+  proposed ref on a clean worktree. The machine result labels the default source
+  as `proposed_ref=WORKTREE`, reports `proposed_source=current-worktree-snapshot`,
+  and reports its immutable snapshot commit as `proposed_head_oid`. The target
+  and proposed source are captured once before the shared pipeline starts; later
+  changes are outside the result.
 - Before any remote transmission, the CLI prints provider, model, data
   destination, and known retention behavior, and requires that transmission
   to be explicitly permitted in trusted Compute Policy (§8.11). No feedback
