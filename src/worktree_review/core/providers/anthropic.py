@@ -6,6 +6,7 @@ from typing import Any, cast
 
 from worktree_review.core.errors import ProviderError
 from worktree_review.core.provider import (
+    DEFAULT_MAX_OUTPUT_TOKENS_PER_CALL,
     UsageKind,
     UsageRecord,
     estimate_input_tokens_for_model,
@@ -13,10 +14,11 @@ from worktree_review.core.provider import (
 
 
 class AnthropicProvider:
-    def __init__(self, *, model: str, api_key: str) -> None:
+    def __init__(self, *, model: str, api_key: str, base_url: str | None = None) -> None:
         self.provider_name = "anthropic"
         self.model = model
         self._api_key = api_key
+        self._base_url = base_url
 
     def estimate_input_tokens(self, text: str) -> UsageRecord:
         tokens, note = estimate_input_tokens_for_model(text, self.model)
@@ -35,18 +37,22 @@ class AnthropicProvider:
         user: str,
         response_schema: dict[str, object],
         dimension_id: str,
+        max_output_tokens: int = DEFAULT_MAX_OUTPUT_TOKENS_PER_CALL,
     ) -> tuple[dict[str, object], UsageRecord]:
         try:
             from anthropic import AsyncAnthropic
         except ImportError as exc:
             raise ProviderError("the anthropic package is not installed") from exc
 
-        client = AsyncAnthropic(api_key=self._api_key)
+        if self._base_url is None:
+            client = AsyncAnthropic(api_key=self._api_key)
+        else:
+            client = AsyncAnthropic(api_key=self._api_key, base_url=self._base_url)
         usage_record: UsageRecord | None = None
         try:
             response = await client.messages.create(
                 model=self.model,
-                max_tokens=8192,
+                max_tokens=max_output_tokens,
                 system=system,
                 messages=[{"role": "user", "content": user}],
                 tools=[

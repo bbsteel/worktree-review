@@ -1,0 +1,6 @@
+# Copy this file to ~/.config/worktree-review/config.yaml and replace the key.
+# The CLI supplies the built-in Review Policy and safe per-call token limit.
+
+provider: anthropic
+key: ${ANTHROPIC_API_KEY}
+model: claude-sonnet-4-5

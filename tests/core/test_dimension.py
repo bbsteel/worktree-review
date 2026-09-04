@@ -5,13 +5,18 @@ from pathlib import Path
 import pytest
 
 from worktree_review.core.context import ContextClass, ContextItem, GatheredContext
-from worktree_review.core.dimension import findings_from_payload, run_required_dimensions
+from worktree_review.core.dimension import (
+    dimension_system_prompt,
+    findings_from_payload,
+    run_required_dimensions,
+)
 from worktree_review.core.errors import ProviderError
 from worktree_review.core.findings import EvidenceSource
 from worktree_review.core.policy import ComputePolicy, ReviewPolicy
 from worktree_review.core.provider import ScriptedProvider
 from worktree_review.core.report import CoverageRecord, StageStatus
 from worktree_review.core.review_worktree import ReviewWorktree
+from worktree_review.prompts import load_prompt_layers, prompt_layer_resource_paths
 
 
 def _policy() -> ReviewPolicy:
@@ -86,6 +91,27 @@ def test_findings_from_payload_fingerprints() -> None:
     assert len(findings) == 1
     assert findings[0].dimension_id == "correctness"
     assert findings[0].fingerprint
+
+
+def test_dimension_prompt_is_composed_from_visible_ordered_layers() -> None:
+    prompt = dimension_system_prompt("security")
+
+    assert prompt.index("Prompt layer 1:") < prompt.index("Prompt layer 2:")
+    assert prompt.index("Prompt layer 2:") < prompt.index("Prompt layer 3:")
+    assert prompt.index("Prompt layer 3:") < prompt.index("Prompt layer 4:")
+    assert prompt.index("Prompt layer 4:") < prompt.index("Prompt layer 5:")
+    assert "authorization, injection, secret exposure" in prompt
+    assert "Use the structured findings schema only" in prompt
+
+
+def test_prompt_layers_expose_effective_resource_order() -> None:
+    layers = load_prompt_layers("security")
+
+    assert tuple(layer.sequence for layer in layers) == (1, 2, 3, 4, 5)
+    assert tuple(layer.resource_path for layer in layers) == prompt_layer_resource_paths("security")
+    assert layers[0].resource_path == "00-product/role.md"
+    assert layers[3].resource_path == "30-dimensions/security.md"
+    assert layers[-1].resource_path == "40-output/structured-findings.md"
 
 
 def test_inverted_line_range_is_rejected() -> None:

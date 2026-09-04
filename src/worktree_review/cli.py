@@ -17,11 +17,15 @@ from worktree_review.observability import configure_logging
 from worktree_review.platform.cli.exit_codes import CliExitCode, exit_code_for_gate_state
 from worktree_review.platform.cli.invocation import (
     prepare_cli_review,
-    remote_transmission_disclosure,
+    provider_transmission_disclosure,
     require_remote_transmission_permit,
 )
 from worktree_review.platform.cli.result import cli_result_document
-from worktree_review.platform.cli.terminal import render_text_report
+from worktree_review.platform.cli.terminal import render_call_plan, render_text_report
+from worktree_review.prompts import (
+    PROMPT_SET_VERSION,
+    load_prompt_layers,
+)
 
 app = typer.Typer(
     name="worktree-review",
@@ -59,6 +63,25 @@ def _root(
     """Worktree Review local CLI."""
 
 
+@app.command("prompts")
+def show_prompts(
+    dimension: Annotated[
+        str,
+        typer.Option(
+            "--dimension",
+            help="Dimension whose effective built-in prompt layers should be shown.",
+        ),
+    ] = "correctness",
+) -> None:
+    """Show the trusted, product-owned prompt hierarchy used by review dimensions."""
+
+    typer.echo(f"Built-in prompt set: {PROMPT_SET_VERSION}")
+    typer.echo(f"Dimension: {dimension}")
+    for prompt_layer in load_prompt_layers(dimension):
+        typer.echo(f"\nPrompt layer {prompt_layer.sequence}: {prompt_layer.resource_path}")
+        typer.echo(prompt_layer.content)
+
+
 @app.command()
 def review(
     target: Annotated[
@@ -89,7 +112,7 @@ def review(
         Path | None,
         typer.Option(
             "--policy",
-            help="Review Policy YAML. Must sit outside the reviewed worktree.",
+            help="Optional Review Policy YAML. Defaults to the built-in policy.",
             exists=False,
             dir_okay=False,
         ),
@@ -98,7 +121,19 @@ def review(
         Path | None,
         typer.Option(
             "--compute-policy",
-            help="Compute Policy YAML. Must sit outside the reviewed worktree.",
+            help="Advanced Compute Policy YAML. Must sit outside the reviewed worktree.",
+            exists=False,
+            dir_okay=False,
+        ),
+    ] = None,
+    config: Annotated[
+        Path | None,
+        typer.Option(
+            "--config",
+            help=(
+                "Minimal provider configuration (URL/key or local CLI). "
+                "Defaults to ~/.config/worktree-review/config.yaml."
+            ),
             exists=False,
             dir_okay=False,
         ),
@@ -124,9 +159,10 @@ def review(
             proposed_ref=proposed,
             policy_path=policy,
             compute_policy_path=compute_policy,
+            config_path=config,
         )
         require_remote_transmission_permit(prepared.compute_policy)
-        typer.secho(remote_transmission_disclosure(prepared.compute_policy), err=True)
+        typer.secho(provider_transmission_disclosure(prepared.compute_policy), err=True)
         return await run_review_pipeline(
             ReviewRequest(
                 resolved=prepared.resolved,
@@ -135,7 +171,11 @@ def review(
                 compute_policy=prepared.compute_policy,
                 compute_policy_version=prepared.compute_policy_version,
                 surface="cli",
-            )
+                provider_configuration=prepared.provider_configuration,
+            ),
+            on_call_plan_ready=lambda call_plan: typer.secho(
+                render_call_plan(call_plan), err=True, nl=False
+            ),
         )
 
     try:

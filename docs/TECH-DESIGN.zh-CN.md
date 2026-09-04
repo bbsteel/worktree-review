@@ -3,8 +3,9 @@
 - 状态：第一阶段 PRD 的首版技术落地计划
 - 日期：2026-08-27
 - 配套文档：`docs/PRD.zh-CN.md`；规范原文为 `docs/PRD.md`
-- 范围：架构、语言、第三方组件、Identity/Attempt 持久化和权威发布语义；详细 schema、
-  prompt 算法和交互设计由后续设计完成
+- 范围：架构、语言、第三方组件、Identity/Attempt 持久化、权威发布语义、第一阶段用户
+  配置和可检查的提示词层级；服务器端详细 schema、必需层级之外的具体 prompt 文案及
+  交互设计仍由后续设计完成
 - 规范来源：`docs/TECH-DESIGN.md`；本文是同步维护的中文翻译，歧义时以英文为准
 
 本文解决 PRD §23 延后的决定。所有选择必须保留：精确 merge candidate 或不审查、
@@ -64,8 +65,9 @@ Adapters
   worktree_review.platform.cli
         │
 Core
-  identity / candidate / review_worktree / policy / context / dimension
+  identity / candidate / review_worktree / policy / config / context / dimension
   provider / findings / gate / report / pipeline
+  prompts (product-owned, inspectable hierarchy)
         │
 Infrastructure
   system git · PostgreSQL · pgqueuer · LLM APIs
@@ -131,9 +133,13 @@ tests 保证“required dimension 不完整必为 Error”等性质。
 **D5 — Worktree Review 控制的版本化、内容寻址 YAML Policy。**
 
 Review/Compute Policy 分离；每份具有 semver 和 canonical parsed bytes 的 SHA-256。
-CLI 只接受 worktree 外显式路径或 `~/.config/worktree-review/`；GitHub 按 installation 保存到
-Postgres。两条路径都以版本化 JSON Schema 验证并失败关闭。`AGENTS.md` 等只作为
-untrusted context。
+CLI 的 `--policy` 可省略，省略时使用产品拥有的内置 Review Policy。普通 Provider 配置是
+`~/.config/worktree-review/config.yaml`（或显式路径）中的最小 YAML，包含远程
+provider/key/model（可选自定义 URL）或本地 CLI command，并派生每次调用最多 4096 个输出
+token、且不设置美元预算；`--compute-policy` 仍是需要直接控制 Compute 的高级路径。所有
+自定义策略/配置路径都必须在 worktree 外。GitHub 按 installation 保存到 Postgres。文件配置
+均以版本化 JSON Schema 验证并失败关闭；`AGENTS.md` 等只作为 untrusted context，永远不是
+策略或配置。
 
 **D6 — Provider 约束的结构化 finding，加 grounded evidence 校验。**
 
@@ -148,7 +154,19 @@ quote 不能为声明来自 Review Worktree 的 span 建立证据，即使文本
 顺序不能丢弃更强 finding。按 path、normalized span、category 和 problem hash 确定性重算
 fingerprint；没有合法 span 时使用 sentinel path，绝不信任 provider fingerprint。
 
-**D7 — 三点预算控制并失败关闭。**
+提示词资源是 `worktree_review.prompts` 下由产品拥有的 package data。每个 dimension 按
+`00-product`、`10-safety`、`20-review`、`30-dimensions/<dimension>`、`40-output` 的顺序
+组合；CLI 通过 `worktree-review prompts --dimension <id>` 暴露实际层级。提示词资源永远不从
+被审查仓库加载，也不是策略覆盖机制。
+
+**D7 — 有界 Provider 调用与高级预算控制。**
+
+每份 Compute Policy 都携带每次 Provider 调用的硬性最大输出 token。普通 `--config` 路径
+派生 `max_output_tokens_per_call: 4096`，记录输入 token 预估但不为其预测美元费用，真实
+支出由 Provider 账户控制。首次调用前报告调用次数、预计输入 token 和单次输出上限；完成后
+明确报告 measured usage 以及费用是否可得。
+
+高级 `--compute-policy` 提供每次检视预算（内部派生策略可不设置；外部高级 schema 必须设置）：
 
 1. Pre-flight：按 provider tokenizer 估计 assembled context；超预算则拒绝，除非策略
    明确允许不确定价格/用量下开始。
@@ -157,7 +175,8 @@ fingerprint；没有合法 span 时使用 sentinel path，绝不信任 provider 
 3. Exhaustion：gate 为 `Error`，披露 completed/skipped/unreviewed；finding 可见但
    不可 bypass。
 
-Usage 区分 measured、declared、estimated，并按 Attempt 持久化。
+Usage 区分 measured、declared、estimated，并按 Attempt 持久化。普通配置不会把未知的
+Provider 价格变成预测，也不会产生 Worktree Review 自己的美元预算。
 
 **D8 — PostgreSQL 状态，pgqueuer 同库队列。**
 
@@ -204,8 +223,13 @@ override 记录审计。
   `proposed_ref=WORKTREE`，报告 `proposed_source=current-worktree-snapshot`，并在
   `proposed_head_oid` 报告其不可变 snapshot commit。target 和 proposed source 在共享
   pipeline 启动前只捕获一次，之后的变化不属于该结果。
-- 远程传输前打印 provider/model/destination/retention，并要求可信 Compute Policy
-  明确允许；feedback/telemetry 默认不发送。
+- `--policy` 可选，省略时使用内置 Review Policy。普通 `--config` 配置远程
+  provider/key/model（可选自定义 URL）或本地 CLI command，并派生每次调用最多 4096 个输出
+  token、且不设置美元预算；仍保留直接控制 Compute 的高级 `--compute-policy` 路径。远程
+  传输前打印 provider/model/destination/retention；feedback/telemetry 默认不发送。
+- CLI 在 Provider 调用前打印 call plan，并把它与 usage 一起放入机器结果；普通配置在
+  Provider 返回时报告 measured 输入/输出 token，否则提示到 Provider 账户查询费用。
+- `worktree-review prompts --dimension <id>` 输出该 dimension 使用的可信产品提示词层级。
 - 每次调用生成 Attempt ID。构造失败输出 Request Key 和 `merge_tree_oid: null`；成功
   还输出 Merge Candidate/Review Identity。CLI Attempt 不进入 server 权威状态。
 
@@ -253,7 +277,7 @@ Policy 记录在 Attempt，不加入 Review Identity。授权结果、原因、d
 | Migration | `alembic` | 启动时应用 plain SQL migration。 |
 | Queue | `pgqueuer` | 同 Postgres，job 以 Attempt ID 唯一。 |
 | LLM SDK | 官方 `anthropic`、`openai` | Structured output 与 usage。 |
-| Token | `tiktoken` + Anthropic count API | Provider-specific estimate，response usage 权威。 |
+| Token | `tiktoken` + Anthropic count API | Provider-specific input estimate，response usage 权威。 |
 | Secret redaction | `detect-secrets` | Findings/log；必要时考虑 gitleaks。 |
 | Retry | `tenacity` | Compute Policy 下的 provider transient retry。 |
 | Logging | `structlog` | JSON，每条记录含 Attempt ID。 |

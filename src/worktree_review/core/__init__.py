@@ -1,5 +1,10 @@
 """Platform-independent product semantics. Adapters must not reinterpret these types."""
 
+from worktree_review.core.config import (
+    ProviderConfiguration,
+    UserConfiguration,
+    load_user_configuration,
+)
 from worktree_review.core.errors import (
     BudgetExhaustedError,
     ContextGatherError,
@@ -35,12 +40,13 @@ from worktree_review.core.identity import (
     ReviewRequestKey,
 )
 from worktree_review.core.pipeline import ReviewRequest, run_review_pipeline
-from worktree_review.core.policy import ComputePolicy, ReviewPolicy
+from worktree_review.core.policy import ComputePolicy, ReviewPolicy, load_builtin_review_policy
 from worktree_review.core.report import (
     ComputePolicyDisclosure,
     CoverageRecord,
     ExecutionRecord,
     GateState,
+    ReviewCallPlan,
     ReviewReport,
     StageName,
     StageOutcome,
@@ -69,8 +75,10 @@ __all__ = [
     "PolicyValidationError",
     "PolicyVersionIdentity",
     "ProposedSource",
+    "ProviderConfiguration",
     "ProviderError",
     "ResolvedCommitPair",
+    "ReviewCallPlan",
     "ReviewIdentity",
     "ReviewPolicy",
     "ReviewReport",
@@ -82,8 +90,11 @@ __all__ = [
     "StageOutcome",
     "StageStatus",
     "UnimplementedStageError",
+    "UserConfiguration",
     "WorktreeReviewError",
     "evaluate_gate",
     "finding_blocks_under_policy",
+    "load_builtin_review_policy",
+    "load_user_configuration",
     "run_review_pipeline",
 ]

@@ -19,8 +19,9 @@
       "type": "string",
       "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+([.-][0-9A-Za-z.-]+)?$"
     },
-    "provider": { "type": "string", "enum": ["anthropic", "openai"] },
+    "provider": { "type": "string", "enum": ["anthropic", "openai", "local-cli"] },
     "model": { "type": "string", "minLength": 1 },
+    "max_output_tokens_per_call": { "type": "integer", "minimum": 1 },
     "max_budget_usd": { "type": "number", "minimum": 0 },
     "allow_start_under_uncertain_price": { "type": "boolean" },
     "permit_remote_transmission": { "type": "boolean" },

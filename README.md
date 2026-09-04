@@ -13,8 +13,8 @@ Product semantics live in `worktree_review.core`. Platform adapters only map tra
 
 This repository currently contains the **stage-one core**: domain identities,
 policy validation, exact merge construction, verified read-only Review Worktree
-materialization, context gathering, provider-backed review dimensions, budget
-metering, finding verification, deterministic gate evaluation, CLI output, and
+materialization, context gathering, provider-backed review dimensions, bounded
+provider calls and usage metering, finding verification, deterministic gate evaluation, CLI output, and
 fail-closed stage records. The server also has the authoritative Attempt/CAS
 state transitions, authorized retry boundary, and an injected GitHub Checks
 payload/publication adapter; the embedded pgqueuer review worker and end-to-end
@@ -52,14 +52,23 @@ uv run pre-commit install
 
 ## CLI
 
-By default the CLI reviews current worktree changes against `HEAD`. Policy files must
-live **outside** the reviewed worktree.
+By default the CLI reviews current worktree changes against `HEAD`. Review Policy is
+built in; provider configuration lives in a trusted `config.yaml` outside the
+reviewed worktree.
+
+See the [CLI usage and configuration guide](USAGE.md) or the
+[中文说明](USAGE.zh-CN.md) for policy fields, provider credentials, source
+selection, output, and troubleshooting.
 
 ```bash
 uv run worktree-review review \
-  --policy /path/to/review-policy.yaml \
-  --compute-policy /path/to/compute-policy.yaml
+  --config /path/to/config.yaml
 ```
+
+The minimal `config.yaml` contains a provider, key, and model (with an optional
+custom URL), or a local CLI command. Review Policy is built in. Run
+`uv run worktree-review prompts --dimension security` to inspect the
+product-owned prompt layers used by a dimension.
 
 Use `--target main` to review the current worktree as it would merge into `main`,
 `--commits 3` to review the last three commits plus current worktree changes, or
@@ -82,7 +91,9 @@ Exit codes (TECH-DESIGN D10):
 
 The CLI never produces `Passed with bypass`.
 
-Example policies are in `examples/`.
+The minimal [configuration example](config.example.yaml), advanced policy
+examples, and the complete [usage guide](USAGE.md) are available in the
+repository.
 
 ## Server
 
@@ -108,7 +119,8 @@ src/worktree_review/
   core/            platform-independent product semantics
   platform/cli/    terminal report, JSON result, exit codes
   platform/github/ checks, comments, webhooks, authz, inline mapping
-  schemas/         versioned JSON Schema for policy and CLI results
+  prompts/          product-owned, inspectable prompt layers
+  schemas/         versioned JSON Schema for config, policy, findings, and results
   cli.py           `worktree-review` entry
   server/          `worktree-review-server` entry (FastAPI)
 ```

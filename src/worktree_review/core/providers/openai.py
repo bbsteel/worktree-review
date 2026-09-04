@@ -6,6 +6,7 @@ from typing import cast
 
 from worktree_review.core.errors import ProviderError
 from worktree_review.core.provider import (
+    DEFAULT_MAX_OUTPUT_TOKENS_PER_CALL,
     UsageKind,
     UsageRecord,
     estimate_input_tokens_for_model,
@@ -13,10 +14,11 @@ from worktree_review.core.provider import (
 
 
 class OpenAIProvider:
-    def __init__(self, *, model: str, api_key: str) -> None:
+    def __init__(self, *, model: str, api_key: str, base_url: str | None = None) -> None:
         self.provider_name = "openai"
         self.model = model
         self._api_key = api_key
+        self._base_url = base_url
 
     def estimate_input_tokens(self, text: str) -> UsageRecord:
         tokens, note = estimate_input_tokens_for_model(text, self.model)
@@ -35,18 +37,22 @@ class OpenAIProvider:
         user: str,
         response_schema: dict[str, object],
         dimension_id: str,
+        max_output_tokens: int = DEFAULT_MAX_OUTPUT_TOKENS_PER_CALL,
     ) -> tuple[dict[str, object], UsageRecord]:
         try:
             from openai import AsyncOpenAI
         except ImportError as exc:
             raise ProviderError("the openai package is not installed") from exc
 
-        client = AsyncOpenAI(api_key=self._api_key)
+        if self._base_url is None:
+            client = AsyncOpenAI(api_key=self._api_key)
+        else:
+            client = AsyncOpenAI(api_key=self._api_key, base_url=self._base_url)
         usage_record: UsageRecord | None = None
         try:
             response = await client.chat.completions.create(
                 model=self.model,
-                max_tokens=8192,
+                max_tokens=max_output_tokens,
                 messages=[
                     {"role": "system", "content": system},
                     {"role": "user", "content": user},

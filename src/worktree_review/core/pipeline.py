@@ -6,10 +6,12 @@ failure cannot be hidden by later output.
 """
 
 import uuid
+from collections.abc import Callable
 
 from pydantic import BaseModel, ConfigDict
 
 from worktree_review.core.candidate import construct_merge_candidate
+from worktree_review.core.config import ProviderConfiguration
 from worktree_review.core.context import gather_context
 from worktree_review.core.dimension import estimate_all_dimension_calls, run_required_dimensions
 from worktree_review.core.errors import UnimplementedStageError, WorktreeReviewError
@@ -38,6 +40,7 @@ from worktree_review.core.report import (
     DimensionOutcome,
     ExecutionRecord,
     GateState,
+    ReviewCallPlan,
     ReviewReport,
     StageName,
     StageOutcome,
@@ -61,6 +64,7 @@ class ReviewRequest(BaseModel):
     compute_policy: ComputePolicy
     compute_policy_version: PolicyVersionIdentity
     surface: str
+    provider_configuration: ProviderConfiguration | None = None
 
 
 _POST_FAILURE_STAGES: frozenset[StageName] = frozenset(
@@ -109,6 +113,7 @@ def _complete_report(
     draft_findings: tuple[Finding, ...] = (),
     dimension_outcomes: tuple[DimensionOutcome, ...] | None = None,
     usage: tuple[UsageRecord, ...] = (),
+    call_plan: ReviewCallPlan | None = None,
     allow_passing_gate: bool = False,
 ) -> ReviewReport:
     resolved_coverage = coverage or CoverageRecord(required_coverage_complete=False)
@@ -171,6 +176,7 @@ def _complete_report(
         coverage=resolved_coverage,
         dimension_outcomes=resolved_outcomes,
         usage=usage,
+        call_plan=call_plan,
         summary=summary,
         error_detail=error_detail,
     )
@@ -180,6 +186,7 @@ async def run_review_pipeline(
     request: ReviewRequest,
     *,
     provider: ProviderClient | None = None,
+    on_call_plan_ready: Callable[[ReviewCallPlan], None] | None = None,
 ) -> ReviewReport:
     """Run the shared pipeline through verification, gate evaluation, and publication."""
 
@@ -309,9 +316,12 @@ async def run_review_pipeline(
             )
 
         estimated: UsageRecord | None = None
+        call_plan: ReviewCallPlan | None = None
         try:
             selected_provider = (
-                provider if provider is not None else build_provider(request.compute_policy)
+                provider
+                if provider is not None
+                else build_provider(request.compute_policy, request.provider_configuration)
             )
             estimated = estimate_all_dimension_calls(
                 context=gathered,
@@ -319,8 +329,15 @@ async def run_review_pipeline(
                 provider=selected_provider,
                 compute_policy=request.compute_policy,
             )
+            call_plan = ReviewCallPlan(
+                call_count=len(request.review_policy.required_dimensions),
+                estimated_input_tokens=estimated.input_tokens,
+                max_output_tokens_per_call=request.compute_policy.max_output_tokens_per_call,
+            )
             if preflight_budget(request.compute_policy, estimated) is BudgetDecision.REFUSE:
                 raise refuse_preflight(request.compute_policy, estimated)
+            if on_call_plan_ready is not None:
+                on_call_plan_ready(call_plan)
             dimension_runs = await run_required_dimensions(
                 review_worktree,
                 gathered,
@@ -350,6 +367,7 @@ async def run_review_pipeline(
                 error_detail=str(exc),
                 coverage=gathered.coverage,
                 usage=() if estimated is None else (estimated,),
+                call_plan=call_plan,
             )
 
         dimension_outcomes = tuple(run.outcome for run in dimension_runs)
@@ -404,6 +422,7 @@ async def run_review_pipeline(
                 draft_findings=draft_findings,
                 dimension_outcomes=dimension_outcomes,
                 usage=usage_records,
+                call_plan=call_plan,
             )
         execution = execution.with_outcome(
             StageOutcome(
@@ -426,6 +445,7 @@ async def run_review_pipeline(
                 findings=validated_findings,
                 dimension_outcomes=dimension_outcomes,
                 usage=usage_records,
+                call_plan=call_plan,
                 allow_passing_gate=True,
             )
         return _complete_report(
@@ -441,6 +461,7 @@ async def run_review_pipeline(
             findings=validated_findings,
             dimension_outcomes=dimension_outcomes,
             usage=usage_records,
+            call_plan=call_plan,
             allow_passing_gate=True,
         )
     finally:

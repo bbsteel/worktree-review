@@ -33,10 +33,24 @@ COMPUTE_POLICY_DOCUMENT_ID: Literal["worktree-review.compute-policy/v1"] = (
     "worktree-review.compute-policy/v1"
 )
 
-ProviderName = Literal["anthropic", "openai"]
+ProviderName = Literal["anthropic", "openai", "local-cli"]
 
 DEFAULT_MAX_FILE_BYTES = 1_048_576
 DEFAULT_OPTIONAL_CONTEXT_GLOBS: tuple[str, ...] = ("AGENTS.md", "CLAUDE.md")
+BUILTIN_REVIEW_POLICY_VERSION = "0.1.0"
+BUILTIN_REVIEW_POLICY_DOCUMENT: dict[str, Any] = {
+    "schema": REVIEW_POLICY_DOCUMENT_ID,
+    "version": BUILTIN_REVIEW_POLICY_VERSION,
+    "required_dimensions": ["correctness", "security"],
+    "blocking_severities": ["critical", "major"],
+    "minimum_blocking_evidence_band": "supported",
+    "context": {
+        "max_file_bytes": DEFAULT_MAX_FILE_BYTES,
+        "excluded_globs": [],
+        "mandatory_globs": [],
+        "optional_globs": list(DEFAULT_OPTIONAL_CONTEXT_GLOBS),
+    },
+}
 
 
 class ContextPolicy(BaseModel):
@@ -85,7 +99,8 @@ class ComputePolicy(BaseModel):
     version: str
     provider: ProviderName
     model: str
-    max_budget_usd: Annotated[Decimal, Field(ge=0)]
+    max_output_tokens_per_call: Annotated[int, Field(ge=1)] = 8192
+    max_budget_usd: Annotated[Decimal, Field(ge=0)] | None = None
     allow_start_under_uncertain_price: bool = False
     permit_remote_transmission: bool = False
     input_usd_per_million_tokens: Annotated[Decimal, Field(ge=0)] | None = None
@@ -102,6 +117,7 @@ def canonical_policy_bytes(document: dict[str, Any]) -> bytes:
         sort_keys=True,
         separators=(",", ":"),
         ensure_ascii=False,
+        default=str,
     ).encode("utf-8")
 
 
@@ -141,6 +157,19 @@ def load_review_policy(path: Path) -> tuple[ReviewPolicy, PolicyVersionIdentity]
         policy = ReviewPolicy.model_validate(document)
     except Exception as exc:
         raise PolicyValidationError(f"policy {path} is invalid: {exc}") from exc
+    return policy, policy_version_identity(document, policy.version)
+
+
+def load_builtin_review_policy() -> tuple[ReviewPolicy, PolicyVersionIdentity]:
+    """Return the trusted product default when no user Review Policy is supplied."""
+
+    document = dict(BUILTIN_REVIEW_POLICY_DOCUMENT)
+    document["context"] = dict(BUILTIN_REVIEW_POLICY_DOCUMENT["context"])
+    _validate_against_schema(document, REVIEW_POLICY_SCHEMA_ID, Path("<built-in>"))
+    try:
+        policy = ReviewPolicy.model_validate(document)
+    except Exception as exc:
+        raise PolicyValidationError(f"built-in Review Policy is invalid: {exc}") from exc
     return policy, policy_version_identity(document, policy.version)
 
 

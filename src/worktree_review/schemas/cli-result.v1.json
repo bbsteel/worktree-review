@@ -76,6 +76,16 @@
     "draft_findings": { "type": "array", "items": { "$ref": "#/$defs/finding" } },
     "coverage": { "$ref": "#/$defs/coverage" },
     "usage": { "type": "array", "items": { "$ref": "#/$defs/usageRecord" } },
+    "call_plan": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": ["call_count", "estimated_input_tokens", "max_output_tokens_per_call"],
+      "properties": {
+        "call_count": { "type": "integer", "minimum": 0 },
+        "estimated_input_tokens": { "type": ["integer", "null"], "minimum": 0 },
+        "max_output_tokens_per_call": { "type": "integer", "minimum": 1 }
+      }
+    },
     "summary": { "type": "string" },
     "error_detail": { "type": ["string", "null"] }
   },

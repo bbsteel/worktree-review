@@ -2,6 +2,7 @@ schema: worktree-review.compute-policy/v1
 version: 0.1.0
 provider: anthropic
 model: claude-sonnet-4-5
+max_output_tokens_per_call: 8192
 max_budget_usd: 2.00
 allow_start_under_uncertain_price: false
 permit_remote_transmission: true

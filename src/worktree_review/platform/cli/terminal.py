@@ -1,10 +1,12 @@
 """Human-readable terminal report for a surface-neutral ReviewReport."""
 
 import re
+from decimal import Decimal
 
 from worktree_review.core.findings import EvidenceSpan, Finding
 from worktree_review.core.identity import ProposedSource
-from worktree_review.core.report import ReviewReport
+from worktree_review.core.provider import UsageKind
+from worktree_review.core.report import ReviewCallPlan, ReviewReport
 
 _ANSI_ESCAPE_PATTERN = re.compile(r"\x1b(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
 
@@ -71,6 +73,57 @@ def _render_finding(
     _append_multiline_field(lines, "impact", finding.expected_impact)
     if finding.repair_guidance:
         _append_multiline_field(lines, "repair", finding.repair_guidance)
+
+
+def render_call_plan(call_plan: ReviewCallPlan) -> str:
+    """Render the bounded provider work before the first model call."""
+
+    estimated_input_line = (
+        "Estimated input: unavailable"
+        if call_plan.estimated_input_tokens is None
+        else f"Estimated input: about {call_plan.estimated_input_tokens:,} tokens"
+    )
+    return (
+        "\n".join(
+            (
+                f"Will make {call_plan.call_count} model calls",
+                estimated_input_line,
+                f"Maximum output per call: {call_plan.max_output_tokens_per_call:,} tokens",
+            )
+        )
+        + "\n"
+    )
+
+
+def _append_usage_summary(lines: list[str], report: ReviewReport) -> None:
+    provider_usage = tuple(
+        record for record in report.usage if record.kind in (UsageKind.MEASURED, UsageKind.DECLARED)
+    )
+    if not provider_usage:
+        return
+
+    measured_usage = tuple(record for record in provider_usage if record.kind is UsageKind.MEASURED)
+    has_complete_measured_tokens = bool(measured_usage) and all(
+        record.input_tokens is not None and record.output_tokens is not None
+        for record in measured_usage
+    )
+    lines.append("Usage summary:")
+    if has_complete_measured_tokens:
+        input_tokens = sum(record.input_tokens or 0 for record in measured_usage)
+        output_tokens = sum(record.output_tokens or 0 for record in measured_usage)
+        lines.append(f"  Actual usage: {input_tokens:,} input / {output_tokens:,} output tokens")
+    else:
+        lines.append("  Actual usage: Provider did not return token usage; see account billing")
+
+    costs = tuple(record.cost_usd for record in provider_usage)
+    if costs and all(cost is not None for cost in costs):
+        total_cost = sum(
+            (cost for cost in costs if cost is not None),
+            start=Decimal("0"),
+        )
+        lines.append(f"  Cost: ${total_cost}")
+    else:
+        lines.append("  Cost: Provider did not return; see account billing")
 
 
 def render_text_report(report: ReviewReport) -> str:
@@ -190,6 +243,7 @@ def render_text_report(report: ReviewReport) -> str:
                 f"{_terminal_safe_text(record.model)} "
                 f"in={record.input_tokens} out={record.output_tokens} cost={cost}"
             )
+        _append_usage_summary(lines, report)
     lines.append(f"Summary: {_terminal_safe_text(report.summary)}")
     if report.error_detail:
         lines.append(f"Error: {_terminal_safe_text(report.error_detail)}")

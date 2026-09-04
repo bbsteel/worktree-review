@@ -195,12 +195,18 @@ Worktree Review must:
 15. Offer repair guidance without modifying the proposed change.
 16. Let users encode and version their review experience as policy stored outside
     the repository under review.
-17. Let users select the permitted provider and model and set a per-review budget.
+17. Let users select the permitted provider and model and apply a safe hard
+    output-token limit per provider call; advanced users may set a per-review
+    budget and token prices.
 18. Fail explicitly when a complete review cannot finish, including when the
     merge candidate cannot be constructed or the budget is exhausted.
 19. Make the review request key, attempt identifier, merge-candidate and Review
     identities when available, policy versions, model usage, cost, coverage, and
     failure behavior visible on every surface.
+20. Ship an inspectable, product-owned prompt hierarchy for every review
+    dimension. The hierarchy must keep product scope, safety boundaries, evidence
+    requirements, dimension focus, and structured-output requirements in ordered
+    layers that are never loaded from the reviewed repository.
 
 ## 7. First-stage boundaries
 
@@ -330,9 +336,12 @@ durable bypass.
 
 ### 8.7 User-owned compute
 
-Policy owners control the permitted provider, model, and per-review budget in the
-first stage. Later compute policies may add routing, quotas, scheduling, and
-fallback without changing Review Policy semantics.
+Policy owners control the permitted provider and model in the normal first-stage
+path. That path uses a safe hard output-token limit for each provider call and
+the provider account controls actual spend. Advanced Compute Policy may add a
+per-review budget, token prices, and uncertain-price behavior. Later compute
+policies may add routing, quotas, scheduling, and fallback without changing
+Review Policy semantics.
 
 ### 8.8 Bypass is not resolution
 
@@ -343,11 +352,13 @@ determined that the code was safe.
 ### 8.9 Policy never comes from the reviewed repository
 
 Review Policy and Compute Policy are stored under Worktree Review's control and are
-never loaded from the Git refs or merge tree under review. GitHub uses policy
-held by its Worktree Review installation; the CLI uses an explicitly selected trusted
-policy outside the reviewed repository. A proposed change can therefore never
-modify the rules that gate it. Repository instruction files such as `AGENTS.md`
-and `CLAUDE.md` are review context, not policy.
+never loaded from the Git refs or merge tree under review. GitHub uses policy held
+by its Worktree Review installation. The CLI uses its product-owned built-in Review
+Policy when no custom policy is supplied; any custom Review Policy or Compute Policy
+must come from an explicitly selected trusted location outside the reviewed
+repository. A proposed change can therefore never modify the rules that gate it.
+Repository instruction files such as `AGENTS.md` and `CLAUDE.md` are review
+context, not policy.
 
 ### 8.10 Repository content is data, not instructions
 
@@ -361,8 +372,10 @@ The first stage retrieves files and performs model analysis but does not execute
 proposed-change code, tests, build scripts, hooks, or binaries. The Review
 Worktree cannot access platform credentials, installation tokens, or
 model-provider credentials. Tool, file-system, and network permissions come only
-from trusted product policy. Findings and logs must redact complete credentials
-and other detected secrets.
+from trusted product policy or an explicitly selected local provider command;
+that command is never loaded from the reviewed repository and is not interpreted
+through a shell. Findings and logs must redact complete credentials and other
+detected secrets.
 
 Before a CLI review sends repository content to a remote model provider, it must
 identify the provider, model, data destination, and known retention behavior and
@@ -414,7 +427,9 @@ mechanism are deferred.
 For the first product stage, Compute Policy governs:
 
 - The permitted provider and model for a review.
-- The maximum budget per review.
+- The maximum output tokens for each provider call.
+- An optional per-review budget, token prices, and uncertain-price behavior for
+  advanced deployments.
 - Provider availability and rate-limit behavior.
 - The treatment of measured, declared, and estimated usage and cost.
 
@@ -451,6 +466,20 @@ completion, completed review coverage, and unresolved findings. It is not a raw
 model response. Model analysis may change which findings exist; the mapping from
 dimension completion, coverage, finding severity, evidence band, and bypass
 state to the gate decision must not vary by model.
+
+### 9.6 Product-owned prompt hierarchy
+
+Every review dimension uses an ordered prompt hierarchy owned by Worktree Review:
+
+1. Product role and exact merge-candidate scope.
+2. Untrusted-content and tool-safety boundary.
+3. Evidence and provenance requirements.
+4. The selected dimension's focus.
+5. Structured findings output requirements.
+
+The layers are inspectable product resources and are never read from the reviewed
+repository. They are prompt inputs, not Review Policy, and cannot grant a provider
+authority to mark a finding `verified`.
 
 ## 10. Review scope and context
 
@@ -690,7 +719,7 @@ and Worktree Review completes its review.
 
 ## 18. Budget exhaustion and incomplete review
 
-If the configured budget cannot cover a complete review:
+If an advanced configured dollar budget cannot cover a complete review:
 
 - The gate state is `Error`.
 - Worktree Review reports that the budget was exhausted.
@@ -729,7 +758,9 @@ Every surface presents:
   Policy, and gate evaluation.
 - Mandatory, optional-missing, excluded, unreviewable, and reviewed coverage.
 - Review Policy and Compute Policy versions.
-- Models used, measured usage, estimated or actual cost, and failure information.
+- Models used, measured usage, estimated or actual cost, and failure information;
+  normal local CLI runs must expose the planned call count, estimated input
+  tokens, and per-call output limit without inventing a dollar estimate.
 - The data destination, provider, model, and known retention behavior used for
   analysis.
 
@@ -756,17 +787,30 @@ deferred to product interaction design and technical design.
 
 ## 20. Model and cost control requirements
 
-For the first product stage, users must be able to configure:
+For the first product stage, the product must support:
 
 - The permitted provider and model.
-- A maximum budget per review.
+- A safe hard output-token limit for each provider call.
 - Behavior when the provider is unavailable or rate-limited.
-- Whether uncertain price or usage information permits a review to start.
+- Advanced configuration of a maximum budget per review, token prices, and
+  whether uncertain price or usage information permits a review to start.
+
+The normal local CLI path must also accept a minimal trusted configuration that
+specifies a remote provider, key, and optional model/URL, or an existing local
+CLI command. It uses a built-in Review Policy when none is supplied and derives
+a 4096-token maximum output per call. Before calls begin, it reports the planned
+call count, estimated input tokens, and per-call output limit. After completion,
+it reports provider-measured usage when available and does not invent a dollar
+cost when the provider does not return one; users can consult provider account
+billing for actual spend.
+More detailed compute controls remain available through trusted advanced
+configuration.
 
 When a provider does not expose reliable quota, usage, or price information,
 Worktree Review must distinguish measured usage, user-declared limits, current price
 estimates, and inferred availability. It must not present guesses as
-authoritative or silently exceed the configured budget.
+authoritative, silently exceed an advanced configured budget, or imply that a
+normal-path cost estimate is authoritative.
 
 Multi-provider routing, time-based scheduling, quota optimization, and automatic
 fallback are deferred until after the first product stage.
@@ -840,9 +884,13 @@ first product stage rather than entering this lifecycle.
 2. The CLI resolves the target and captures the proposed source once. A dirty
    worktree is represented by an immutable snapshot commit containing tracked
    and non-ignored untracked files; a clean worktree uses the current `HEAD`.
-   It then loads trusted policy from outside the reviewed repository and
-   identifies the configured model provider, data destination, and known
-   retention behavior.
+   It then loads the product-owned built-in Review Policy unless a custom trusted
+   Review Policy is supplied, loads the trusted provider configuration, and
+   identifies the configured model provider, data destination, and known retention
+   behavior. The normal provider configuration contains either a remote
+   provider/key/model with an optional URL or an existing local CLI command; it
+   uses the 4096-token per-call output limit and reports the call plan before
+   model calls.
 3. The CLI creates an independent attempt identifier and runs the shared review
    pipeline against those immutable Git objects.
 4. The CLI writes human-readable and machine-readable results and exits with the
@@ -881,18 +929,20 @@ This PRD does not decide:
 - GitHub App versus GitHub Action implementation.
 - Hosted versus self-hosted service topology.
 - The internal adapter interface shared by GitHub, CLI, and future platforms.
-- CLI packaging, command syntax, configuration discovery, and machine-readable
-  output schema.
+- Future CLI packaging choices and machine-readable output evolution beyond the
+  first-stage contract.
 - Merge-candidate construction and Review Worktree lifecycle mechanisms.
 - Queue, database, cache, or storage technology.
-- Review Policy and Compute Policy storage schemas.
+- Server storage mechanics for Review Policy and Compute Policy.
 - Context retrieval implementation.
-- Model prompting and analysis algorithms.
+- Exact prompt wording and analysis algorithms beyond the required prompt-layer
+  order.
 - Optional numerical-confidence calibration.
 - Credential brokering and read-only Review Worktree isolation mechanisms.
 - GitHub API, webhook, checks, and comment mechanics.
 - Later repository-platform adapter mechanics.
-- Configuration file schema.
+- Richer configuration fields and user prompt editing beyond the first-stage
+  minimal provider configuration and inspectable built-in prompt hierarchy.
 - Later-stage external-fork authorization and sandboxing.
 - Hosted private-repository provider disclosure, retention, and opt-out controls.
 - Incremental review and cross-candidate finding matching.

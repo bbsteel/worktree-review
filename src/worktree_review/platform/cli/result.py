@@ -63,6 +63,14 @@ class UsagePayload(BaseModel):
     note: str | None = None
 
 
+class ReviewCallPlanPayload(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    call_count: int
+    estimated_input_tokens: int | None = None
+    max_output_tokens_per_call: int
+
+
 class RequestKeyPayload(BaseModel):
     model_config = ConfigDict(frozen=True)
 
@@ -107,6 +115,7 @@ class CliResultDocument(BaseModel):
     draft_findings: tuple[dict[str, Any], ...]
     coverage: CoveragePayload
     usage: tuple[UsagePayload, ...]
+    call_plan: ReviewCallPlanPayload | None = None
     summary: str
     error_detail: str | None = None
 
@@ -210,6 +219,15 @@ def cli_result_document(report: ReviewReport) -> CliResultDocument:
                 }
                 for record in report.usage
             ],
+            "call_plan": (
+                None
+                if report.call_plan is None
+                else {
+                    "call_count": report.call_plan.call_count,
+                    "estimated_input_tokens": report.call_plan.estimated_input_tokens,
+                    "max_output_tokens_per_call": report.call_plan.max_output_tokens_per_call,
+                }
+            ),
             "summary": report.summary,
             "error_detail": report.error_detail,
         }

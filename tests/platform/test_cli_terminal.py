@@ -7,25 +7,32 @@ from worktree_review.core.identity import (
     ResolvedCommitPair,
     ReviewRequestKey,
 )
+from worktree_review.core.provider import UsageKind, UsageRecord
 from worktree_review.core.report import (
     ComputePolicyDisclosure,
     CoverageRecord,
     DimensionOutcome,
     ExecutionRecord,
     GateState,
+    ReviewCallPlan,
     ReviewReport,
     StageName,
     StageOutcome,
     StageStatus,
 )
-from worktree_review.platform.cli.terminal import render_text_report
+from worktree_review.platform.cli.terminal import render_call_plan, render_text_report
 
 
 def _policy_version(sha256: str) -> PolicyVersionIdentity:
     return PolicyVersionIdentity(semver="0.1.0", sha256=sha256 * 64)
 
 
-def _report(*, findings: tuple[Finding, ...], draft_findings: tuple[Finding, ...]) -> ReviewReport:
+def _report(
+    *,
+    findings: tuple[Finding, ...],
+    draft_findings: tuple[Finding, ...],
+    usage: tuple[UsageRecord, ...] = (),
+) -> ReviewReport:
     review_policy_version = _policy_version("a")
     compute_policy_version = _policy_version("b")
     resolved = ResolvedCommitPair(
@@ -69,8 +76,51 @@ def _report(*, findings: tuple[Finding, ...], draft_findings: tuple[Finding, ...
                 status=StageStatus.COMPLETED,
             ),
         ),
+        usage=usage,
         summary="Review completed.",
     )
+
+
+def test_terminal_call_plan_is_explicit_about_bounded_work() -> None:
+    rendered = render_call_plan(
+        ReviewCallPlan(
+            call_count=2,
+            estimated_input_tokens=38_000,
+            max_output_tokens_per_call=4096,
+        )
+    )
+
+    assert "Will make 2 model calls" in rendered
+    assert "Estimated input: about 38,000 tokens" in rendered
+    assert "Maximum output per call: 4,096 tokens" in rendered
+
+
+def test_terminal_report_renders_measured_usage_and_unknown_provider_cost() -> None:
+    report = _report(
+        findings=(),
+        draft_findings=(),
+        usage=(
+            UsageRecord(
+                kind=UsageKind.ESTIMATED,
+                input_tokens=38_000,
+                output_tokens=8_192,
+                provider="anthropic",
+                model="scripted",
+            ),
+            UsageRecord(
+                kind=UsageKind.MEASURED,
+                input_tokens=42_318,
+                output_tokens=2_104,
+                provider="anthropic",
+                model="scripted",
+            ),
+        ),
+    )
+
+    rendered = render_text_report(report)
+
+    assert "Actual usage: 42,318 input / 2,104 output tokens" in rendered
+    assert "Cost: Provider did not return; see account billing" in rendered
 
 
 def _finding(*, problem_statement: str, evidence_band: EvidenceBand) -> Finding:

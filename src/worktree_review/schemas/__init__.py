@@ -8,12 +8,14 @@ from typing import Any, Final, cast
 
 REVIEW_POLICY_SCHEMA_ID: Final = "review-policy.v1"
 COMPUTE_POLICY_SCHEMA_ID: Final = "compute-policy.v1"
+USER_CONFIG_SCHEMA_ID: Final = "user-config.v1"
 CLI_RESULT_SCHEMA_ID: Final = "cli-result.v1"
 DIMENSION_FINDINGS_SCHEMA_ID: Final = "dimension-findings.v1"
 
 _SCHEMA_FILES: Final[dict[str, str]] = {
     REVIEW_POLICY_SCHEMA_ID: "review-policy.v1.json",
     COMPUTE_POLICY_SCHEMA_ID: "compute-policy.v1.json",
+    USER_CONFIG_SCHEMA_ID: "user-config.v1.json",
     CLI_RESULT_SCHEMA_ID: "cli-result.v1.json",
     DIMENSION_FINDINGS_SCHEMA_ID: "dimension-findings.v1.json",
 }

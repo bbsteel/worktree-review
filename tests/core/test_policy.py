@@ -6,6 +6,7 @@ import pytest
 
 from worktree_review.core.errors import PolicyValidationError
 from worktree_review.core.policy import (
+    load_builtin_review_policy,
     load_compute_policy,
     load_review_policy,
     policy_version_identity,
@@ -18,6 +19,16 @@ def test_load_review_policy(policy_dir: Path) -> None:
     assert identity.semver == "0.1.0"
     assert len(identity.sha256) == 64
     assert policy.context.optional_globs == ("AGENTS.md", "CLAUDE.md")
+
+
+def test_builtin_review_policy_is_available_without_a_file() -> None:
+    policy, identity = load_builtin_review_policy()
+
+    assert policy.required_dimensions == ("correctness", "security")
+    assert policy.blocking_severities == ("critical", "major")
+    assert policy.context.optional_globs == ("AGENTS.md", "CLAUDE.md")
+    assert identity.semver == "0.1.0"
+    assert len(identity.sha256) == 64
 
 
 def test_policy_hash_is_stable_across_key_order(tmp_path: Path) -> None:
@@ -45,6 +56,7 @@ def test_load_compute_policy(policy_dir: Path) -> None:
     policy, identity = load_compute_policy(policy_dir / "compute-policy.yaml")
     assert policy.provider == "anthropic"
     assert identity.semver == "0.1.0"
+    assert policy.max_output_tokens_per_call == 8192
 
 
 def test_example_policies_validate() -> None:

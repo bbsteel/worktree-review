@@ -1,4 +1,4 @@
-"""LLM provider abstraction and pre-flight budget enforcement (TECH-DESIGN D7)."""
+"""LLM provider abstraction and bounded compute enforcement (TECH-DESIGN D7)."""
 
 from __future__ import annotations
 
@@ -10,11 +10,12 @@ from typing import Protocol
 
 from pydantic import BaseModel, ConfigDict
 
+from worktree_review.core.config import ProviderConfiguration
 from worktree_review.core.errors import BudgetExhaustedError, ProviderError
 from worktree_review.core.policy import ComputePolicy, ProviderName
 
 MILLION = Decimal("1000000")
-DECLARED_MAX_OUTPUT_TOKENS = 8192
+DEFAULT_MAX_OUTPUT_TOKENS_PER_CALL = 8192
 
 
 class UsageKind(StrEnum):
@@ -54,6 +55,7 @@ class ProviderClient(Protocol):
         user: str,
         response_schema: dict[str, object],
         dimension_id: str,
+        max_output_tokens: int = DEFAULT_MAX_OUTPUT_TOKENS_PER_CALL,
     ) -> tuple[dict[str, object], UsageRecord]:
         """Return the parsed structured payload and a measured usage record."""
         ...
@@ -130,6 +132,7 @@ def estimate_structured_call(
     provider_name: str,
     model: str,
     estimate_input_tokens: UsageRecord | None = None,
+    max_output_tokens: int = DEFAULT_MAX_OUTPUT_TOKENS_PER_CALL,
 ) -> UsageRecord:
     """Pre-flight estimate for one dimension call, including schema and declared output."""
 
@@ -143,19 +146,18 @@ def estimate_structured_call(
     return UsageRecord(
         kind=UsageKind.ESTIMATED,
         input_tokens=input_tokens,
-        output_tokens=DECLARED_MAX_OUTPUT_TOKENS,
+        output_tokens=max_output_tokens,
         provider=provider_name,
         model=model,
-        note=(
-            f"{note}; includes system/user/schema and declared max output "
-            f"{DECLARED_MAX_OUTPUT_TOKENS}"
-        ),
+        note=(f"{note}; includes system/user/schema and declared max output {max_output_tokens}"),
     )
 
 
 def preflight_budget(compute_policy: ComputePolicy, estimated: UsageRecord) -> BudgetDecision:
     """Refuse to start when estimated cost exceeds max budget, unless policy allows uncertainty."""
 
+    if compute_policy.max_budget_usd is None:
+        return BudgetDecision.START
     if estimated.cost_usd is None:
         if compute_policy.allow_start_under_uncertain_price:
             return BudgetDecision.START
@@ -219,8 +221,9 @@ class ScriptedProvider:
         user: str,
         response_schema: dict[str, object],
         dimension_id: str,
+        max_output_tokens: int = DEFAULT_MAX_OUTPUT_TOKENS_PER_CALL,
     ) -> tuple[dict[str, object], UsageRecord]:
-        del system, user, response_schema
+        del system, user, response_schema, max_output_tokens
         self.dimension_ids_called.append(dimension_id)
         payload = self.payloads.get(dimension_id)
         if payload is None:
@@ -242,10 +245,45 @@ def _require_env(name: str) -> str:
     return value
 
 
-def build_provider(compute_policy: ComputePolicy) -> ProviderClient:
+def build_provider(
+    compute_policy: ComputePolicy,
+    provider_configuration: ProviderConfiguration | None = None,
+) -> ProviderClient:
     """Construct the Compute-Policy-selected live provider. Tests should pass ScriptedProvider."""
 
     provider_name: ProviderName = compute_policy.provider
+    if provider_configuration is not None:
+        if provider_configuration.provider != provider_name:
+            raise ProviderError(
+                "provider configuration does not match the configured Compute Policy provider"
+            )
+        if provider_name == "local-cli":
+            from worktree_review.core.providers.local_cli import LocalCliProvider
+
+            return LocalCliProvider(
+                command=provider_configuration.command,
+                model=compute_policy.model,
+            )
+        if provider_configuration.api_key is None or provider_configuration.url is None:
+            raise ProviderError("remote provider configuration requires url and key")
+        api_key = provider_configuration.api_key.get_secret_value()
+        if provider_name == "openai":
+            from worktree_review.core.providers.openai import OpenAIProvider
+
+            return OpenAIProvider(
+                model=compute_policy.model,
+                api_key=api_key,
+                base_url=provider_configuration.url,
+            )
+        from worktree_review.core.providers.anthropic import AnthropicProvider
+
+        return AnthropicProvider(
+            model=compute_policy.model,
+            api_key=api_key,
+            base_url=provider_configuration.url,
+        )
+    if provider_name == "local-cli":
+        raise ProviderError("local-cli provider requires a user configuration command")
     if provider_name == "openai":
         from worktree_review.core.providers.openai import OpenAIProvider
 

@@ -12,6 +12,7 @@ from typer.testing import CliRunner
 from tests.gitutil import commit_files, head_oid
 from worktree_review.cli import app
 from worktree_review.platform.cli.exit_codes import CliExitCode
+from worktree_review.platform.cli.invocation import prepare_cli_review
 from worktree_review.platform.cli.result import cli_result_schema
 
 runner = CliRunner()
@@ -21,6 +22,116 @@ def test_help() -> None:
     result = runner.invoke(app, ["--help"])
     assert result.exit_code == 0
     assert "review" in result.stdout
+    assert "prompts" in result.stdout
+
+
+def test_prompts_show_effective_product_owned_hierarchy() -> None:
+    result = runner.invoke(app, ["prompts", "--dimension", "security"])
+
+    assert result.exit_code == 0
+    assert "Built-in prompt set: 0.1.0" in result.stdout
+    assert "Prompt layer 1: 00-product/role.md" in result.stdout
+    assert "Prompt layer 4: 30-dimensions/security.md" in result.stdout
+    assert "Prompt layer 5: 40-output/structured-findings.md" in result.stdout
+
+
+@pytest.mark.asyncio
+async def test_review_policy_defaults_to_builtin_policy(
+    git_repository: Path, policy_dir: Path
+) -> None:
+    prepared = await prepare_cli_review(
+        repository=git_repository,
+        compute_policy_path=policy_dir / "compute-policy.yaml",
+    )
+
+    assert prepared.review_policy_path is None
+    assert prepared.review_policy.required_dimensions == ("correctness", "security")
+    assert prepared.review_policy_version.semver == "0.1.0"
+
+
+@pytest.mark.asyncio
+async def test_minimal_user_config_supplies_provider_connection(
+    git_repository: Path, policy_dir: Path
+) -> None:
+    config_path = policy_dir / "config.yaml"
+    config_path.write_text(
+        "provider: anthropic\nurl: https://example.invalid\nkey: local-test-key\n",
+        encoding="utf-8",
+    )
+
+    prepared = await prepare_cli_review(
+        repository=git_repository,
+        config_path=config_path,
+    )
+
+    assert prepared.config_path == config_path.resolve()
+    assert prepared.compute_policy_path is None
+    assert prepared.provider_configuration is not None
+    assert prepared.provider_configuration.url == "https://example.invalid"
+    assert prepared.provider_configuration.api_key is not None
+    assert prepared.provider_configuration.api_key.get_secret_value() == "local-test-key"
+    assert prepared.review_policy.required_dimensions == ("correctness", "security")
+
+
+@pytest.mark.asyncio
+async def test_default_user_config_is_discovered_under_xdg_config_home(
+    git_repository: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_path = tmp_path / "xdg" / "worktree-review" / "config.yaml"
+    config_path.parent.mkdir(parents=True)
+    config_path.write_text(
+        "provider: openai\nurl: https://example.invalid/v1\nkey: local-test-key\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
+
+    prepared = await prepare_cli_review(repository=git_repository)
+
+    assert prepared.config_path == config_path
+    assert prepared.provider_configuration is not None
+    assert prepared.provider_configuration.provider == "openai"
+
+
+def test_local_cli_configuration_runs_the_shared_pipeline(
+    git_repository: Path, policy_dir: Path
+) -> None:
+    config_path = policy_dir / "local-config.yaml"
+    config_path.write_text(
+        "provider: local-cli\n"
+        "command:\n"
+        f"  - {sys.executable}\n"
+        "  - -c\n"
+        "  - >-\n"
+        "    import json, sys; request = json.load(sys.stdin); "
+        "assert request['max_output_tokens'] == 4096; "
+        "print(json.dumps({'findings': []}))\n",
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "review",
+            "--repository",
+            str(git_repository),
+            "--config",
+            str(config_path),
+            "--format",
+            "json",
+        ],
+    )
+
+    assert result.exit_code == int(CliExitCode.PASSED)
+    document = json.loads(result.stdout)
+    assert document["gate_state"] == "Passed"
+    assert document["compute_policy_disclosure"]["provider"] == "local-cli"
+    assert document["call_plan"] == {
+        "call_count": 2,
+        "estimated_input_tokens": document["call_plan"]["estimated_input_tokens"],
+        "max_output_tokens_per_call": 4096,
+    }
+    assert "Will make 2 model calls" in result.stderr
+    assert "Maximum output per call: 4,096 tokens" in result.stderr
 
 
 def test_missing_target_defaults_to_current_worktree(

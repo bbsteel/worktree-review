@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from enum import StrEnum
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from worktree_review.core.findings import Finding
 from worktree_review.core.identity import (
@@ -111,6 +111,16 @@ class ComputePolicyDisclosure(BaseModel):
     known_retention: str
 
 
+class ReviewCallPlan(BaseModel):
+    """The bounded provider work planned after context gathering and pre-flight."""
+
+    model_config = ConfigDict(frozen=True)
+
+    call_count: int = Field(ge=0)
+    estimated_input_tokens: int | None = Field(default=None, ge=0)
+    max_output_tokens_per_call: int = Field(ge=1)
+
+
 class ReviewReport(BaseModel):
     """Platform-independent result. Both CLI and GitHub adapters render this model."""
 
@@ -131,5 +141,6 @@ class ReviewReport(BaseModel):
     coverage: CoverageRecord | None = None
     dimension_outcomes: tuple[DimensionOutcome, ...] = ()
     usage: tuple[UsageRecord, ...] = ()
+    call_plan: ReviewCallPlan | None = None
     summary: str
     error_detail: str | None = None

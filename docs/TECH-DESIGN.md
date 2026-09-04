@@ -5,8 +5,10 @@
 - Companion document: `docs/PRD.md` (normative first-stage product contract)
 - Chinese translation: `docs/TECH-DESIGN.zh-CN.md`
 - Scope: architecture, language, third-party components, identity/attempt
-  persistence, and authoritative publication semantics. Detailed schemas,
-  prompting algorithms, and interaction design land in follow-up designs.
+  persistence, authoritative publication semantics, the first-stage user config,
+  and the inspectable prompt hierarchy. Detailed server schemas, exact prompt
+  wording beyond the required layers, and interaction design remain follow-up
+  work.
 
 This document resolves the decisions the PRD explicitly defers (PRD §23).
 Every choice below must preserve the PRD's normative invariants: exact merge
@@ -101,9 +103,11 @@ Rationale:
 │   worktree_review.core.candidate   merge construction (git merge-tree)│
 │   worktree_review.core.review_worktree  isolated Review Worktree     │
 │   worktree_review.core.policy      Review/Compute Policy load+validate│
+│   worktree_review.core.config      minimal provider config + defaults│
 │   worktree_review.core.context     mandatory/optional/excluded gather│
 │   worktree_review.core.dimension   required review dimensions        │
-│   worktree_review.core.provider    LLM provider abstraction + budget │
+│   worktree_review.core.provider    LLM provider abstraction + limits │
+│   worktree_review.prompts           product-owned prompt hierarchy    │
 │   worktree_review.core.findings    verify, dedup, classify           │
 │   worktree_review.core.gate        deterministic gate evaluation     │
 │   worktree_review.core.report      surface-neutral result model      │
@@ -208,15 +212,21 @@ versions (§8.2: Compute Policy changes do not invalidate standing
 decisions). Each document carries a semver; its *version identity* is
 `semver + SHA-256 of canonical bytes`. Storage:
 
-- CLI: an explicitly selected path outside the reviewed repository
-  (`--policy`, `--compute-policy`, or `~/.config/worktree-review/`). The CLI
-  refuses any policy path inside the worktree under review (§8.9).
+- CLI: `--policy` is optional and otherwise resolves to the product-owned built-in
+  Review Policy. Normal provider configuration is a minimal `--config` YAML file
+  at `~/.config/worktree-review/config.yaml` (or an explicit path), containing
+  a remote provider/key/model (with an optional custom URL) or a local CLI
+  command. It derives a hard 4096-token per-call output limit and no dollar
+  budget. `--compute-policy` remains an advanced path for deployments that need
+  direct compute controls. Every custom policy/config path must be outside the
+  reviewed repository (§8.9).
 - GitHub: per-installation rows in Postgres, edited outside the reviewed
   repo; every review records the exact policy version hashes it used.
 
-Both load paths validate against a versioned JSON Schema and fail closed on
-invalid policy. Repository files like `AGENTS.md`/`CLAUDE.md` are loaded
-only as untrusted *context* (§8.10), never as policy.
+All file-backed policy/config load paths validate against a versioned JSON Schema
+and fail closed on invalid input. The built-in Review Policy is product code and
+is validated at load time. Repository files like `AGENTS.md`/`CLAUDE.md` are
+loaded only as untrusted *context* (§8.10), never as policy or configuration.
 
 **D6 — Findings via provider-constrained structured output, with grounded
 evidence checks.**
@@ -241,8 +251,22 @@ using a sentinel path when no valid span exists. This keeps "self-reported
 model certainty is not evidence" (§13) enforceable in code rather than in
 prompts.
 
-**D7 — Budget enforcement in three points, fail-closed.**
-Compute Policy carries a max per-review budget (§9.3, §20):
+Prompt resources are product-owned package data under `worktree_review.prompts`.
+Each dimension composes the ordered layers `00-product`, `10-safety`, `20-review`,
+`30-dimensions/<dimension>`, and `40-output`; the CLI exposes the effective layers
+through `worktree-review prompts --dimension <id>`. Prompt resources are never
+loaded from the reviewed repository and are not a policy override mechanism.
+
+**D7 — Bounded provider calls and advanced budget enforcement.**
+Every Compute Policy carries a hard maximum output token count per provider call.
+The normal `--config` path derives `max_output_tokens_per_call: 4096`, records
+input estimates without pricing them, and relies on the provider account for
+actual spend. It reports the planned call count, estimated input tokens, and
+per-call output limit before the first call; measured usage and cost availability
+after completion remain explicit.
+
+Advanced `--compute-policy` carries an optional per-review budget for internal
+derived policies and a required budget in the external advanced schema (§9.3, §20):
 
 1. *Pre-flight*: estimate input tokens of assembled context with the
    provider tokenizer; if estimate × versioned price table exceeds budget,
@@ -255,7 +279,8 @@ Compute Policy carries a max per-review budget (§9.3, §20):
    is disclosed; findings stay visible but cannot be bypassed (§18).
 
 Usage records distinguish measured, declared, and estimated values (§9.3)
-and are persisted per review attempt for audit.
+and are persisted per review attempt for audit. A normal configuration does not
+turn an unknown provider price into a prediction or a local dollar budget.
 
 **D8 — Server state in PostgreSQL; queue via pgqueuer on the same database.**
 The GitHub service needs durable standing decisions, bypass audit records,
@@ -334,6 +359,10 @@ as the mechanism that keeps native overrides visible.
   machine-readable schema `worktree-review.cli.result/v1` (§19). Pre-Alpha
   may update identifiers in that schema in place; Review Worktree
   preparation is `prepare-review-worktree`, not `prepare-workspace`.
+- The CLI reports its call plan before provider calls and includes it with usage
+  records in the machine-readable result. Normal configuration reports measured
+  input/output tokens when the provider returns them and otherwise directs the
+  user to provider account billing for cost.
 - Exit codes: `0` = `Passed`, `1` = `Blocked`, `2` = `Error`,
   `3` = invalid invocation (unresolvable refs, policy inside repo, git too
   old, incompatible source-selection flags, or an unrepresentable worktree
@@ -346,10 +375,15 @@ as the mechanism that keeps native overrides visible.
   and reports its immutable snapshot commit as `proposed_head_oid`. The target
   and proposed source are captured once before the shared pipeline starts; later
   changes are outside the result.
-- Before any remote transmission, the CLI prints provider, model, data
-  destination, and known retention behavior, and requires that transmission
-  to be explicitly permitted in trusted Compute Policy (§8.11). No feedback
-  or telemetry leaves the CLI without explicit opt-in (§22).
+- `--policy` is optional and uses the built-in Review Policy when omitted. The
+  normal `--config` file selects a remote provider/key/model with an optional
+  custom URL, or a local CLI command; it derives a 4096-token per-call output
+  limit and no dollar budget. The advanced `--compute-policy` path remains
+  available for direct compute control. Before any remote transmission, the CLI
+  prints provider, model, data destination, and known retention behavior. No
+  feedback or telemetry leaves the CLI without explicit opt-in (§22).
+- `worktree-review prompts --dimension <id>` prints the trusted product-owned
+  prompt hierarchy used for that dimension.
 - Every invocation generates an attempt ID. Construction failures emit the
   Review Request Key with `merge_tree_oid: null`; successful construction also
   emits Merge Candidate Identity and Review Identity. No CLI attempt is marked
@@ -424,7 +458,7 @@ fields. GitHub redelivery is acknowledged idempotently by the delivery key.
 | Job queue | `pgqueuer` | Postgres-backed, async-native; unique jobs by attempt ID; no extra infra (D8). |
 | Anthropic SDK | `anthropic` (official) | Structured output via tool use; usage metering fields; token-count API. |
 | OpenAI SDK | `openai` (official) | Structured outputs; second permitted provider. |
-| Token counting | `tiktoken` (OpenAI models only) + Anthropic token-count endpoint | Pre-flight budget estimation is per-provider (D7); measured usage from API responses is always authoritative. |
+| Token counting | `tiktoken` (OpenAI models only) + Anthropic token-count endpoint | Pre-flight input estimation is per-provider (D7); measured usage from API responses is always authoritative. |
 | Secret redaction | `detect-secrets` (as library) | Redact credentials/secrets from findings and logs (§8.11). `gitleaks` via subprocess is the stronger-detection alternative if needed. |
 | Retry/resilience | `tenacity` | Provider rate-limit and transient-failure behavior per Compute Policy (§20). |
 | Structured logging | `structlog` | JSON renderer; attempt ID on every record. |

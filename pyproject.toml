@@ -78,6 +78,9 @@ include = [
   "/src",
   "/tests",
   "/README.md",
+  "/USAGE.md",
+  "/USAGE.zh-CN.md",
+  "/config.example.yaml",
   "/pyproject.toml",
 ]
 

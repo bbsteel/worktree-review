@@ -120,10 +120,14 @@ Worktree Review 必须：
 14. CLI 对 `Passed` 成功退出，对 `Blocked`、`Error` 和无效调用使用不同非零退出码。
 15. 提供修复建议但不修改 proposed change。
 16. 允许用户把审查经验编码、版本化并存放在被审查仓库之外。
-17. 允许选择 provider、model 和单次预算。
+17. 允许选择 provider、model 并为每次 Provider 调用使用安全的硬性输出 token 上限；
+    高级用户可以设置单次检视预算和 token 价格。
 18. merge 无法构造、预算耗尽或完整审查无法结束时明确失败。
 19. 每个界面展示 Review Request Key、Attempt ID、可用时的候选及审查身份、策略
     版本、模型用量、成本、覆盖和失败信息。
+20. 为每个 review dimension 提供可检查、由产品拥有的提示词层级。层级必须按顺序保留
+    产品范围、安全边界、证据要求、dimension 关注点和结构化输出要求，且永远不能从被
+    审查仓库加载。
 
 ## 7. 第一阶段边界
 
@@ -188,8 +192,9 @@ Standard Review 使用 Review Policy 要求的所有相关上下文，不能以�
 
 ### 8.7 用户拥有算力配置
 
-第一阶段用户控制 provider、model 与单次预算；以后可以增加路由、配额与调度而不改变
-Review Policy 语义。
+普通第一阶段路径由用户控制 provider 和 model，并对每次 Provider 调用使用安全的硬性输出
+token 上限；真实支出由 Provider 账户控制。高级 Compute Policy 可以增加每次检视预算、token
+价格和价格不确定时的启动策略。以后可以增加路由、配额与调度而不改变 Review Policy 语义。
 
 ### 8.8 Bypass 不等于解决
 
@@ -197,7 +202,10 @@ Bypass 表示授权用户接受风险，不等于 finding 被撤回或代码安�
 
 ### 8.9 策略永不来自被审查仓库
 
-Review/Compute Policy 永不来自被审查 Git refs；仓库指令文件只是 untrusted context。
+Review/Compute Policy 永不来自被审查 Git refs。CLI 未提供自定义策略时使用产品拥有的
+内置 Review Policy；自定义 Review Policy 或 Compute Policy 必须来自调用者选择的、位于
+被审查仓库之外的可信位置。因此 proposed change 不能修改自己的门禁规则。仓库指令文件
+只是 untrusted context，不是策略。
 
 ### 8.10 仓库内容是数据，不是指令
 
@@ -206,8 +214,9 @@ Review/Compute Policy 永不来自被审查 Git refs；仓库指令文件只是 
 ### 8.11 第一阶段分析只读
 
 不执行代码、测试、构建、hook 或 binary；凭据不可进入 Review Worktree，finding 与
-日志必须脱敏。CLI 向远程模型发送内容前必须展示 provider、model、目的地和已知保留
-行为，并由可信配置明确允许。
+日志必须脱敏。工具、文件系统和网络权限只能来自可信产品策略或调用者明确选择的本地
+Provider command；command 永不从被审查仓库加载，也不会经过 shell 解释。CLI 向远程模型
+发送内容前必须展示 provider、model、目的地和已知保留行为，并由可信配置明确允许。
 
 ### 8.12 产品语义可移植
 
@@ -229,8 +238,9 @@ commit 与结果 tree。它是产品层检视环境，不一定是 Git linked wo
 
 ### 9.3 Compute Policy
 
-第一阶段控制 provider/model、单次预算、可用性和限流行为，以及 measured/declared/
-estimated 用量与成本的处理。它不能改变严重度、证据或阻断语义。
+第一阶段控制 provider/model、每次调用的最大输出 token、可用性和限流行为，以及
+measured/declared/estimated 用量与成本的处理。高级 Compute Policy 还可以控制单次检视预算、
+token 价格和价格不确定时的启动策略。它不能改变严重度、证据或阻断语义。
 
 ### 9.4 Finding
 
@@ -243,6 +253,19 @@ estimated 用量与成本的处理。它不能改变严重度、证据或阻断�
 
 Gate 是 required-dimension 完成情况、覆盖和未解决 finding 的确定性策略计算，不是
 模型原始回答。不同模型不得改变映射规则。
+
+### 9.6 产品拥有的提示词层级
+
+每个 review dimension 使用 Worktree Review 拥有的有序提示词层级：
+
+1. 产品角色和精确 merge-candidate scope。
+2. 不可信内容和工具安全边界。
+3. 证据及 provenance 要求。
+4. 所选 dimension 的关注范围。
+5. 结构化 finding 输出要求。
+
+这些层级是可检查的产品资源，永远不会从被审查仓库读取。它们是 prompt 输入而不是
+Review Policy，也不能赋予 Provider 把 finding 标为 `verified` 的权限。
 
 ## 10. 审查范围与上下文
 
@@ -360,7 +383,7 @@ finding 不可 bypass，因为 `Error` 代表未知风险。
 
 ## 18. 预算耗尽与不完整审查
 
-预算无法覆盖完整审查时：gate 为 `Error`；报告预算耗尽；展示 completed、excluded、
+高级配置的美元预算无法覆盖完整审查时：gate 为 `Error`；报告预算耗尽；展示 completed、excluded、
 optional-missing 和 unreviewed 范围；已发现 finding 可展示但不能 bypass；不能产生
 pass。用户可修改 Compute Policy，并对同一 Review Request/Identity 创建新 Attempt。
 
@@ -380,7 +403,8 @@ unreviewable、Review Worktree 缺失、merge conflict 等同样失败关闭。�
 - merge 成功时的 Merge Candidate/Review Identity；失败时明确 tree 不可用及构造错误。
 - 候选构造、Review Worktree 准备、context、每个 dimension 和 gate 阶段的完成/失败状态。
 - mandatory、optional-missing、excluded、unreviewable、reviewed coverage。
-- Review/Compute Policy 版本、模型、用量、估计/实际成本和失败信息。
+- Review/Compute Policy 版本、模型、用量、估计/实际成本和失败信息；普通本地 CLI 还要
+  暴露计划调用次数、预计输入 token 和单次输出上限，不得编造美元费用预估。
 - 分析数据目的地、provider、model 和已知 retention。
 
 GitHub 还发布 inline finding、持久 check、finding bypass 和可观察的原生 override。
@@ -393,10 +417,16 @@ Worktree 准备的共享 pipeline stage 现为 `prepare-review-worktree`，取�
 
 ## 20. 模型与成本控制
 
-第一阶段可配置 provider/model、单次最大预算、provider 不可用/限流行为，以及价格或
-用量不确定时是否允许开始。必须区分 measured usage、用户声明限制、当前价格估计和
-推断可用性，不得把猜测当权威或静默超预算。多 provider 路由、定时、配额优化和自动
-fallback 延后。
+第一阶段必须支持配置 provider/model 和每次调用的安全硬性输出 token 上限；高级配置还可以
+配置单次检视预算、token 价格，以及价格或用量不确定时是否允许开始。必须区分 measured
+usage、用户声明限制、当前价格估计和推断可用性，不得把猜测当权威、静默超过高级预算，或
+暗示普通路径的费用预估是权威。多 provider 路由、定时、配额优化和自动 fallback 延后。
+
+本地 CLI 的普通路径还必须接受一份最小可信配置，指定远程 Provider、key 和可选的 model/URL，
+或本机已有的 CLI command；没有提供自定义 Review Policy 时使用产品拥有的内置策略，并派生
+每次调用最多 4096 个输出 token。调用前要报告计划调用次数、预计输入 token 和单次输出上限；
+完成后报告 Provider 返回的 measured usage；Provider 未返回费用时不得自行编造费用，用户可
+查看 Provider 账户账单。更详细的 Compute 控制仍可通过可信的高级配置提供。
 
 ## 21. Review 生命周期
 
@@ -441,7 +471,10 @@ Draft PR 无 standing pass；外部 fork 与托管私有仓库第一阶段明确
    默认是当前工作树 snapshot；`--proposed` 用于选择显式的已提交 ref。
 2. CLI 在调用时一次性解析 target 并捕获 proposed source。dirty worktree 会被表示为包含
    已跟踪和未被忽略未跟踪文件的不可变 snapshot commit；clean worktree 则使用当前
-   `HEAD`。随后加载仓库外可信策略，并展示 provider/目的地/retention。
+   `HEAD`。随后在未提供自定义 Review Policy 时加载产品拥有的内置策略，加载可信的 Provider
+   配置，并展示 provider/目的地/retention。普通 Provider 配置二选一包含远程 provider/key/model
+   （可选 URL）或本机已有的 CLI command；使用每次最多 4096 个输出 token，并在模型调用前展示
+   call plan。
 3. 创建独立 Attempt ID，对这些不可变 Git objects 运行共享 pipeline。
 4. 写人类/机器结果，以 `Passed`、`Blocked`、`Error` 或 invalid invocation 对应退出。
 
@@ -458,11 +491,14 @@ CLI 未显式 opt-in 时不得发送反馈、声明模型请求之外的源码�
 
 ## 23. 明确延后的技术决定
 
-本 PRD 不决定：GitHub App/Action 具体机制、托管拓扑、平台 adapter interface、CLI
-打包/语法/配置发现/机器 schema、候选构造与 Review Worktree 机制、队列/数据库/cache、策略
-schema、上下文检索、prompt/分析算法、可选置信校准、凭据代理和隔离、GitHub API/
+本 PRD 不决定：GitHub App/Action 具体机制、托管拓扑、平台 adapter interface、第一阶段
+契约之外的 CLI 打包和机器格式演进、候选构造与 Review Worktree 机制、队列/数据库/cache、
+服务器端策略存储、上下文检索、必需提示词层级之外的具体 prompt/分析算法、可选置信校准、凭据代理和隔离、GitHub API/
 webhook/check/comment 细节、未来平台 adapter、外部 fork sandbox、私有仓库披露、增量
 审查、跨候选 finding、Deep Review、互动重评和多 provider 路由。
+
+更丰富的配置字段和用户提示词编辑器也延后；第一阶段提供最小 Provider 配置和可检查的
+内置提示词层级。
 
 授权 retry 的具体 UI 也由 interaction design 决定，但“新建 Attempt、先撤销旧 standing
 decision、发布时原子校验权威”的语义不得改变。
