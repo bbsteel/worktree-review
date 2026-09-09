@@ -13,6 +13,7 @@ from worktree_review.application.review_events import ReviewEvent
 from worktree_review.application.review_runs import OverviewAggregate, ReviewRunRecord
 from worktree_review.core.errors import InvalidInvocationError
 from worktree_review.core.report import ReviewReport
+from worktree_review.platform.cli.result import cli_result_document
 
 
 class IdempotencyConflictError(InvalidInvocationError):
@@ -149,7 +150,9 @@ class SqliteReviewRunStore:
 
         def _save() -> None:
             now = datetime.now(UTC).isoformat()
-            payload = report.model_dump_json()
+            # Persist the canonical versioned result document — the same shape
+            # the CLI emits and GET /result serves — never the internal report.
+            payload = cli_result_document(report).model_dump_json(by_alias=True)
             with closing(self._connect()) as connection:
                 existing = connection.execute(
                     "SELECT attempt_id FROM review_results WHERE attempt_id = ?",

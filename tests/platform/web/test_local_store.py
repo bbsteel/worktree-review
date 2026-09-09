@@ -125,6 +125,17 @@ async def test_retry_creates_a_new_attempt_and_result_is_immutable(
     run = await store.get_run("a1")
     assert run is not None
     assert run.result_json is not None
+    # The stored result is the canonical versioned document (PM-100): it must
+    # validate against the CLI result schema, not leak internal report fields.
+    import json
+
+    import jsonschema
+
+    from worktree_review.schemas import CLI_RESULT_SCHEMA_ID, load_schema
+
+    jsonschema.validate(
+        instance=json.loads(run.result_json), schema=load_schema(CLI_RESULT_SCHEMA_ID)
+    )
     retry = await store.get_run("a2")
     assert retry is not None
     assert retry.result_json is None
