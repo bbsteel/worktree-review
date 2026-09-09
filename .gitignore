@@ -30,6 +30,8 @@ htmlcov/
 # Local runtime
 .cache/
 *.log
+.npm-cache/
+.npm-logs/
 
 # Project-level competitor memory (never commit)
 docs/competitors.md
