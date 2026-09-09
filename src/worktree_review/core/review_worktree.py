@@ -290,12 +290,18 @@ def _prepare_container(destination: Path | None) -> tuple[Path, bool]:
 async def materialize_review_worktree(
     candidate: MergeCandidateIdentity,
     *,
+    repository_path: Path,
     destination: Path | None = None,
     owner_note: str = "invoking user",
 ) -> ReviewWorktree:
-    """Materialize merge-tree blobs into a fresh Review Worktree, then chmod read-only."""
+    """Materialize merge-tree blobs into a fresh Review Worktree, then chmod read-only.
 
-    repository = Path(candidate.source_repository)
+    Git object reads use ``repository_path``. ``candidate.source_repository`` is identity.
+    """
+
+    repository = repository_path
+    if not repository.is_dir():
+        raise ReviewWorktreeError(f"source repository does not exist: {repository}")
     container_root, created_destination = _prepare_container(destination)
     assert_acceptable_review_worktree_destination(container_root)
     tree_root = container_root / REVIEW_TREE_DIRECTORY_NAME

@@ -54,6 +54,12 @@ def git_repository(tmp_path: Path) -> Path:
     return repo
 
 
+@pytest.fixture(autouse=True)
+def isolate_web_state_paths(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("WORKTREE_REVIEW_WEB_DATABASE", str(tmp_path / "web.sqlite"))
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "xdg-state"))
+
+
 @pytest.fixture
 def policy_dir(tmp_path: Path) -> Path:
     directory = tmp_path / "trusted-policy"

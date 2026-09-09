@@ -30,10 +30,13 @@ async def test_review_worktree_is_read_only_and_contains_tree(
             target_head_oid=oid,
             proposed_ref="HEAD",
             proposed_head_oid=oid,
-        )
+        ),
+        repository_path=git_repository,
     )
     destination = tmp_path / "worktree-review-test"
-    review_worktree = await materialize_review_worktree(candidate, destination=destination)
+    review_worktree = await materialize_review_worktree(
+        candidate, repository_path=git_repository, destination=destination
+    )
     readme = review_worktree.root / "README"
     assert readme.read_text(encoding="utf-8") == "hello\n"
     with pytest.raises(PermissionError):
@@ -77,7 +80,9 @@ async def test_nonempty_destination_is_rejected(git_repository: Path, tmp_path: 
     dest.mkdir()
     (dest / "already").write_text("nope\n", encoding="utf-8")
     with pytest.raises(ReviewWorktreeError, match="not empty"):
-        await materialize_review_worktree(candidate, destination=dest)
+        await materialize_review_worktree(
+            candidate, repository_path=git_repository, destination=dest
+        )
 
 
 def _candidate_for_heads(repository: Path, target_oid: str, proposed_oid: str):
@@ -88,7 +93,8 @@ def _candidate_for_heads(repository: Path, target_oid: str, proposed_oid: str):
             target_head_oid=target_oid,
             proposed_ref="HEAD",
             proposed_head_oid=proposed_oid,
-        )
+        ),
+        repository_path=repository,
     )
 
 
@@ -109,7 +115,9 @@ async def test_export_ignore_does_not_omit_tree_content(
     git(git_repository, "checkout", "main")
     candidate = await _candidate_for_heads(git_repository, target_oid, proposed_oid)
     review_worktree = await materialize_review_worktree(
-        candidate, destination=tmp_path / "worktree-review-export"
+        candidate,
+        repository_path=git_repository,
+        destination=tmp_path / "worktree-review-export",
     )
     try:
         assert (review_worktree.root / "secret.txt").read_text(encoding="utf-8") == "classified\n"
@@ -135,7 +143,9 @@ async def test_export_subst_does_not_rewrite_blob_content(
     git(git_repository, "checkout", "main")
     candidate = await _candidate_for_heads(git_repository, target_oid, proposed_oid)
     review_worktree = await materialize_review_worktree(
-        candidate, destination=tmp_path / "worktree-review-subst"
+        candidate,
+        repository_path=git_repository,
+        destination=tmp_path / "worktree-review-subst",
     )
     try:
         assert (review_worktree.root / "subst.txt").read_text(encoding="utf-8") == (
@@ -161,7 +171,9 @@ async def test_repo_marker_symlink_does_not_overwrite_external_file(
     git(git_repository, "checkout", "main")
     candidate = await _candidate_for_heads(git_repository, target_oid, proposed_oid)
     review_worktree = await materialize_review_worktree(
-        candidate, destination=tmp_path / "worktree-review-marker"
+        candidate,
+        repository_path=git_repository,
+        destination=tmp_path / "worktree-review-marker",
     )
     try:
         assert victim.read_text(encoding="utf-8") == "untouched\n"

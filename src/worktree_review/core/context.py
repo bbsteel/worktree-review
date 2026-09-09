@@ -284,10 +284,17 @@ async def gather_context(
     review_worktree: ReviewWorktree,
     candidate: MergeCandidateIdentity,
     review_policy: ReviewPolicy,
+    *,
+    repository_path: Path,
 ) -> GatheredContext:
-    """Assemble quoted, delimited context from the merge tree and object store."""
+    """Assemble quoted, delimited context from the merge tree and object store.
 
-    repository = Path(candidate.source_repository)
+    Git reads use ``repository_path``. ``candidate.source_repository`` is identity.
+    """
+
+    repository = repository_path
+    if not repository.is_dir():
+        raise ContextGatherError(f"source repository does not exist: {repository}")
     context_policy = review_policy.context
     if not review_worktree.root.is_dir():
         raise ContextGatherError(f"Review Worktree does not exist: {review_worktree.root}")

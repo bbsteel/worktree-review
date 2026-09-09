@@ -22,7 +22,10 @@ class PolicyVersionIdentity(BaseModel):
 
 
 class ReviewRequestKey(BaseModel):
-    """Pre-construction key (PRD terminology). Exists even when merge construction fails."""
+    """Pre-construction key (PRD terminology). Exists even when merge construction fails.
+
+    ``source_repository`` is canonical repository identity, never an execution Path.
+    """
 
     model_config = ConfigDict(frozen=True)
 
@@ -34,7 +37,11 @@ class ReviewRequestKey(BaseModel):
 
 
 class ResolvedCommitPair(BaseModel):
-    """Target and proposed heads resolved to immutable commits, before merge."""
+    """Target and proposed heads resolved to immutable commits, before merge.
+
+    ``source_repository`` is canonical identity. Git execution uses a separate
+    ``repository_path`` supplied by the application layer.
+    """
 
     model_config = ConfigDict(frozen=True)
 
@@ -47,7 +54,10 @@ class ResolvedCommitPair(BaseModel):
 
 
 class MergeCandidateIdentity(BaseModel):
-    """Exact merge candidate: both parents and the resulting tree OID."""
+    """Exact merge candidate: both parents and the resulting tree OID.
+
+    ``source_repository`` remains canonical identity and must not be passed to Git as cwd.
+    """
 
     model_config = ConfigDict(frozen=True)
 
