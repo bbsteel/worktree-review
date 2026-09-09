@@ -24,9 +24,7 @@ async def _store(tmp_path: Path) -> SqliteReviewRunStore:
 @pytest.mark.asyncio
 async def test_unregistered_path_is_rejected(tmp_path: Path, git_repository: Path) -> None:
     store = await _store(tmp_path)
-    await register_local_repository(
-        store, requested_root=git_repository, display_name="demo"
-    )
+    await register_local_repository(store, requested_root=git_repository, display_name="demo")
     outsider = tmp_path / "other"
     outsider.mkdir()
     with pytest.raises(TrustBoundaryError, match="not a registered"):
@@ -36,9 +34,7 @@ async def test_unregistered_path_is_rejected(tmp_path: Path, git_repository: Pat
 @pytest.mark.asyncio
 async def test_policy_inside_repository_is_rejected(tmp_path: Path, git_repository: Path) -> None:
     store = await _store(tmp_path)
-    await register_local_repository(
-        store, requested_root=git_repository, display_name="demo"
-    )
+    await register_local_repository(store, requested_root=git_repository, display_name="demo")
     inside = git_repository / "review-policy.yaml"
     inside.write_text(
         "schema: worktree-review.review-policy/v1\nversion: 0.1.0\n",
