@@ -143,6 +143,50 @@ def check_run_annotation_batches(
     ) or ((),)
 
 
+def build_queued_check_run_payload(
+    *,
+    attempt_id: str,
+    head_sha: str,
+    details_url: str | None = None,
+) -> CheckRunPayload:
+    """Queued Check created before the worker runs the Pipeline."""
+
+    fingerprint = attempt_fingerprint(attempt_id)
+    return CheckRunPayload(
+        head_sha=head_sha,
+        status=CheckRunStatus.QUEUED,
+        conclusion=None,
+        details_url=details_url,
+        external_id=f"worktree-review:{attempt_id}",
+        output=CheckRunOutput(
+            title=f"{CHECK_RUN_NAME}: queued",
+            summary=f"Worktree Review queued (attempt {fingerprint}).",
+            text=f"Attempt `{attempt_id}` is queued and has not started.",
+        ),
+    )
+
+
+def build_in_progress_check_run_payload(
+    *,
+    attempt_id: str,
+    head_sha: str,
+    details_url: str | None = None,
+) -> CheckRunPayload:
+    fingerprint = attempt_fingerprint(attempt_id)
+    return CheckRunPayload(
+        head_sha=head_sha,
+        status=CheckRunStatus.IN_PROGRESS,
+        conclusion=None,
+        details_url=details_url,
+        external_id=f"worktree-review:{attempt_id}",
+        output=CheckRunOutput(
+            title=f"{CHECK_RUN_NAME}: in progress",
+            summary=f"Worktree Review is running (attempt {fingerprint}).",
+            text=f"Attempt `{attempt_id}` is in progress.",
+        ),
+    )
+
+
 def build_check_run_payload(
     report: ReviewReport,
     *,
