@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useParams, useSearchParams } from 'react-router'
 import { Badge } from '../components/ui/badge.tsx'
+import { Button } from '../components/ui/button.tsx'
 import { EmptyState } from '../components/ui/empty-state.tsx'
 import { Skeleton } from '../components/ui/skeleton.tsx'
 import { Tab, TabList, TabPanel, Tabs } from '../components/ui/tabs.tsx'
@@ -45,6 +46,7 @@ export function ReviewDetailPage({ dataSource }: ReviewDetailPageProps) {
   const [searchParams, setSearchParams] = useSearchParams()
   const activeTab = readTabParam(searchParams)
   const [result, setResult] = useState<LoadResult | null>(null)
+  const [reloadIndex, setReloadIndex] = useState(0)
 
   useEffect(() => {
     if (!attemptId) {
@@ -74,7 +76,7 @@ export function ReviewDetailPage({ dataSource }: ReviewDetailPageProps) {
     return () => {
       cancelled = true
     }
-  }, [source, attemptId])
+  }, [source, attemptId, reloadIndex])
 
   if (!attemptId) {
     return (
@@ -113,7 +115,19 @@ export function ReviewDetailPage({ dataSource }: ReviewDetailPageProps) {
       <main className="mx-auto w-full max-w-6xl px-6 py-6">
         <EmptyState
           title="Could not load this review"
-          description={`Loading attempt "${attemptId}" failed. No new attempt was created; reload the page to try again.`}
+          description={`Loading attempt "${attemptId}" failed. Retrying only reloads the same attempt — it never creates a new one.`}
+          action={
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => {
+                setResult(null)
+                setReloadIndex((index) => index + 1)
+              }}
+            >
+              Retry loading
+            </Button>
+          }
         />
       </main>
     )

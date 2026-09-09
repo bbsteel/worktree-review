@@ -2,6 +2,13 @@ import type { ReviewRunView } from '../../domain/review.ts'
 import { formatCostUsd, formatDurationMs, formatTokenCount } from './formatting.ts'
 
 /**
+ * Narrow viewports convert each row to a labeled list via data-th pseudo
+ * labels instead of squeezing columns (design 21.2).
+ */
+const CELL_CLASS =
+  'py-2 pr-3 text-text-primary max-sm:flex max-sm:items-baseline max-sm:justify-between max-sm:gap-3 max-sm:py-0.5 max-sm:pr-0 max-sm:text-left max-sm:before:content-[attr(data-th)] max-sm:before:text-meta max-sm:before:uppercase max-sm:before:tracking-wide max-sm:before:text-text-secondary'
+
+/**
  * Usage tab (design 13.10). Estimated and actual cost are always separated;
  * unknown values render as Unknown with a reason, never as $0.00. Call
  * identity fields that the result schema did not record render as
@@ -61,8 +68,8 @@ export function UsageTab({ run }: { run: ReviewRunView }) {
           </p>
         ) : (
           <div className="mt-3 overflow-x-auto">
-            <table className="w-full min-w-[720px] border-collapse text-sm">
-              <thead>
+            <table className="w-full min-w-[720px] border-collapse text-sm max-sm:block max-sm:min-w-0">
+              <thead className="max-sm:sr-only">
                 <tr className="border-b border-border text-left text-meta uppercase tracking-wide text-text-secondary">
                   <th scope="col" className="py-2 pr-3 font-medium">Call</th>
                   <th scope="col" className="py-2 pr-3 font-medium">Dimension</th>
@@ -74,29 +81,34 @@ export function UsageTab({ run }: { run: ReviewRunView }) {
                   <th scope="col" className="py-2 text-right font-medium">Cost</th>
                 </tr>
               </thead>
-              <tbody>
+              <tbody className="max-sm:block">
                 {usage.calls.map((call, index) => (
-                  <tr key={call.ordinal ?? index} className="border-b border-border last:border-b-0">
-                    <td className="py-2 pr-3 font-mono text-text-primary tabular-nums">
+                  <tr
+                    key={call.ordinal ?? index}
+                    className="border-b border-border last:border-b-0 max-sm:flex max-sm:flex-col max-sm:gap-1 max-sm:py-3"
+                  >
+                    <td data-th="Call" className={`${CELL_CLASS} font-mono tabular-nums`}>
                       {call.ordinal !== null ? `#${call.ordinal}` : 'Not reported'}
                     </td>
-                    <td className="py-2 pr-3 font-mono text-text-primary">
+                    <td data-th="Dimension" className={`${CELL_CLASS} font-mono`}>
                       {call.dimensionId ?? 'Not reported'}
                     </td>
-                    <td className="py-2 pr-3 font-mono text-text-primary">
+                    <td data-th="Provider / Model" className={`${CELL_CLASS} font-mono`}>
                       {call.provider} / {call.model}
                     </td>
-                    <td className="py-2 pr-3 text-text-primary tabular-nums">
+                    <td data-th="Elapsed" className={`${CELL_CLASS} tabular-nums`}>
                       {call.elapsedMs !== null ? formatDurationMs(call.elapsedMs) : 'Not reported'}
                     </td>
-                    <td className="py-2 pr-3 text-text-primary">{call.usageKind}</td>
-                    <td className="py-2 pr-3 text-right text-text-primary tabular-nums">
+                    <td data-th="Kind" className={CELL_CLASS}>
+                      {call.usageKind}
+                    </td>
+                    <td data-th="Input" className={`${CELL_CLASS} text-right tabular-nums`}>
                       {formatTokenCount(call.inputTokens)}
                     </td>
-                    <td className="py-2 pr-3 text-right text-text-primary tabular-nums">
+                    <td data-th="Output" className={`${CELL_CLASS} text-right tabular-nums`}>
                       {formatTokenCount(call.outputTokens)}
                     </td>
-                    <td className="py-2 text-right text-text-primary tabular-nums">
+                    <td data-th="Cost" className={`${CELL_CLASS} text-right tabular-nums`}>
                       {formatCostUsd(call.costUsd, call.costUnknown)}
                     </td>
                   </tr>

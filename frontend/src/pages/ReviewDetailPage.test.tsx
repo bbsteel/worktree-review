@@ -3,6 +3,8 @@ import userEvent from '@testing-library/user-event'
 import { createMemoryRouter, RouterProvider } from 'react-router'
 import { afterEach, beforeAll, describe, expect, it } from 'vitest'
 import { MockReviewDataSource } from '../data/sources/mock-review-data-source.ts'
+import type { ReviewDataSource } from '../data/sources/review-data-source.ts'
+import { MOCK_DATA_BADGE } from '../data/fixtures/index.ts'
 import { stubMatchMedia } from '../test/match-media.ts'
 import { ReviewDetailPage } from './ReviewDetailPage.tsx'
 
@@ -98,5 +100,44 @@ describe('ReviewDetailPage', () => {
     ).toBeInTheDocument()
     expect(screen.getAllByText('Passed').length).toBeGreaterThan(0)
     expect(screen.queryByText(/^Author$/)).not.toBeInTheDocument()
+  })
+
+  it('retries loading the same attempt after a failure without creating anything', async () => {
+    const requestedIds: string[] = []
+    let failures = 1
+    const flaky: ReviewDataSource = {
+      kind: 'mock',
+      environmentBadge: MOCK_DATA_BADGE,
+      getOverview: () => new MockReviewDataSource().getOverview(),
+      listCases: () => new MockReviewDataSource().listCases(),
+      getCase: (caseKey) => new MockReviewDataSource().getCase(caseKey),
+      getReviewRun: (attemptId) => {
+        requestedIds.push(attemptId)
+        if (failures > 0) {
+          failures -= 1
+          return Promise.reject(new Error('network unreachable'))
+        }
+        return new MockReviewDataSource().getReviewRun(attemptId)
+      },
+    }
+
+    const user = userEvent.setup()
+    const router = createMemoryRouter(
+      [{ path: '/reviews/:attemptId', element: <ReviewDetailPage dataSource={flaky} /> }],
+      { initialEntries: ['/reviews/attempt_01JY8R7F2W'] },
+    )
+    render(<RouterProvider router={router} />)
+
+    expect(await screen.findByText('Could not load this review')).toBeInTheDocument()
+    expect(screen.getByText(/never creates a new one/)).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Retry loading' }))
+
+    expect(
+      await screen.findByRole('heading', { name: 'acme/payment-service · PR #184' }),
+    ).toBeInTheDocument()
+    // Both loads addressed the same attempt; nothing was created.
+    expect(requestedIds).toEqual(['attempt_01JY8R7F2W', 'attempt_01JY8R7F2W'])
+    expect(router.state.location.pathname).toBe('/reviews/attempt_01JY8R7F2W')
   })
 })
