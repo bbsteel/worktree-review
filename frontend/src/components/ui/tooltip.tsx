@@ -26,7 +26,9 @@ export function Tooltip({ content, children, className }: TooltipProps) {
   return (
     <span className={cx('relative inline-flex', className)}>
       {cloneElement(child, {
-        'aria-describedby': open ? tooltipId : undefined,
+        'aria-describedby': [child.props['aria-describedby'], open ? tooltipId : null]
+          .filter(Boolean)
+          .join(' ') || undefined,
         onFocus: (event: FocusEvent) => {
           child.props.onFocus?.(event)
           setOpen(true)

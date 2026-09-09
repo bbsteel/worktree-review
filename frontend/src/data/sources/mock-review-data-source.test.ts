@@ -21,7 +21,12 @@ describe('MockReviewDataSource', () => {
     expect(source.environmentBadge).toBe(MOCK_DATA_BADGE)
     expect(overview.attention[0]?.attemptId).toBe(BLOCKED_DEMO_ATTEMPT_ID)
     expect(blocked.gateState).toBe('blocked')
-    expect(cases.map((item) => item.caseKey)).toEqual(['passed', 'blocked', 'error_merge_conflict'])
+    expect(cases.filter((item) => item.provenance === 'handwritten-mock').map((item) => item.caseKey)).toEqual([
+      'passed',
+      'blocked',
+      'error_merge_conflict',
+    ])
+    expect(cases.filter((item) => item.provenance === 'pipeline-snapshot')).toHaveLength(3)
     expect(localSet).not.toHaveBeenCalled()
     expect(window.localStorage.length).toBe(0)
     expect(window.sessionStorage.length).toBe(0)

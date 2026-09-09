@@ -14,5 +14,5 @@ test('root redirects to Overview', async ({ page }) => {
 test('Review Detail empty route is reachable', async ({ page }) => {
   await page.goto('/reviews/attempt_01JY8R7F2W')
   await expect(page.getByRole('heading', { name: 'Review Detail' })).toBeVisible()
-  await expect(page.getByTestId('attempt-id')).toHaveTextContent('attempt_01JY8R7F2W')
+  await expect(page.getByTestId('attempt-id')).toHaveText('attempt_01JY8R7F2W')
 })

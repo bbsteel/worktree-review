@@ -72,9 +72,12 @@ export interface OverviewView {
   sessionInsight: SessionInsightStatusView
 }
 
+export type FixtureProvenance = 'handwritten-mock' | 'pipeline-snapshot'
+
 export interface FixtureCaseDescriptor {
   caseKey: 'passed' | 'blocked' | 'error_merge_conflict'
   attemptId: string
   gateState: GateState
   title: string
+  provenance: FixtureProvenance
 }
