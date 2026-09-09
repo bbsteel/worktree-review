@@ -127,7 +127,7 @@ export function ReviewHeader({ run }: ReviewHeaderProps) {
       </dl>
 
       <div className="mt-4 border-t border-border pt-3">
-        <ReviewActionsBar actions={run.availableActions} />
+        <ReviewActionsBar run={run} />
       </div>
     </header>
   )

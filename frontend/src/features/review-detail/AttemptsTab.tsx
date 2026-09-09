@@ -1,6 +1,8 @@
+import { AnimatePresence, motion } from 'framer-motion'
 import { Badge } from '../../components/ui/badge.tsx'
 import { EmptyState } from '../../components/ui/empty-state.tsx'
 import { cx } from '../../components/ui/cx.ts'
+import { usePrefersReducedMotion } from '../../app/motion.ts'
 import type { ReviewRunView } from '../../domain/review.ts'
 import { CopyValue } from './CopyValue.tsx'
 import { formatCostUsd, formatDurationMs, formatTimestamp, formatTokenCount } from './formatting.ts'
@@ -13,6 +15,8 @@ import { AUTHORITY_PRESENTATION, GATE_PRESENTATION, SOURCE_KIND_LABEL } from './
  * creates a new attempt and never overwrites an old one.
  */
 export function AttemptsTab({ run }: { run: ReviewRunView }) {
+  const reduced = usePrefersReducedMotion()
+
   if (run.attempts.length === 0) {
     return (
       <EmptyState
@@ -26,22 +30,26 @@ export function AttemptsTab({ run }: { run: ReviewRunView }) {
     <section aria-label="Attempt timeline" className="rounded-lg border border-border bg-surface p-4">
       <h2 className="text-sm font-semibold text-text-primary">Attempts</h2>
       <ol className="mt-3 flex flex-col gap-2">
-        {run.attempts.map((attempt) => {
-          const authority = AUTHORITY_PRESENTATION[attempt.authority]
-          const gate = GATE_PRESENTATION[attempt.gateState]
-          const isCurrent = attempt.attemptId === run.attemptId
-          const isAuthoritative = attempt.authority === 'authoritative'
+        <AnimatePresence initial={false}>
+          {run.attempts.map((attempt) => {
+            const authority = AUTHORITY_PRESENTATION[attempt.authority]
+            const gate = GATE_PRESENTATION[attempt.gateState]
+            const isCurrent = attempt.attemptId === run.attemptId
+            const isAuthoritative = attempt.authority === 'authoritative'
 
-          return (
-            <li
-              key={attempt.attemptId}
-              aria-current={isCurrent ? 'true' : undefined}
-              className={cx(
-                'rounded-md border px-3 py-2',
-                isAuthoritative ? 'border-action-primary' : 'border-border',
-                attempt.authority === 'superseded' ? 'opacity-80' : undefined,
-              )}
-            >
+            return (
+              <motion.li
+                key={attempt.attemptId}
+                layout={!reduced}
+                initial={reduced ? false : { opacity: 0, y: -6 }}
+                animate={{ opacity: attempt.authority === 'superseded' ? 0.8 : 1, y: 0 }}
+                transition={{ duration: reduced ? 0 : 0.18, ease: 'easeOut' }}
+                aria-current={isCurrent ? 'true' : undefined}
+                className={cx(
+                  'rounded-md border px-3 py-2',
+                  isAuthoritative ? 'border-action-primary' : 'border-border',
+                )}
+              >
               <div className="flex flex-wrap items-center gap-2">
                 <Badge tone={gate.tone} label={gate.label} />
                 <Badge tone={authority.tone} label={authority.label} />
@@ -88,9 +96,10 @@ export function AttemptsTab({ run }: { run: ReviewRunView }) {
                   </dd>
                 </div>
               </dl>
-            </li>
-          )
-        })}
+              </motion.li>
+            )
+          })}
+        </AnimatePresence>
       </ol>
     </section>
   )
