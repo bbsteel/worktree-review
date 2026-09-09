@@ -1,5 +1,6 @@
 import { createBrowserRouter, Navigate } from 'react-router'
 import { ApplicationShell } from '../components/application-shell/ApplicationShell.tsx'
+import { NewReviewPage } from '../pages/NewReviewPage.tsx'
 import { OverviewPage } from '../pages/OverviewPage.tsx'
 import { DataSourceProvider } from './DataSourceProvider.tsx'
 import { ReviewDetailRoute } from './ReviewDetailRoute.tsx'
@@ -15,6 +16,7 @@ export const router = createBrowserRouter([
     children: [
       { index: true, element: <Navigate to="/overview" replace /> },
       { path: 'overview', element: <OverviewPage /> },
+      { path: 'reviews/new', element: <NewReviewPage /> },
       { path: 'reviews/:attemptId', element: <ReviewDetailRoute /> },
     ],
   },
