@@ -35,6 +35,8 @@ htmlcov/
 docs/competitors.md
 
 # AI-interaction feature working docs (never commit)
+# Match both the real directory and Agent worktree symlinks named .ai-docs
+.ai-docs
 .ai-docs/
 
 # Local git worktrees for parallel Agent A/B checkouts
