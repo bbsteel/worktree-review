@@ -13,6 +13,7 @@ from worktree_review.core.provider import ScriptedProvider
 from worktree_review.core.report import (
     PIPELINE_STAGE_ORDER,
     GateState,
+    ReviewProgressEvent,
     StageName,
     StageStatus,
 )
@@ -100,6 +101,44 @@ async def test_clean_merge_reaches_gate_and_publish(git_repository: Path, policy
     assert by_stage[StageName.EVALUATE_GATE].status is StageStatus.COMPLETED
     assert by_stage[StageName.PUBLISH].status is StageStatus.COMPLETED
     assert provider.dimension_ids_called == ["correctness"]
+
+
+@pytest.mark.asyncio
+async def test_pipeline_reports_stage_and_dimension_progress(
+    git_repository: Path, policy_dir: Path
+) -> None:
+    oid = head_oid(git_repository)
+    progress_events: list[ReviewProgressEvent] = []
+    provider = ScriptedProvider(payloads={"correctness": {"findings": []}})
+
+    report = await run_review_pipeline(
+        _request(
+            policy_dir,
+            ResolvedCommitPair(
+                source_repository=str(git_repository),
+                target_ref="main",
+                target_head_oid=oid,
+                proposed_ref="HEAD",
+                proposed_head_oid=oid,
+            ),
+        ),
+        provider=provider,
+        on_progress=progress_events.append,
+    )
+
+    assert report.gate_state is GateState.PASSED
+    assert progress_events[0].name == StageName.CONSTRUCT_MERGE.value
+    assert any(
+        event.phase == "dimension" and event.name == "correctness" and event.status == "started"
+        for event in progress_events
+    )
+    assert any(
+        event.phase == "dimension"
+        and event.name == "correctness"
+        and event.status == "completed"
+        and event.elapsed_seconds >= 0
+        for event in progress_events
+    )
 
 
 @pytest.mark.asyncio

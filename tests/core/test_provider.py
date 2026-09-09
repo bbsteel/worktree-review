@@ -5,6 +5,7 @@ from decimal import Decimal
 
 import pytest
 
+from worktree_review.core.errors import ProviderError
 from worktree_review.core.policy import ComputePolicy
 from worktree_review.core.provider import (
     BudgetDecision,
@@ -137,3 +138,69 @@ async def test_local_cli_provider_uses_json_stdin_stdout_protocol() -> None:
     assert payload == {"findings": []}
     assert usage.kind is UsageKind.DECLARED
     assert usage.provider == "local-cli"
+
+
+@pytest.mark.asyncio
+async def test_local_cli_prompt_json_adapter_uses_rendered_prompt() -> None:
+    command = (
+        sys.executable,
+        "-c",
+        "import json, sys; prompt = sys.stdin.read(); "
+        "assert 'Review dimension: security' in prompt; "
+        "assert 'Maximum output tokens: 123' in prompt; "
+        "print(json.dumps({'findings': []}))",
+    )
+    provider = LocalCliProvider(command=command, adapter="prompt-json")
+
+    payload, usage = await provider.complete_structured(
+        system="system",
+        user="user",
+        response_schema={"type": "object"},
+        dimension_id="security",
+        max_output_tokens=123,
+    )
+
+    assert payload == {"findings": []}
+    assert usage.note == "local CLI adapter prompt-json did not report token usage"
+
+
+@pytest.mark.asyncio
+async def test_local_cli_text_json_adapter_extracts_fenced_json() -> None:
+    command = (
+        sys.executable,
+        "-c",
+        "print('provider log'); print('```json'); print('{\"findings\": []}'); print('```')",
+    )
+    provider = LocalCliProvider(command=command, adapter="prompt-text-json")
+
+    payload, _usage = await provider.complete_structured(
+        system="system",
+        user="user",
+        response_schema={"type": "object"},
+        dimension_id="correctness",
+    )
+
+    assert payload == {"findings": []}
+
+
+@pytest.mark.asyncio
+async def test_local_cli_provider_includes_bounded_escaped_stderr() -> None:
+    command = (
+        sys.executable,
+        "-c",
+        "import sys; sys.stderr.write('bad\\x1b[31m\\n' + 'x' * 5000); sys.exit(7)",
+    )
+    provider = LocalCliProvider(command=command)
+
+    with pytest.raises(ProviderError) as raised_error:
+        await provider.complete_structured(
+            system="system",
+            user="user",
+            response_schema={"type": "object"},
+            dimension_id="correctness",
+        )
+
+    error_text = str(raised_error.value)
+    assert "status 7" in error_text
+    assert r"bad\x1b[31m\n" in error_text
+    assert len(error_text) < 4500

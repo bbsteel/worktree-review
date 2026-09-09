@@ -36,12 +36,24 @@ from worktree_review.core.policy import (
 
 def provider_transmission_disclosure(compute_policy: ComputePolicy) -> str:
     if compute_policy.provider == "local-cli":
-        return (
-            "Worktree Review local provider (no remote transmission):\n"
-            f"  command: {compute_policy.model}"
-        )
+        lines = [
+            "Worktree Review local command handoff (Compute Policy):",
+            f"  provider: {compute_policy.provider}",
+            f"  model: {compute_policy.model}",
+            f"  data_destination: {compute_policy.data_destination}",
+            f"  known_retention: {compute_policy.known_retention}",
+            "  notice: review content will be handed to the configured local command; "
+            "Worktree Review cannot establish whether that command makes network requests "
+            "or retains content",
+        ]
+        if compute_policy.provider_configuration_fingerprint is not None:
+            lines.append(
+                "  provider_configuration_fingerprint: "
+                f"{compute_policy.provider_configuration_fingerprint}"
+            )
+        return "\n".join(lines)
     return (
-        "Worktree Review remote transmission (Compute Policy):\n"
+        "Worktree Review provider transmission (Compute Policy):\n"
         f"  provider: {compute_policy.provider}\n"
         f"  model: {compute_policy.model}\n"
         f"  data_destination: {compute_policy.data_destination}\n"
@@ -49,14 +61,22 @@ def provider_transmission_disclosure(compute_policy: ComputePolicy) -> str:
     )
 
 
-def require_remote_transmission_permit(compute_policy: ComputePolicy) -> None:
-    if compute_policy.provider == "local-cli" or compute_policy.permit_remote_transmission:
+def require_provider_transmission_permit(compute_policy: ComputePolicy) -> None:
+    """Require consent for any provider handoff, including a configured local command."""
+
+    if compute_policy.permit_remote_transmission:
         return
     raise InvalidInvocationError(
         provider_transmission_disclosure(compute_policy)
-        + "\nCompute Policy does not permit remote transmission "
+        + "\nCompute Policy does not permit remote transmission or local-command handoff "
         "(set permit_remote_transmission: true in a trusted Compute Policy)."
     )
+
+
+def require_remote_transmission_permit(compute_policy: ComputePolicy) -> None:
+    """Compatibility name for callers that predate generalized provider handoff."""
+
+    require_provider_transmission_permit(compute_policy)
 
 
 USER_CONFIG_FILENAME = "config.yaml"

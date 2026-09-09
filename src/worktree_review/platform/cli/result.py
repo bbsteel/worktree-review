@@ -22,6 +22,7 @@ class ComputePolicyDisclosurePayload(BaseModel):
     model: str
     data_destination: str
     known_retention: str
+    provider_configuration_fingerprint: str | None = None
 
 
 class StageOutcomePayload(BaseModel):
@@ -167,6 +168,9 @@ def cli_result_document(report: ReviewReport) -> CliResultDocument:
                 "model": report.compute_policy_disclosure.model,
                 "data_destination": report.compute_policy_disclosure.data_destination,
                 "known_retention": report.compute_policy_disclosure.known_retention,
+                "provider_configuration_fingerprint": (
+                    report.compute_policy_disclosure.provider_configuration_fingerprint
+                ),
             },
             "stage_outcomes": [
                 {

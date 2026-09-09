@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import time
+from collections.abc import Callable
 from decimal import Decimal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -27,7 +29,7 @@ from worktree_review.core.provider import (
     apply_usage_price,
     estimate_structured_call,
 )
-from worktree_review.core.report import DimensionOutcome, StageStatus
+from worktree_review.core.report import DimensionOutcome, ReviewProgressEvent, StageStatus
 from worktree_review.core.review_worktree import ReviewWorktree
 from worktree_review.prompts import dimension_system_prompt
 from worktree_review.schemas import DIMENSION_FINDINGS_SCHEMA_ID, load_schema
@@ -253,6 +255,7 @@ async def run_required_dimensions(
     review_policy: ReviewPolicy,
     provider: ProviderClient,
     compute_policy: ComputePolicy,
+    on_progress: Callable[[ReviewProgressEvent], None] | None = None,
 ) -> tuple[DimensionRunResult, ...]:
     """Run required dimensions sequentially so in-flight budget can stop further calls."""
 
@@ -261,6 +264,13 @@ async def run_required_dimensions(
     results: list[DimensionRunResult] = []
     stop_reason: str | None = None
     for dimension_id in review_policy.required_dimensions:
+        dimension_started_at = time.monotonic()
+        _notify_dimension_progress(
+            on_progress,
+            dimension_id=dimension_id,
+            status="started",
+            started_at=dimension_started_at,
+        )
         if stop_reason is not None:
             results.append(
                 DimensionRunResult(
@@ -271,16 +281,31 @@ async def run_required_dimensions(
                     )
                 )
             )
-            continue
-        next_estimate = apply_usage_price(
-            estimate_one_dimension_call(
+            _notify_dimension_progress(
+                on_progress,
                 dimension_id=dimension_id,
-                context=context,
-                provider=provider,
-                max_output_tokens_per_call=compute_policy.max_output_tokens_per_call,
-            ),
-            compute_policy,
-        )
+                status="not-started",
+                started_at=dimension_started_at,
+            )
+            continue
+        try:
+            next_estimate = apply_usage_price(
+                estimate_one_dimension_call(
+                    dimension_id=dimension_id,
+                    context=context,
+                    provider=provider,
+                    max_output_tokens_per_call=compute_policy.max_output_tokens_per_call,
+                ),
+                compute_policy,
+            )
+        except Exception:
+            _notify_dimension_progress(
+                on_progress,
+                dimension_id=dimension_id,
+                status="failed",
+                started_at=dimension_started_at,
+            )
+            raise
         if remaining_budget is not None:
             if next_estimate.cost_usd is None:
                 if not compute_policy.allow_start_under_uncertain_price:
@@ -295,6 +320,12 @@ async def run_required_dimensions(
                                 detail=stop_reason,
                             )
                         )
+                    )
+                    _notify_dimension_progress(
+                        on_progress,
+                        dimension_id=dimension_id,
+                        status="not-started",
+                        started_at=dimension_started_at,
                     )
                     continue
             elif spent + next_estimate.cost_usd > remaining_budget:
@@ -311,17 +342,63 @@ async def run_required_dimensions(
                         )
                     )
                 )
+                _notify_dimension_progress(
+                    on_progress,
+                    dimension_id=dimension_id,
+                    status="not-started",
+                    started_at=dimension_started_at,
+                )
                 continue
-        result = await _run_one_dimension(
-            dimension_id=dimension_id,
-            context=context,
-            review_worktree=review_worktree,
-            provider=provider,
-            compute_policy=compute_policy,
-        )
+        try:
+            result = await _run_one_dimension(
+                dimension_id=dimension_id,
+                context=context,
+                review_worktree=review_worktree,
+                provider=provider,
+                compute_policy=compute_policy,
+            )
+        except Exception:
+            _notify_dimension_progress(
+                on_progress,
+                dimension_id=dimension_id,
+                status="failed",
+                started_at=dimension_started_at,
+            )
+            raise
         if result.usage is not None and result.usage.cost_usd is not None:
             spent += result.usage.cost_usd
             if remaining_budget is not None and spent >= remaining_budget:
                 stop_reason = "per-review budget exhausted after measured usage"
         results.append(result)
+        _notify_dimension_progress(
+            on_progress,
+            dimension_id=dimension_id,
+            status=result.outcome.status.value,
+            started_at=dimension_started_at,
+        )
     return tuple(results)
+
+
+def _notify_dimension_progress(
+    progress_callback: Callable[[ReviewProgressEvent], None] | None,
+    *,
+    dimension_id: str,
+    status: str,
+    started_at: float,
+) -> None:
+    """Send best-effort UI progress without changing review semantics."""
+
+    if progress_callback is None:
+        return
+    try:
+        progress_callback(
+            ReviewProgressEvent(
+                phase="dimension",
+                name=dimension_id,
+                status=status,  # type: ignore[arg-type]
+                elapsed_seconds=max(0.0, time.monotonic() - started_at),
+            )
+        )
+    except Exception:
+        # A broken progress renderer must not change gate semantics.
+        return

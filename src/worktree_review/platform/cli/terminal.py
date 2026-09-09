@@ -6,7 +6,7 @@ from decimal import Decimal
 from worktree_review.core.findings import EvidenceSpan, Finding
 from worktree_review.core.identity import ProposedSource
 from worktree_review.core.provider import UsageKind
-from worktree_review.core.report import ReviewCallPlan, ReviewReport
+from worktree_review.core.report import ReviewCallPlan, ReviewProgressEvent, ReviewReport
 
 _ANSI_ESCAPE_PATTERN = re.compile(r"\x1b(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
 
@@ -95,6 +95,17 @@ def render_call_plan(call_plan: ReviewCallPlan) -> str:
     )
 
 
+def render_progress(progress_event: ReviewProgressEvent) -> str:
+    """Render a short stderr-only progress line for text and JSON invocations."""
+
+    if progress_event.status == "started":
+        return f"[{progress_event.phase}] {progress_event.name}: started\n"
+    return (
+        f"[{progress_event.phase}] {progress_event.name}: {progress_event.status} "
+        f"in {progress_event.elapsed_seconds:.1f}s\n"
+    )
+
+
 def _append_usage_summary(lines: list[str], report: ReviewReport) -> None:
     provider_usage = tuple(
         record for record in report.usage if record.kind in (UsageKind.MEASURED, UsageKind.DECLARED)
@@ -178,8 +189,15 @@ def render_text_report(report: ReviewReport) -> str:
         "Data destination: "
         + _terminal_safe_text(report.compute_policy_disclosure.data_destination),
         "Known retention: " + _terminal_safe_text(report.compute_policy_disclosure.known_retention),
-        "Stages:",
     ]
+    if report.compute_policy_disclosure.provider_configuration_fingerprint is not None:
+        lines.append(
+            "Provider configuration fingerprint: "
+            + _terminal_safe_text(
+                report.compute_policy_disclosure.provider_configuration_fingerprint
+            )
+        )
+    lines.append("Stages:")
     if report.resolved.proposed_source is ProposedSource.CURRENT_WORKTREE_SNAPSHOT:
         lines.insert(8, "Proposed source: current worktree snapshot")
     for stage_outcome in report.execution.outcomes:

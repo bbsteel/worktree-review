@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import subprocess
 import sys
@@ -11,8 +12,14 @@ from typer.testing import CliRunner
 
 from tests.gitutil import commit_files, head_oid
 from worktree_review.cli import app
+from worktree_review.core.errors import InvalidInvocationError
+from worktree_review.core.policy import ComputePolicy
 from worktree_review.platform.cli.exit_codes import CliExitCode
-from worktree_review.platform.cli.invocation import prepare_cli_review
+from worktree_review.platform.cli.invocation import (
+    prepare_cli_review,
+    provider_transmission_disclosure,
+    require_provider_transmission_permit,
+)
 from worktree_review.platform.cli.result import cli_result_schema
 
 runner = CliRunner()
@@ -125,6 +132,7 @@ def test_local_cli_configuration_runs_the_shared_pipeline(
     document = json.loads(result.stdout)
     assert document["gate_state"] == "Passed"
     assert document["compute_policy_disclosure"]["provider"] == "local-cli"
+    assert len(document["compute_policy_disclosure"]["provider_configuration_fingerprint"]) == 64
     assert document["call_plan"] == {
         "call_count": 2,
         "estimated_input_tokens": document["call_plan"]["estimated_input_tokens"],
@@ -132,6 +140,58 @@ def test_local_cli_configuration_runs_the_shared_pipeline(
     }
     assert "Will make 2 model calls" in result.stderr
     assert "Maximum output per call: 4,096 tokens" in result.stderr
+
+
+def test_local_cli_disclosure_does_not_claim_network_is_impossible(
+    git_repository: Path, policy_dir: Path
+) -> None:
+    config_path = policy_dir / "local-config.yaml"
+    config_path.write_text(
+        "provider: local-cli\ncommand:\n  - review-provider\n"
+        "data_destination: command-controlled destination\n"
+        "known_retention: command-controlled retention\n",
+        encoding="utf-8",
+    )
+    prepared = asyncio.run(prepare_cli_review(repository=git_repository, config_path=config_path))
+
+    disclosure = provider_transmission_disclosure(prepared.compute_policy)
+
+    assert "no remote transmission" not in disclosure.lower()
+    assert "content will be handed to the configured local command" in disclosure
+    assert "command-controlled destination" in disclosure
+    assert "command-controlled retention" in disclosure
+    assert prepared.compute_policy.provider_configuration_fingerprint in disclosure
+
+    denied_policy = ComputePolicy.model_validate(
+        prepared.compute_policy.model_dump(by_alias=True) | {"permit_remote_transmission": False}
+    )
+    with pytest.raises(InvalidInvocationError):
+        require_provider_transmission_permit(denied_policy)
+
+
+def test_init_writes_a_valid_local_cli_configuration(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.yaml"
+    result = runner.invoke(
+        app,
+        [
+            "init",
+            "--provider",
+            "local-cli",
+            "--command",
+            f"{sys.executable} -c 'print(1)'",
+            "--adapter",
+            "prompt-json",
+            "--output",
+            str(config_path),
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert config_path.stat().st_mode & 0o077 == 0
+    generated = config_path.read_text(encoding="utf-8")
+    assert "provider: local-cli" in generated
+    assert "adapter: prompt-json" in generated
+    assert "Found local command executable" in result.stdout
 
 
 def test_missing_target_defaults_to_current_worktree(
@@ -235,6 +295,7 @@ def test_review_json_is_error_and_matches_schema(
         "model": "claude-sonnet-4-5",
         "data_destination": "https://api.anthropic.com",
         "known_retention": "none-in-skeleton",
+        "provider_configuration_fingerprint": None,
     }
     assert "usage" in document
     assert "data_destination" in result.stderr

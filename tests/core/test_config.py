@@ -90,7 +90,7 @@ def test_standard_remote_url_is_optional(tmp_path: Path, monkeypatch: pytest.Mon
     assert provider_configuration.url == "https://api.openai.com/v1"
 
 
-def test_local_cli_configuration_has_no_remote_transmission(
+def test_local_cli_configuration_discloses_command_handoff(
     tmp_path: Path,
 ) -> None:
     path = tmp_path / "config.yaml"
@@ -102,9 +102,39 @@ def test_local_cli_configuration_has_no_remote_transmission(
     compute_policy, _version, provider_configuration = load_user_configuration(path)
 
     assert compute_policy.provider == "local-cli"
-    assert compute_policy.permit_remote_transmission is False
-    assert compute_policy.data_destination == "local CLI command"
+    assert compute_policy.permit_remote_transmission is True
+    assert compute_policy.data_destination == (
+        "Configured local command; downstream destination is command-defined."
+    )
+    assert compute_policy.known_retention == (
+        "Command/provider-defined; inspect the command and provider account terms."
+    )
+    assert compute_policy.provider_configuration_fingerprint is not None
     assert provider_configuration.command == ("review-provider",)
+    assert provider_configuration.configuration_fingerprint == (
+        compute_policy.provider_configuration_fingerprint
+    )
+
+
+def test_local_command_configuration_changes_compute_policy_identity(tmp_path: Path) -> None:
+    first_path = tmp_path / "first.yaml"
+    second_path = tmp_path / "second.yaml"
+    first_path.write_text(
+        "provider: local-cli\ncommand:\n  - review-provider\n  - --safe\n",
+        encoding="utf-8",
+    )
+    second_path.write_text(
+        "provider: local-cli\ncommand:\n  - review-provider\n  - --unsafe\n",
+        encoding="utf-8",
+    )
+
+    first_policy, first_version, _first_provider = load_user_configuration(first_path)
+    second_policy, second_version, _second_provider = load_user_configuration(second_path)
+
+    assert first_policy.provider_configuration_fingerprint != (
+        second_policy.provider_configuration_fingerprint
+    )
+    assert first_version != second_version
 
 
 def test_repository_config_example_is_a_loadable_minimal_configuration(

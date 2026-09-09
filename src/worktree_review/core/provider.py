@@ -10,7 +10,12 @@ from typing import Protocol
 
 from pydantic import BaseModel, ConfigDict
 
-from worktree_review.core.config import ProviderConfiguration
+from worktree_review.core.config import (
+    DEFAULT_LOCAL_DATA_DESTINATION,
+    DEFAULT_LOCAL_KNOWN_RETENTION,
+    ProviderConfiguration,
+    local_cli_configuration_fingerprint,
+)
 from worktree_review.core.errors import BudgetExhaustedError, ProviderError
 from worktree_review.core.policy import ComputePolicy, ProviderName
 
@@ -258,11 +263,32 @@ def build_provider(
                 "provider configuration does not match the configured Compute Policy provider"
             )
         if provider_name == "local-cli":
+            expected_configuration_fingerprint = local_cli_configuration_fingerprint(
+                command=provider_configuration.command,
+                adapter=provider_configuration.adapter,
+                model=compute_policy.model,
+                data_destination=(
+                    provider_configuration.data_destination or DEFAULT_LOCAL_DATA_DESTINATION
+                ),
+                known_retention=(
+                    provider_configuration.known_retention or DEFAULT_LOCAL_KNOWN_RETENTION
+                ),
+            )
+            if (
+                compute_policy.provider_configuration_fingerprint
+                != expected_configuration_fingerprint
+                or provider_configuration.configuration_fingerprint
+                != expected_configuration_fingerprint
+            ):
+                raise ProviderError(
+                    "local CLI provider configuration does not match the Compute Policy identity"
+                )
             from worktree_review.core.providers.local_cli import LocalCliProvider
 
             return LocalCliProvider(
                 command=provider_configuration.command,
                 model=compute_policy.model,
+                adapter=provider_configuration.adapter,
             )
         if provider_configuration.api_key is None or provider_configuration.url is None:
             raise ProviderError("remote provider configuration requires url and key")

@@ -5,8 +5,10 @@ A fatal stage failure short-circuits remaining analysis stages to
 failure cannot be hidden by later output.
 """
 
+import time
 import uuid
 from collections.abc import Callable
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
 
@@ -41,6 +43,7 @@ from worktree_review.core.report import (
     ExecutionRecord,
     GateState,
     ReviewCallPlan,
+    ReviewProgressEvent,
     ReviewReport,
     StageName,
     StageOutcome,
@@ -78,6 +81,31 @@ _POST_FAILURE_STAGES: frozenset[StageName] = frozenset(
 
 def _not_started(stage: StageName, detail: str | None = None) -> StageOutcome:
     return StageOutcome(stage=stage, status=StageStatus.NOT_STARTED, detail=detail)
+
+
+def _notify_progress(
+    progress_callback: Callable[[ReviewProgressEvent], None] | None,
+    *,
+    phase: Literal["stage", "dimension"],
+    name: str,
+    status: Literal["started", "completed", "failed", "not-started"],
+    started_at: float,
+) -> None:
+    """Send best-effort progress without allowing a renderer to affect review state."""
+
+    if progress_callback is None:
+        return
+    try:
+        progress_callback(
+            ReviewProgressEvent(
+                phase=phase,
+                name=name,
+                status=status,
+                elapsed_seconds=max(0.0, time.monotonic() - started_at),
+            )
+        )
+    except Exception:
+        return
 
 
 def _fill_unrecorded_stages(execution: ExecutionRecord, *, reason: str) -> ExecutionRecord:
@@ -169,6 +197,9 @@ def _complete_report(
             model=request.compute_policy.model,
             data_destination=request.compute_policy.data_destination,
             known_retention=request.compute_policy.known_retention,
+            provider_configuration_fingerprint=(
+                request.compute_policy.provider_configuration_fingerprint
+            ),
         ),
         execution=execution,
         findings=findings,
@@ -187,6 +218,7 @@ async def run_review_pipeline(
     *,
     provider: ProviderClient | None = None,
     on_call_plan_ready: Callable[[ReviewCallPlan], None] | None = None,
+    on_progress: Callable[[ReviewProgressEvent], None] | None = None,
 ) -> ReviewReport:
     """Run the shared pipeline through verification, gate evaluation, and publication."""
 
@@ -211,6 +243,14 @@ async def run_review_pipeline(
     owner_note = "invoking user" if request.surface == "cli" else "unprivileged runtime user"
 
     try:
+        construct_started_at = time.monotonic()
+        _notify_progress(
+            on_progress,
+            phase="stage",
+            name=StageName.CONSTRUCT_MERGE.value,
+            status="started",
+            started_at=construct_started_at,
+        )
         try:
             candidate = await construct_merge_candidate(request.resolved)
             review_identity = ReviewIdentity(
@@ -219,6 +259,13 @@ async def run_review_pipeline(
             )
             execution = execution.with_outcome(
                 StageOutcome(stage=StageName.CONSTRUCT_MERGE, status=StageStatus.COMPLETED)
+            )
+            _notify_progress(
+                on_progress,
+                phase="stage",
+                name=StageName.CONSTRUCT_MERGE.value,
+                status="completed",
+                started_at=construct_started_at,
             )
         except WorktreeReviewError as exc:
             execution = execution.with_outcome(
@@ -231,6 +278,13 @@ async def run_review_pipeline(
             execution = _fill_unrecorded_stages(
                 execution, reason="short-circuited after construct-merge failure"
             )
+            _notify_progress(
+                on_progress,
+                phase="stage",
+                name=StageName.CONSTRUCT_MERGE.value,
+                status="failed",
+                started_at=construct_started_at,
+            )
             return _complete_report(
                 request,
                 execution,
@@ -242,6 +296,14 @@ async def run_review_pipeline(
                 error_detail=str(exc),
             )
 
+        prepare_started_at = time.monotonic()
+        _notify_progress(
+            on_progress,
+            phase="stage",
+            name=StageName.PREPARE_REVIEW_WORKTREE.value,
+            status="started",
+            started_at=prepare_started_at,
+        )
         try:
             review_worktree = await materialize_review_worktree(
                 candidate,
@@ -249,6 +311,13 @@ async def run_review_pipeline(
             )
             execution = execution.with_outcome(
                 StageOutcome(stage=StageName.PREPARE_REVIEW_WORKTREE, status=StageStatus.COMPLETED)
+            )
+            _notify_progress(
+                on_progress,
+                phase="stage",
+                name=StageName.PREPARE_REVIEW_WORKTREE.value,
+                status="completed",
+                started_at=prepare_started_at,
             )
         except WorktreeReviewError as exc:
             execution = execution.with_outcome(
@@ -261,6 +330,13 @@ async def run_review_pipeline(
             execution = _fill_unrecorded_stages(
                 execution, reason="short-circuited after prepare-review-worktree failure"
             )
+            _notify_progress(
+                on_progress,
+                phase="stage",
+                name=StageName.PREPARE_REVIEW_WORKTREE.value,
+                status="failed",
+                started_at=prepare_started_at,
+            )
             return _complete_report(
                 request,
                 execution,
@@ -272,6 +348,14 @@ async def run_review_pipeline(
                 error_detail=str(exc),
             )
 
+        gather_started_at = time.monotonic()
+        _notify_progress(
+            on_progress,
+            phase="stage",
+            name=StageName.GATHER_CONTEXT.value,
+            status="started",
+            started_at=gather_started_at,
+        )
         try:
             gathered = await gather_context(review_worktree, candidate, request.review_policy)
         except (WorktreeReviewError, UnimplementedStageError) as exc:
@@ -284,6 +368,13 @@ async def run_review_pipeline(
             )
             execution = _fill_unrecorded_stages(
                 execution, reason="short-circuited after gather-context failure"
+            )
+            _notify_progress(
+                on_progress,
+                phase="stage",
+                name=StageName.GATHER_CONTEXT.value,
+                status="failed",
+                started_at=gather_started_at,
             )
             return _complete_report(
                 request,
@@ -298,6 +389,13 @@ async def run_review_pipeline(
 
         execution = execution.with_outcome(
             StageOutcome(stage=StageName.GATHER_CONTEXT, status=StageStatus.COMPLETED)
+        )
+        _notify_progress(
+            on_progress,
+            phase="stage",
+            name=StageName.GATHER_CONTEXT.value,
+            status="completed",
+            started_at=gather_started_at,
         )
         if not gathered.coverage.required_coverage_complete:
             execution = _fill_unrecorded_stages(
@@ -317,6 +415,14 @@ async def run_review_pipeline(
 
         estimated: UsageRecord | None = None
         call_plan: ReviewCallPlan | None = None
+        dimensions_started_at = time.monotonic()
+        _notify_progress(
+            on_progress,
+            phase="stage",
+            name=StageName.RUN_DIMENSIONS.value,
+            status="started",
+            started_at=dimensions_started_at,
+        )
         try:
             selected_provider = (
                 provider
@@ -344,6 +450,7 @@ async def run_review_pipeline(
                 request.review_policy,
                 selected_provider,
                 request.compute_policy,
+                on_progress=on_progress,
             )
         except WorktreeReviewError as exc:
             execution = execution.with_outcome(
@@ -355,6 +462,13 @@ async def run_review_pipeline(
             )
             execution = _fill_unrecorded_stages(
                 execution, reason="short-circuited after run-dimensions failure"
+            )
+            _notify_progress(
+                on_progress,
+                phase="stage",
+                name=StageName.RUN_DIMENSIONS.value,
+                status="failed",
+                started_at=dimensions_started_at,
             )
             return _complete_report(
                 request,
@@ -392,6 +506,21 @@ async def run_review_pipeline(
             execution = execution.with_outcome(
                 StageOutcome(stage=StageName.RUN_DIMENSIONS, status=StageStatus.COMPLETED)
             )
+        _notify_progress(
+            on_progress,
+            phase="stage",
+            name=StageName.RUN_DIMENSIONS.value,
+            status="completed" if dimensions_complete else "failed",
+            started_at=dimensions_started_at,
+        )
+        verification_started_at = time.monotonic()
+        _notify_progress(
+            on_progress,
+            phase="stage",
+            name=StageName.VERIFY_DEDUP.value,
+            status="started",
+            started_at=verification_started_at,
+        )
         try:
             validated_findings = verify_and_deduplicate(
                 draft_findings,
@@ -408,6 +537,13 @@ async def run_review_pipeline(
             )
             execution = _fill_unrecorded_stages(
                 execution, reason="short-circuited after verify-dedup failure"
+            )
+            _notify_progress(
+                on_progress,
+                phase="stage",
+                name=StageName.VERIFY_DEDUP.value,
+                status="failed",
+                started_at=verification_started_at,
             )
             return _complete_report(
                 request,
@@ -430,6 +566,13 @@ async def run_review_pipeline(
                 status=StageStatus.COMPLETED,
                 detail=f"validated and deduplicated {len(validated_findings)} findings",
             )
+        )
+        _notify_progress(
+            on_progress,
+            phase="stage",
+            name=StageName.VERIFY_DEDUP.value,
+            status="completed",
+            started_at=verification_started_at,
         )
         if not dimensions_complete:
             return _complete_report(

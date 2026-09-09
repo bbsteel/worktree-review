@@ -22,7 +22,13 @@
       "minItems": 1,
       "items": { "type": "string", "minLength": 1 }
     },
-    "model": { "type": "string", "minLength": 1 }
+    "model": { "type": "string", "minLength": 1 },
+    "adapter": {
+      "type": "string",
+      "enum": ["worktree-json", "prompt-json", "prompt-text-json"]
+    },
+    "data_destination": { "type": "string", "minLength": 1 },
+    "known_retention": { "type": "string", "minLength": 1 }
   },
   "oneOf": [
     {
@@ -30,7 +36,14 @@
         "provider": { "enum": ["anthropic", "openai"] }
       },
       "required": ["key"],
-      "not": { "required": ["command"] }
+      "not": {
+        "anyOf": [
+          { "required": ["command"] },
+          { "required": ["adapter"] },
+          { "required": ["data_destination"] },
+          { "required": ["known_retention"] }
+        ]
+      }
     },
     {
       "properties": {

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from enum import StrEnum
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -60,6 +61,17 @@ class StageStatus(StrEnum):
     NOT_STARTED = "not-started"
 
 
+class ReviewProgressEvent(BaseModel):
+    """Non-authoritative progress signal for interactive invoking surfaces."""
+
+    model_config = ConfigDict(frozen=True)
+
+    phase: Literal["stage", "dimension"]
+    name: str
+    status: Literal["started", "completed", "failed", "not-started"]
+    elapsed_seconds: float = Field(ge=0)
+
+
 class StageOutcome(BaseModel):
     model_config = ConfigDict(frozen=True)
 
@@ -109,6 +121,7 @@ class ComputePolicyDisclosure(BaseModel):
     model: str
     data_destination: str
     known_retention: str
+    provider_configuration_fingerprint: str | None = None
 
 
 class ReviewCallPlan(BaseModel):

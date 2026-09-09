@@ -139,7 +139,11 @@
         "provider": { "type": "string", "minLength": 1 },
         "model": { "type": "string", "minLength": 1 },
         "data_destination": { "type": "string", "minLength": 1 },
-        "known_retention": { "type": "string", "minLength": 1 }
+        "known_retention": { "type": "string", "minLength": 1 },
+        "provider_configuration_fingerprint": {
+          "type": ["string", "null"],
+          "pattern": "^[0-9a-f]{64}$"
+        }
       }
     },
     "stageOutcome": {

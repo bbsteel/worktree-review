@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import re
+from hashlib import sha256
 from pathlib import Path
 from typing import Any, Literal, cast
 
@@ -17,6 +18,7 @@ from worktree_review.core.policy import (
     COMPUTE_POLICY_DOCUMENT_ID,
     ComputePolicy,
     ProviderName,
+    canonical_policy_bytes,
     policy_version_identity,
 )
 from worktree_review.schemas import USER_CONFIG_SCHEMA_ID, load_schema
@@ -25,6 +27,12 @@ USER_CONFIG_DOCUMENT_ID: Literal["worktree-review.config/v1"] = "worktree-review
 DEFAULT_USER_CONFIG_VERSION = "0.1.0"
 DEFAULT_USER_MAX_OUTPUT_TOKENS_PER_CALL = 4096
 DEFAULT_KNOWN_RETENTION = "Provider-defined; review this provider account's retention terms."
+DEFAULT_LOCAL_DATA_DESTINATION = (
+    "Configured local command; downstream destination is command-defined."
+)
+DEFAULT_LOCAL_KNOWN_RETENTION = (
+    "Command/provider-defined; inspect the command and provider account terms."
+)
 DEFAULT_REMOTE_URLS: dict[str, str] = {
     "anthropic": "https://api.anthropic.com",
     "openai": "https://api.openai.com/v1",
@@ -34,6 +42,8 @@ DEFAULT_REMOTE_MODELS: dict[str, str] = {
     "openai": "gpt-4o",
 }
 _ENVIRONMENT_REFERENCE = re.compile(r"^\$\{([A-Za-z_][A-Za-z0-9_]*)\}$")
+
+LocalCliAdapterName = Literal["worktree-json", "prompt-json", "prompt-text-json"]
 
 
 class ProviderConfiguration(BaseModel):
@@ -45,6 +55,10 @@ class ProviderConfiguration(BaseModel):
     url: str | None = None
     api_key: SecretStr | None = None
     command: tuple[str, ...] = ()
+    adapter: LocalCliAdapterName = "worktree-json"
+    data_destination: str | None = None
+    known_retention: str | None = None
+    configuration_fingerprint: str | None = None
 
 
 class UserConfiguration(BaseModel):
@@ -62,6 +76,9 @@ class UserConfiguration(BaseModel):
     key: str | None = Field(default=None, min_length=1)
     command: tuple[str, ...] | None = None
     model: str | None = Field(default=None, min_length=1)
+    adapter: LocalCliAdapterName = "worktree-json"
+    data_destination: str | None = Field(default=None, min_length=1)
+    known_retention: str | None = Field(default=None, min_length=1)
 
     @model_validator(mode="after")
     def _validate_provider_shape(self) -> UserConfiguration:
@@ -70,6 +87,12 @@ class UserConfiguration(BaseModel):
                 raise ValueError("key is required for a remote provider")
             if self.command is not None:
                 raise ValueError("command is only valid for provider local-cli")
+            if self.adapter != "worktree-json":
+                raise ValueError("adapter is only valid for provider local-cli")
+            if self.data_destination is not None or self.known_retention is not None:
+                raise ValueError(
+                    "data_destination and known_retention are only valid for provider local-cli"
+                )
         else:
             if self.command is None or not self.command:
                 raise ValueError("command is required for provider local-cli")
@@ -130,12 +153,24 @@ def _compute_policy_document(configuration: UserConfiguration) -> dict[str, obje
         if command is None:
             raise PolicyValidationError("local-cli configuration has no command")
         model = configuration.model or command[0]
-        destination = "local CLI command"
-        permit_remote_transmission = False
+        destination = configuration.data_destination or DEFAULT_LOCAL_DATA_DESTINATION
+        known_retention = configuration.known_retention or DEFAULT_LOCAL_KNOWN_RETENTION
+        # Selecting a command is explicit consent to hand review content to that
+        # command. This flag is a permit, not a claim that the command cannot
+        # make network requests or retain the content it receives.
+        permit_remote_transmission = True
+        provider_configuration_fingerprint = _provider_configuration_fingerprint(
+            configuration,
+            model=model,
+            data_destination=destination,
+            known_retention=known_retention,
+        )
     else:
         model = configuration.model or DEFAULT_REMOTE_MODELS[configuration.provider]
         destination = _resolved_remote_url(configuration)
+        known_retention = DEFAULT_KNOWN_RETENTION
         permit_remote_transmission = True
+        provider_configuration_fingerprint = None
 
     document: dict[str, object] = {
         "schema": COMPUTE_POLICY_DOCUMENT_ID,
@@ -145,9 +180,53 @@ def _compute_policy_document(configuration: UserConfiguration) -> dict[str, obje
         "max_output_tokens_per_call": DEFAULT_USER_MAX_OUTPUT_TOKENS_PER_CALL,
         "permit_remote_transmission": permit_remote_transmission,
         "data_destination": destination,
-        "known_retention": DEFAULT_KNOWN_RETENTION,
+        "known_retention": known_retention,
     }
+    if provider_configuration_fingerprint is not None:
+        document["provider_configuration_fingerprint"] = provider_configuration_fingerprint
     return document
+
+
+def _provider_configuration_fingerprint(
+    configuration: UserConfiguration,
+    *,
+    model: str,
+    data_destination: str,
+    known_retention: str,
+) -> str:
+    """Bind local command behavior without exposing command arguments as output."""
+
+    command = configuration.command
+    if command is None:
+        raise PolicyValidationError("local-cli configuration has no command")
+    return local_cli_configuration_fingerprint(
+        command=command,
+        adapter=configuration.adapter,
+        model=model,
+        data_destination=data_destination,
+        known_retention=known_retention,
+    )
+
+
+def local_cli_configuration_fingerprint(
+    *,
+    command: tuple[str, ...],
+    adapter: LocalCliAdapterName,
+    model: str,
+    data_destination: str,
+    known_retention: str,
+) -> str:
+    """Hash the complete local command configuration without exposing its arguments."""
+
+    fingerprint_document = {
+        "provider": "local-cli",
+        "model": model,
+        "adapter": adapter,
+        "command": list(command),
+        "data_destination": data_destination,
+        "known_retention": known_retention,
+    }
+    return sha256(canonical_policy_bytes(fingerprint_document)).hexdigest()
 
 
 def load_user_configuration(
@@ -171,9 +250,23 @@ def load_user_configuration(
         ) from exc
 
     if configuration.provider == "local-cli":
+        command = configuration.command or ()
+        model = configuration.model or command[0]
+        destination = configuration.data_destination or DEFAULT_LOCAL_DATA_DESTINATION
+        known_retention = configuration.known_retention or DEFAULT_LOCAL_KNOWN_RETENTION
+        configuration_fingerprint = _provider_configuration_fingerprint(
+            configuration,
+            model=model,
+            data_destination=destination,
+            known_retention=known_retention,
+        )
         provider_configuration = ProviderConfiguration(
             provider="local-cli",
-            command=configuration.command or (),
+            command=command,
+            adapter=configuration.adapter,
+            data_destination=destination,
+            known_retention=known_retention,
+            configuration_fingerprint=configuration_fingerprint,
         )
     else:
         if configuration.key is None:

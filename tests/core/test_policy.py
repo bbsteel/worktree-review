@@ -59,6 +59,23 @@ def test_load_compute_policy(policy_dir: Path) -> None:
     assert policy.max_output_tokens_per_call == 8192
 
 
+def test_advanced_compute_policy_rejects_local_cli(tmp_path: Path) -> None:
+    path = tmp_path / "local-compute.yaml"
+    path.write_text(
+        "schema: worktree-review.compute-policy/v1\n"
+        "version: 1.0.0\n"
+        "provider: local-cli\n"
+        "model: review-provider\n"
+        "max_budget_usd: 1\n"
+        "data_destination: local command\n"
+        "known_retention: command-defined\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(PolicyValidationError, match="local-cli"):
+        load_compute_policy(path)
+
+
 def test_example_policies_validate() -> None:
     root = Path(__file__).resolve().parents[2]
     review_policy, _review_identity = load_review_policy(root / "examples" / "review-policy.yaml")

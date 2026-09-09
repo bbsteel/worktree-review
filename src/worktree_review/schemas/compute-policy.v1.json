@@ -19,7 +19,7 @@
       "type": "string",
       "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+([.-][0-9A-Za-z.-]+)?$"
     },
-    "provider": { "type": "string", "enum": ["anthropic", "openai", "local-cli"] },
+    "provider": { "type": "string", "enum": ["anthropic", "openai"] },
     "model": { "type": "string", "minLength": 1 },
     "max_output_tokens_per_call": { "type": "integer", "minimum": 1 },
     "max_budget_usd": { "type": "number", "minimum": 0 },
@@ -27,6 +27,10 @@
     "permit_remote_transmission": { "type": "boolean" },
     "input_usd_per_million_tokens": { "type": "number", "minimum": 0 },
     "output_usd_per_million_tokens": { "type": "number", "minimum": 0 },
+    "provider_configuration_fingerprint": {
+      "type": ["string", "null"],
+      "pattern": "^[0-9a-f]{64}$"
+    },
     "data_destination": { "type": "string", "minLength": 1 },
     "known_retention": { "type": "string", "minLength": 1 }
   }

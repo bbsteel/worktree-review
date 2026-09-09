@@ -105,6 +105,10 @@ class ComputePolicy(BaseModel):
     permit_remote_transmission: bool = False
     input_usd_per_million_tokens: Annotated[Decimal, Field(ge=0)] | None = None
     output_usd_per_million_tokens: Annotated[Decimal, Field(ge=0)] | None = None
+    provider_configuration_fingerprint: str | None = Field(
+        default=None,
+        pattern=r"^[0-9a-f]{64}$",
+    )
     data_destination: str
     known_retention: str
 
