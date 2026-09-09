@@ -15,6 +15,7 @@ from worktree_review.platform.github.retry import AttemptEnqueuer
 from worktree_review.platform.github.snapshot import AttemptExecutionSnapshot
 from worktree_review.platform.github.webhooks import GitHubWebhookEvent, WebhookDispatchResult
 from worktree_review.server.state import (
+    AttemptLease,
     AuthoritativeAttemptStore,
     GitHubChangeRequestLocator,
 )
@@ -194,6 +195,55 @@ class GitHubTriggerCoordinator:
 def _object(payload: dict[str, Any], key: str) -> dict[str, Any]:
     value = payload.get(key)
     return value if isinstance(value, dict) else {}
+
+
+class QueuedAttemptPreparer:
+    """Create snapshot + queued Check after an Attempt exists and before enqueue."""
+
+    def __init__(
+        self,
+        *,
+        github_store: GitHubReviewStore,
+        checks: CheckRunTransport,
+        review_policy_path: Path,
+        compute_policy_path: Path,
+        provider_profile_id: str | None = None,
+        details_url: str | None = None,
+    ) -> None:
+        self._github_store = github_store
+        self._checks = checks
+        self._review_policy_path = review_policy_path
+        self._compute_policy_path = compute_policy_path
+        self._provider_profile_id = provider_profile_id
+        self._details_url = details_url
+
+    async def __call__(self, lease: AttemptLease) -> None:
+        if await self._github_store.get_check_run_id(lease.attempt_id) is not None:
+            return
+        _review_policy, review_version = load_review_policy(self._review_policy_path)
+        _compute_policy, compute_version = load_compute_policy(self._compute_policy_path)
+        del _review_policy, _compute_policy
+        snapshot = AttemptExecutionSnapshot(
+            attempt_id=lease.attempt_id,
+            change_request=lease.change_request,
+            request_key=lease.request_key,
+            proposed_ref="HEAD",
+            review_policy_semver=review_version.semver,
+            review_policy_sha256=review_version.sha256,
+            compute_policy_semver=compute_version.semver,
+            compute_policy_sha256=compute_version.sha256,
+            provider_profile_id=self._provider_profile_id,
+        )
+        await self._github_store.save_execution_snapshot(snapshot)
+        check_run_id = await self._checks.create_check_run(
+            repository=lease.change_request.repository,
+            payload=build_queued_check_run_payload(
+                attempt_id=lease.attempt_id,
+                head_sha=lease.request_key.proposed_head_oid,
+                details_url=self._details_url,
+            ),
+        )
+        await self._github_store.set_check_run_id(lease.attempt_id, check_run_id)
 
 
 def _locator_from_pull_request(payload: dict[str, Any]) -> GitHubChangeRequestLocator:
