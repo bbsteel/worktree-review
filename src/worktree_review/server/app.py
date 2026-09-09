@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -36,6 +37,7 @@ from worktree_review.platform.github.webhooks import (
 from worktree_review.platform.web.api import create_api_router
 from worktree_review.platform.web.errors import ApiError
 from worktree_review.platform.web.runtime import WebRuntime, open_web_runtime
+from worktree_review.platform.web.worker import execute_attempt, recover_interrupted
 from worktree_review.server.state import StateConflictError
 
 
@@ -58,6 +60,7 @@ def create_app(
     runtime_builder: ServerRuntimeBuilder | None = None,
     web_runtime: WebRuntime | None = None,
     enable_local_web: bool = True,
+    start_worker: bool = True,
 ) -> FastAPI:
     configure_logging(json_output=True)
     configured_webhook_secret = github_webhook_secret or os.environ.get(
@@ -84,13 +87,23 @@ def create_app(
         elif enable_local_web:
             opened_web = await open_web_runtime(default_web_database_path())
             application.state.web_runtime = opened_web
+        local_web = getattr(application.state, "web_runtime", None)
+        if isinstance(local_web, WebRuntime) and start_worker and enable_local_web:
+
+            async def _execute(attempt_id: str) -> None:
+                await execute_attempt(local_web, attempt_id)
+
+            local_web.execute_attempt = _execute
+            await recover_interrupted(local_web)
+            local_web.worker_task = asyncio.create_task(local_web.run_worker())
         try:
             yield
         finally:
             if runtime is not None:
                 await runtime.aclose()
-            if opened_web is not None and opened_web.worker_task is not None:
-                opened_web.worker_task.cancel()
+            worker = getattr(application.state, "web_runtime", None)
+            if isinstance(worker, WebRuntime) and worker.worker_task is not None:
+                worker.worker_task.cancel()
 
     application = FastAPI(
         title="Worktree Review",

@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Header, Request
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from worktree_review.application.lifecycle import RunStatus
@@ -38,6 +39,7 @@ from worktree_review.platform.web.registry import (
 )
 from worktree_review.platform.web.runtime import WebRuntime
 from worktree_review.platform.web.security import assert_local_mutation_headers
+from worktree_review.platform.web.sse import iter_attempt_events
 
 
 class LocalWorktreeSource(BaseModel):
@@ -197,6 +199,29 @@ def create_api_router() -> APIRouter:
             review_policy=review_policy,
             compute_policy=compute_policy,
         )
+
+    @router.get("/api/v1/reviews/{attempt_id}/events")
+    async def review_events(
+        attempt_id: str,
+        request: Request,
+        last_event_id: str | None = Header(default=None, alias="Last-Event-ID"),
+        since: int | None = None,
+    ) -> StreamingResponse:
+        runtime = _runtime(request)
+        run = await runtime.store.get_run(attempt_id)
+        if run is None:
+            raise ApiError(404, "attempt_not_found", "unknown attempt")
+
+        async def _stream() -> Any:
+            async for item in iter_attempt_events(
+                runtime, attempt_id, last_event_id=last_event_id, since=since
+            ):
+                if item is None:
+                    yield ": heartbeat\n\n"
+                    continue
+                yield f"id: {item.sequence}\ndata: {item.model_dump_json(by_alias=True)}\n\n"
+
+        return StreamingResponse(_stream(), media_type="text/event-stream")
 
     @router.get("/api/v1/reviews/{attempt_id}/result")
     async def get_review_result(attempt_id: str, request: Request) -> Any:

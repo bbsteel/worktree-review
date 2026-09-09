@@ -8,6 +8,9 @@ from pathlib import Path
 
 from worktree_review.application.event_recorder import ReviewEventRecorder
 from worktree_review.application.review_events import ReviewEvent
+from worktree_review.core.config import ProviderConfiguration
+from worktree_review.core.policy import ComputePolicy
+from worktree_review.core.provider import ProviderClient
 from worktree_review.platform.web.local_store import SqliteReviewRunStore
 
 _SUBSCRIBER_BUFFER = 256
@@ -21,7 +24,11 @@ class WebRuntime:
         self._subscribers: dict[str, list[asyncio.Queue[ReviewEvent | None]]] = {}
         self.worker_task: asyncio.Task[None] | None = None
         self.execute_attempt: Callable[[str], Awaitable[None]] | None = None
+        self.provider_factory: (
+            Callable[[ComputePolicy, ProviderConfiguration | None], ProviderClient] | None
+        ) = None
         self.pipeline_invocations = 0
+        self.sse_heartbeat_seconds = 15.0
 
     def subscribe(self, attempt_id: str) -> asyncio.Queue[ReviewEvent | None]:
         queue: asyncio.Queue[ReviewEvent | None] = asyncio.Queue(maxsize=_SUBSCRIBER_BUFFER)
