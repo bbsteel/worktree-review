@@ -81,6 +81,8 @@ class GitHubReviewStore(Protocol):
         self, attempt_id: str, *, status: PublicationStatus, error: str | None = None
     ) -> None: ...
 
+    async def publication_status(self, attempt_id: str) -> PublicationStatus | None: ...
+
     async def list_recoverable_queued(self) -> tuple[AttemptExecutionSnapshot, ...]: ...
 
 
@@ -207,6 +209,11 @@ class InMemoryGitHubReviewStore:
                 update={"status": status, "last_error": error}
             )
             extras.publication_status = status
+
+    async def publication_status(self, attempt_id: str) -> PublicationStatus | None:
+        async with self._lock:
+            extras = self._attempts.get(attempt_id)
+            return None if extras is None else extras.publication_status
 
     async def list_recoverable_queued(self) -> tuple[AttemptExecutionSnapshot, ...]:
         async with self._lock:
@@ -420,6 +427,14 @@ class PostgresGitHubReviewStore:
                 attempt_id,
                 status.value,
             )
+
+    async def publication_status(self, attempt_id: str) -> PublicationStatus | None:
+        async with self._pool.acquire() as connection:
+            value = await connection.fetchval(
+                "SELECT publication_status FROM review_attempts WHERE attempt_id = $1::uuid",
+                attempt_id,
+            )
+        return None if value is None else PublicationStatus(value)
 
     async def list_recoverable_queued(self) -> tuple[AttemptExecutionSnapshot, ...]:
         async with self._pool.acquire() as connection:
