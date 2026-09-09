@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { MOCK_DATA_BADGE } from '../../data/index.ts'
 import { OverviewPage } from '../../pages/OverviewPage.tsx'
 import { DataSourceProvider } from '../../app/DataSourceProvider.tsx'
-import { ReviewDetailPlaceholder } from '../../app/ReviewDetailPlaceholder.tsx'
+import { ReviewDetailRoute } from '../../app/ReviewDetailRoute.tsx'
 import { ThemeProvider } from '../../app/ThemeProvider.tsx'
 import { stubMatchMedia } from '../../test/match-media.ts'
 import { ApplicationShell } from './ApplicationShell.tsx'
@@ -32,7 +32,7 @@ function renderShell(path = '/overview') {
         ),
         children: [
           { path: 'overview', element: <OverviewPage /> },
-          { path: 'reviews/:attemptId', element: <ReviewDetailPlaceholder /> },
+          { path: 'reviews/:attemptId', element: <ReviewDetailRoute /> },
         ],
       },
     ],
@@ -78,8 +78,10 @@ describe('ApplicationShell', () => {
   it('keeps Overview and Review Detail routes reachable inside the shell', async () => {
     renderShell('/reviews/attempt_01JY8R7F2W')
     await waitFor(() => {
-      expect(screen.getByRole('heading', { name: 'Review Detail' })).toBeInTheDocument()
+      expect(
+        screen.getByRole('heading', { name: 'acme/payment-service · PR #184' }),
+      ).toBeInTheDocument()
     })
-    expect(screen.getByTestId('attempt-id')).toHaveTextContent('attempt_01JY8R7F2W')
+    expect(screen.getByTestId('prototype-badge')).toHaveTextContent(MOCK_DATA_BADGE)
   })
 })

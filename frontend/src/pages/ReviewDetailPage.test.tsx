@@ -26,13 +26,14 @@ function renderPage(path: string): ReturnType<typeof createMemoryRouter> {
 }
 
 describe('ReviewDetailPage', () => {
-  it('loads the blocked fixture and renders the header with the mock badge', async () => {
+  it('loads the blocked fixture and renders the header', async () => {
     renderPage('/reviews/attempt_01JY8R7F2W')
 
     expect(
       await screen.findByRole('heading', { name: 'acme/payment-service · PR #184' }),
     ).toBeInTheDocument()
-    expect(screen.getByText('Mock data · Pre-Alpha')).toBeInTheDocument()
+    // PM-010: the Mock/Pre-Alpha indicator is asserted once at the shell level
+    // (see router.test.tsx), not repeated per page.
     expect(screen.getAllByText('Blocked').length).toBeGreaterThan(0)
   })
 

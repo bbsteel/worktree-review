@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useParams, useSearchParams } from 'react-router'
-import { Badge } from '../components/ui/badge.tsx'
 import { Button } from '../components/ui/button.tsx'
 import { EmptyState } from '../components/ui/empty-state.tsx'
 import { Skeleton } from '../components/ui/skeleton.tsx'
@@ -137,15 +136,10 @@ export function ReviewDetailPage({ dataSource }: ReviewDetailPageProps) {
 
   return (
     <main className="mx-auto w-full max-w-6xl px-6 py-6">
-      {source.environmentBadge !== null ? (
-        <div className="mb-3 flex items-center gap-2">
-          <Badge tone="warning" label={source.environmentBadge} />
-          <span className="text-meta text-text-secondary">
-            Prototype data for interaction review; not a live pipeline result.
-          </span>
-        </div>
-      ) : null}
-
+      {/* PM-010: the single Mock/Pre-Alpha environment indicator lives in the
+          ApplicationShell banner; per-case provenance (handwritten mock vs
+          real pipeline snapshot) is shown by the banner's demo case selector,
+          so this page does not repeat a source-level badge here. */}
       <ReviewHeader run={run} />
 
       <div className="mt-4">

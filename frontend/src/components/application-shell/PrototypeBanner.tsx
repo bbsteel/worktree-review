@@ -18,7 +18,9 @@ export function PrototypeBanner() {
       <span className="font-medium" data-testid="prototype-badge">
         {badge}
       </span>
-      <span className="text-text-secondary">Handwritten prototype data. Not live run history.</span>
+      <span className="text-text-secondary">
+        Prototype environment. Demo cases only — no live Provider, GitHub, or Session Insight.
+      </span>
       <label className="ml-auto flex items-center gap-2 text-xs text-text-secondary">
         Demo case
         <select

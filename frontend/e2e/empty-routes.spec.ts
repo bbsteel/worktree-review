@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test'
 
-test('Overview empty route is reachable', async ({ page }) => {
+test('Overview route is reachable', async ({ page }) => {
   await page.goto('/overview')
   await expect(page.getByRole('heading', { name: 'Overview' })).toBeVisible()
 })
@@ -11,8 +11,5 @@ test('root redirects to Overview', async ({ page }) => {
   await expect(page.getByRole('heading', { name: 'Overview' })).toBeVisible()
 })
 
-test('Review Detail empty route is reachable', async ({ page }) => {
-  await page.goto('/reviews/attempt_01JY8R7F2W')
-  await expect(page.getByRole('heading', { name: 'Review Detail' })).toBeVisible()
-  await expect(page.getByTestId('attempt-id')).toHaveText('attempt_01JY8R7F2W')
-})
+// The /reviews/:attemptId route is exercised end to end by review-detail.spec.ts
+// (wired by PM-010); this file only covers the foundation-level routes above.

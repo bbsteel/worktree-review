@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { OverviewPage } from '../pages/OverviewPage.tsx'
 import { ApplicationShell } from '../components/application-shell/ApplicationShell.tsx'
 import { DataSourceProvider } from './DataSourceProvider.tsx'
-import { ReviewDetailPlaceholder } from './ReviewDetailPlaceholder.tsx'
+import { ReviewDetailRoute } from './ReviewDetailRoute.tsx'
 import { ThemeProvider } from './ThemeProvider.tsx'
 import { stubMatchMedia } from '../test/match-media.ts'
 
@@ -30,7 +30,7 @@ function renderPath(path: string) {
         ),
         children: [
           { path: 'overview', element: <OverviewPage /> },
-          { path: 'reviews/:attemptId', element: <ReviewDetailPlaceholder /> },
+          { path: 'reviews/:attemptId', element: <ReviewDetailRoute /> },
         ],
       },
     ],
@@ -39,19 +39,28 @@ function renderPath(path: string) {
   return render(<RouterProvider router={router} />)
 }
 
-describe('empty routes', () => {
-  it('renders the Overview empty page', async () => {
+describe('assembled routes', () => {
+  it('renders the Overview dashboard', async () => {
     renderPath('/overview')
     await waitFor(() => {
       expect(screen.getByRole('heading', { name: 'Overview' })).toBeInTheDocument()
     })
   })
 
-  it('renders the Review Detail empty page for an attempt id', async () => {
+  it('renders the real Review Detail page for a fixture attempt id', async () => {
     renderPath('/reviews/attempt_01JY8R7F2W')
     await waitFor(() => {
-      expect(screen.getByRole('heading', { name: 'Review Detail' })).toBeInTheDocument()
+      expect(
+        screen.getByRole('heading', { name: 'acme/payment-service · PR #184' }),
+      ).toBeInTheDocument()
     })
-    expect(screen.getByTestId('attempt-id')).toHaveTextContent('attempt_01JY8R7F2W')
+  })
+
+  it('shows the unified Mock/Pre-Alpha badge and demo case selector on every route', async () => {
+    renderPath('/reviews/attempt_01JY8R7F2W')
+    await waitFor(() => {
+      expect(screen.getByTestId('prototype-badge')).toHaveTextContent('Mock data · Pre-Alpha')
+    })
+    expect(screen.getByRole('combobox', { name: 'Demo case' })).toBeInTheDocument()
   })
 })
