@@ -14,16 +14,23 @@ import { cx } from '../ui/cx.ts'
 
 const previewReason = {
   reviews: 'Reviews list is Preview. Open a demo case from the prototype banner to see a Review Detail route.',
-  repositories: 'Repository registration is Preview and is not available in this Pre-Alpha prototype.',
-  policies: 'Policy registry is Preview and is not available in this Pre-Alpha prototype.',
-  providers: 'Provider profile management is Preview and is not available in this Pre-Alpha prototype.',
   sessionInsight: 'Session Insight is disconnected in this Pre-Alpha prototype.',
   github: 'GitHub integration is Preview and is not connected.',
   settings: 'Settings is Preview and is not available in this Pre-Alpha prototype.',
 }
 
+const NAV_LINK_CLASS =
+  'inline-flex min-h-10 items-center gap-2 rounded-md px-2.5 text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring'
+
+function navLinkClass(isActive: boolean): string {
+  return cx(
+    NAV_LINK_CLASS,
+    isActive ? 'bg-surface-subtle text-text-primary' : 'text-text-secondary hover:text-text-primary',
+  )
+}
+
 export function SideNav({ onNavigate }: { onNavigate?: () => void }) {
-  const { overview } = useDataSource()
+  const { overview, source } = useDataSource()
   const sessionState = overview?.sessionInsight.state ?? 'disconnected'
 
   return (
@@ -36,21 +43,36 @@ export function SideNav({ onNavigate }: { onNavigate?: () => void }) {
         <NavLink
           to="/overview"
           onClick={onNavigate}
-          className={({ isActive }) =>
-            cx(
-              'inline-flex min-h-10 items-center gap-2 rounded-md px-2.5 text-sm',
-              'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring',
-              isActive ? 'bg-surface-subtle text-text-primary' : 'text-text-secondary hover:text-text-primary',
-            )
-          }
+          className={({ isActive }) => navLinkClass(isActive)}
         >
           <LayoutDashboard aria-hidden="true" className="h-4 w-4" />
           Overview
         </NavLink>
         <PreviewControl label="Reviews" reason={previewReason.reviews} icon={GitPullRequest} />
-        <PreviewControl label="Repositories" reason={previewReason.repositories} icon={FolderGit2} />
-        <PreviewControl label="Policies" reason={previewReason.policies} icon={Shield} />
-        <PreviewControl label="Providers" reason={previewReason.providers} icon={Unplug} />
+        <NavLink
+          to="/repositories"
+          onClick={onNavigate}
+          className={({ isActive }) => navLinkClass(isActive)}
+        >
+          <FolderGit2 aria-hidden="true" className="h-4 w-4" />
+          Repositories
+        </NavLink>
+        <NavLink
+          to="/policies"
+          onClick={onNavigate}
+          className={({ isActive }) => navLinkClass(isActive)}
+        >
+          <Shield aria-hidden="true" className="h-4 w-4" />
+          Policies
+        </NavLink>
+        <NavLink
+          to="/providers"
+          onClick={onNavigate}
+          className={({ isActive }) => navLinkClass(isActive)}
+        >
+          <Unplug aria-hidden="true" className="h-4 w-4" />
+          Providers
+        </NavLink>
         <p className="mt-3 px-2.5 text-[11px] uppercase tracking-wide text-text-secondary">Integrations</p>
         <PreviewControl
           label="Session Insight"
@@ -63,7 +85,7 @@ export function SideNav({ onNavigate }: { onNavigate?: () => void }) {
         </div>
       </nav>
       <div className="border-t border-border px-4 py-3 text-xs text-text-secondary">
-        <p>Web service: prototype mock</p>
+        <p>Web service: {source.kind === 'mock' ? 'prototype mock' : 'live local API'}</p>
         <p>Version 0.0.0 · Local</p>
         <p>Session Insight: {sessionState}</p>
       </div>
