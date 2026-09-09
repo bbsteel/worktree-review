@@ -16,6 +16,7 @@ from worktree_review.application.lifecycle import (
     project_gate_state,
 )
 from worktree_review.application.mapping import local_source_from_report, project_available_actions
+from worktree_review.application.projections import project_coverage, project_usage
 from worktree_review.application.review_runs import OverviewAggregate, ReviewRunRecord
 from worktree_review.application.views import SurfaceProjection
 from worktree_review.core.findings import EvidenceBand, Finding, Severity
@@ -23,8 +24,6 @@ from worktree_review.core.policy import ComputePolicy, ReviewPolicy
 from worktree_review.core.report import PIPELINE_STAGE_ORDER, ReviewReport, StageStatus
 from worktree_review.platform.web.local_store import SqliteReviewRunStore
 from worktree_review.platform.web.registry import parse_credential_reference
-
-_NOT_REPORTED_REASON = "Reason not reported by this result schema"
 
 
 def _cost_number(value: str | None) -> float | None:
@@ -147,110 +146,11 @@ def _summary_dto(
 
 
 def _coverage_from_report(report: ReviewReport) -> dict[str, Any]:
-    coverage = report.coverage
-    if coverage is None:
-        return {
-            "required_coverage": "incomplete",
-            "reviewed_count": 0,
-            "excluded_count": 0,
-            "missing_count": 0,
-            "files": [],
-        }
-    files: list[dict[str, str | None]] = []
-    files.extend(
-        {"path": path, "category": "reviewed", "reason": None, "rule": None}
-        for path in coverage.reviewed
-    )
-    files.extend(
-        {
-            "path": path,
-            "category": "mandatory-missing",
-            "reason": _NOT_REPORTED_REASON,
-            "rule": "mandatory-glob",
-        }
-        for path in coverage.mandatory_missing
-    )
-    files.extend(
-        {
-            "path": path,
-            "category": "optional-missing",
-            "reason": _NOT_REPORTED_REASON,
-            "rule": "optional-glob",
-        }
-        for path in coverage.optional_missing
-    )
-    files.extend(
-        {
-            "path": path,
-            "category": "excluded",
-            "reason": _NOT_REPORTED_REASON,
-            "rule": "excluded-glob",
-        }
-        for path in coverage.excluded
-    )
-    files.extend(
-        {
-            "path": path,
-            "category": "unreviewable",
-            "reason": _NOT_REPORTED_REASON,
-            "rule": None,
-        }
-        for path in coverage.unreviewable
-    )
-    missing_count = len(coverage.mandatory_missing) + len(coverage.optional_missing)
-    return {
-        "required_coverage": "complete" if coverage.required_coverage_complete else "incomplete",
-        "reviewed_count": len(coverage.reviewed),
-        "excluded_count": len(coverage.excluded),
-        "missing_count": missing_count,
-        "files": files,
-    }
+    return project_coverage(report.coverage)
 
 
 def _usage_from_report(report: ReviewReport) -> dict[str, Any]:
-    calls: list[dict[str, object | None]] = []
-    unknown = 0
-    input_tokens = 0
-    output_tokens = 0
-    actual = 0.0
-    has_actual = False
-    for index, record in enumerate(report.usage, start=1):
-        if record.cost_usd is None:
-            unknown += 1
-            cost = None
-            cost_unknown = True
-        else:
-            cost = float(record.cost_usd)
-            cost_unknown = False
-            actual += cost
-            has_actual = True
-        if record.input_tokens is not None:
-            input_tokens += record.input_tokens
-        if record.output_tokens is not None:
-            output_tokens += record.output_tokens
-        calls.append(
-            {
-                "ordinal": index,
-                "dimension_id": None,
-                "provider": record.provider,
-                "model": record.model,
-                "elapsed_ms": None,
-                "usage_kind": record.kind.value,
-                "input_tokens": record.input_tokens,
-                "output_tokens": record.output_tokens,
-                "cost_usd": cost,
-                "cost_unknown": cost_unknown,
-            }
-        )
-    return {
-        "estimated_cost_usd": None,
-        "actual_cost_usd": actual if has_actual else None,
-        "cost_unknown": unknown > 0 or not has_actual,
-        "unknown_cost_record_count": unknown,
-        "input_tokens": input_tokens if report.usage else None,
-        "output_tokens": output_tokens if report.usage else None,
-        "calls": calls,
-    }
+    return project_usage(report)
 
 
 def _evidence_band_for_view(band: EvidenceBand) -> str:
