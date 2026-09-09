@@ -2,6 +2,7 @@ import { createBrowserRouter, Navigate } from 'react-router'
 import { ApplicationShell } from '../components/application-shell/ApplicationShell.tsx'
 import { NewReviewPage } from '../pages/NewReviewPage.tsx'
 import { OverviewPage } from '../pages/OverviewPage.tsx'
+import { ProvidersPage } from '../pages/ProvidersPage.tsx'
 import { RepositoriesPage } from '../pages/RepositoriesPage.tsx'
 import { DataSourceProvider } from './DataSourceProvider.tsx'
 import { ReviewDetailRoute } from './ReviewDetailRoute.tsx'
@@ -20,6 +21,7 @@ export const router = createBrowserRouter([
       { path: 'reviews/new', element: <NewReviewPage /> },
       { path: 'reviews/:attemptId', element: <ReviewDetailRoute /> },
       { path: 'repositories', element: <RepositoriesPage /> },
+      { path: 'providers', element: <ProvidersPage /> },
     ],
   },
 ])
