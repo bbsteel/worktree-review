@@ -1,0 +1,1 @@
+"""Local Web platform adapters."""

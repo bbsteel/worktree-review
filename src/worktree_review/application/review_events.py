@@ -12,7 +12,7 @@ SurfaceName = Literal["cli", "web", "github"]
 
 
 class ReviewEvent(BaseModel):
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, populate_by_name=True)
 
     schema_name: Literal["worktree-review.event/v1"] = Field(
         default="worktree-review.event/v1", alias="schema"
