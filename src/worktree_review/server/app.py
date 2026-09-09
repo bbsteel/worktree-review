@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from worktree_review import __version__
 from worktree_review.observability import configure_logging
@@ -32,7 +33,22 @@ from worktree_review.platform.github.webhooks import (
     WebhookValidationError,
     handle_github_webhook,
 )
+from worktree_review.platform.web.api import create_api_router
+from worktree_review.platform.web.errors import ApiError
+from worktree_review.platform.web.runtime import WebRuntime, open_web_runtime
 from worktree_review.server.state import StateConflictError
+
+
+def default_web_database_path() -> Path:
+    override = os.environ.get("WORKTREE_REVIEW_WEB_DATABASE")
+    if override:
+        return Path(override)
+    xdg = os.environ.get("XDG_STATE_HOME")
+    if xdg:
+        root = Path(xdg) / "worktree-review"
+    else:
+        root = Path.home() / ".local" / "state" / "worktree-review"
+    return root / "web.sqlite"
 
 
 def create_app(
@@ -40,6 +56,8 @@ def create_app(
     github_webhook_secret: str | None = None,
     retry_coordinator: GitHubRetryCoordinator | None = None,
     runtime_builder: ServerRuntimeBuilder | None = None,
+    web_runtime: WebRuntime | None = None,
+    enable_local_web: bool = True,
 ) -> FastAPI:
     configure_logging(json_output=True)
     configured_webhook_secret = github_webhook_secret or os.environ.get(
@@ -49,6 +67,7 @@ def create_app(
     @asynccontextmanager
     async def lifespan(application: FastAPI) -> AsyncIterator[None]:
         runtime: ServerRuntime | None = None
+        opened_web: WebRuntime | None = None
         if retry_coordinator is not None:
             application.state.retry_coordinator = retry_coordinator
         elif configured_webhook_secret:
@@ -60,11 +79,18 @@ def create_app(
             application.state.retry_disabled_reason = (
                 "WORKTREE_REVIEW_GITHUB_WEBHOOK_SECRET is not configured"
             )
+        if web_runtime is not None:
+            application.state.web_runtime = web_runtime
+        elif enable_local_web:
+            opened_web = await open_web_runtime(default_web_database_path())
+            application.state.web_runtime = opened_web
         try:
             yield
         finally:
             if runtime is not None:
                 await runtime.aclose()
+            if opened_web is not None and opened_web.worker_task is not None:
+                opened_web.worker_task.cancel()
 
     application = FastAPI(
         title="Worktree Review",
@@ -72,6 +98,17 @@ def create_app(
         summary="GitHub App webhook receiver and review workers.",
         lifespan=lifespan,
     )
+    if web_runtime is not None:
+        application.state.web_runtime = web_runtime
+
+    @application.exception_handler(ApiError)
+    async def api_error_handler(_request: Request, exc: ApiError) -> JSONResponse:
+        return JSONResponse(
+            status_code=exc.status_code,
+            content={"error": {"code": exc.code, "message": exc.detail}},
+        )
+
+    application.include_router(create_api_router())
 
     @application.get("/healthz")
     async def healthz() -> dict[str, str]:

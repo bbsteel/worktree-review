@@ -45,6 +45,11 @@ class ReviewEventRecorder:
         self._sequences[attempt_id] = current
         return current
 
+    async def hydrate(self, attempt_id: str) -> None:
+        events = await self._store.list_events(attempt_id)
+        if events:
+            self._sequences[attempt_id] = max(event.sequence for event in events)
+
     async def record(
         self,
         *,

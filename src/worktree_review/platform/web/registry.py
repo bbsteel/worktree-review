@@ -99,10 +99,10 @@ async def register_trusted_policy(
         if resolved.is_relative_to(Path(row["canonical_root"])):
             raise TrustBoundaryError("trusted policy must not sit inside a reviewed repository")
     if kind == "review":
-        _policy, identity = load_review_policy(resolved)
+        _review_policy, identity = load_review_policy(resolved)
         table = "trusted_review_policies"
     elif kind == "compute":
-        _policy, identity = load_compute_policy(resolved)
+        _compute_policy, identity = load_compute_policy(resolved)
         table = "trusted_compute_policies"
     else:
         raise TrustBoundaryError("unknown policy kind")

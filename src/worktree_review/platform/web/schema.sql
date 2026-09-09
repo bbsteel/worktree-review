@@ -42,7 +42,8 @@ CREATE TABLE IF NOT EXISTS review_runs (
     created_at TEXT NOT NULL,
     cost_usd TEXT,
     cost_unknown INTEGER NOT NULL DEFAULT 0,
-    interrupted INTEGER NOT NULL DEFAULT 0
+    interrupted INTEGER NOT NULL DEFAULT 0,
+    request_json TEXT
 );
 
 CREATE TABLE IF NOT EXISTS review_events (

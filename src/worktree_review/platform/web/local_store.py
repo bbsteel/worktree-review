@@ -38,6 +38,16 @@ class SqliteReviewRunStore:
                     "INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (1, ?)",
                     (datetime.now(UTC).isoformat(),),
                 )
+                columns = {
+                    row[1]
+                    for row in connection.execute("PRAGMA table_info(review_runs)").fetchall()
+                }
+                if "request_json" not in columns:
+                    connection.execute("ALTER TABLE review_runs ADD COLUMN request_json TEXT")
+                connection.execute(
+                    "INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (2, ?)",
+                    (datetime.now(UTC).isoformat(),),
+                )
                 connection.commit()
 
         await asyncio.to_thread(_migrate)
@@ -56,6 +66,7 @@ class SqliteReviewRunStore:
         request_digest: str,
         initial_event: ReviewEvent,
         run_status: RunStatus = RunStatus.QUEUED,
+        request_json: str | None = None,
     ) -> str:
         def _create() -> str:
             now = datetime.now(UTC).isoformat()
@@ -73,9 +84,9 @@ class SqliteReviewRunStore:
                     return str(existing["attempt_id"])
                 connection.execute(
                     "INSERT INTO review_runs("
-                    "attempt_id, run_status, created_at, cost_unknown, interrupted) "
-                    "VALUES (?, ?, ?, 0, 0)",
-                    (attempt_id, run_status.value, now),
+                    "attempt_id, run_status, created_at, cost_unknown, interrupted, "
+                    "request_json) VALUES (?, ?, ?, 0, 0, ?)",
+                    (attempt_id, run_status.value, now, request_json),
                 )
                 connection.execute(
                     "INSERT INTO review_events(attempt_id, sequence, event_json) VALUES (?, ?, ?)",
@@ -96,6 +107,9 @@ class SqliteReviewRunStore:
 
         async with self._lock:
             return await asyncio.to_thread(_create)
+
+    async def append(self, event: ReviewEvent) -> None:
+        await self.append_event(event)
 
     async def append_event(self, event: ReviewEvent) -> None:
         def _append() -> None:
@@ -176,15 +190,7 @@ class SqliteReviewRunStore:
                 ).fetchone()
                 if row is None:
                     return None
-                return ReviewRunRecord(
-                    attempt_id=row["attempt_id"],
-                    run_status=RunStatus(row["run_status"]),
-                    created_at=datetime.fromisoformat(row["created_at"]),
-                    result_json=row["result_json"],
-                    cost_usd=row["cost_usd"],
-                    cost_unknown=bool(row["cost_unknown"]),
-                    interrupted=bool(row["interrupted"]),
-                )
+                return self._record_from_row(row)
 
         return await asyncio.to_thread(_get)
 
@@ -329,3 +335,132 @@ class SqliteReviewRunStore:
                 return [dict(row) for row in rows]
 
         return await asyncio.to_thread(_list)
+
+    async def get_repository(self, repository_id: str) -> dict[str, str] | None:
+        def _get() -> dict[str, str] | None:
+            with closing(self._connect()) as connection:
+                row = connection.execute(
+                    "SELECT * FROM repositories WHERE id = ?", (repository_id,)
+                ).fetchone()
+                return None if row is None else dict(row)
+
+        return await asyncio.to_thread(_get)
+
+    async def delete_repository(self, repository_id: str) -> bool:
+        def _delete() -> bool:
+            with closing(self._connect()) as connection:
+                cursor = connection.execute(
+                    "DELETE FROM repositories WHERE id = ?", (repository_id,)
+                )
+                connection.commit()
+                return cursor.rowcount > 0
+
+        async with self._lock:
+            return await asyncio.to_thread(_delete)
+
+    async def list_runs(self, *, limit: int = 50) -> tuple[ReviewRunRecord, ...]:
+        def _list() -> tuple[ReviewRunRecord, ...]:
+            with closing(self._connect()) as connection:
+                rows = connection.execute(
+                    "SELECT r.*, res.result_json FROM review_runs r "
+                    "LEFT JOIN review_results res ON res.attempt_id = r.attempt_id "
+                    "ORDER BY r.created_at DESC, r.attempt_id DESC LIMIT ?",
+                    (limit,),
+                ).fetchall()
+            return tuple(self._record_from_row(row) for row in rows)
+
+        return await asyncio.to_thread(_list)
+
+    async def list_incomplete_attempt_ids(self) -> tuple[str, ...]:
+        def _list() -> tuple[str, ...]:
+            with closing(self._connect()) as connection:
+                rows = connection.execute(
+                    "SELECT attempt_id FROM review_runs "
+                    "WHERE run_status IN ('queued', 'preparing', 'running', 'interrupted') "
+                    "AND attempt_id NOT IN (SELECT attempt_id FROM review_results) "
+                    "ORDER BY created_at"
+                ).fetchall()
+            return tuple(str(row["attempt_id"]) for row in rows)
+
+        return await asyncio.to_thread(_list)
+
+    async def list_trusted_policies(self, table: str) -> list[dict[str, str]]:
+        if table not in {"trusted_review_policies", "trusted_compute_policies"}:
+            raise InvalidInvocationError("unknown policy table")
+
+        def _list() -> list[dict[str, str]]:
+            with closing(self._connect()) as connection:
+                rows = connection.execute(f"SELECT * FROM {table} ORDER BY registered_at")
+                return [dict(row) for row in rows]
+
+        return await asyncio.to_thread(_list)
+
+    async def get_trusted_policy(self, table: str, policy_id: str) -> dict[str, str] | None:
+        if table not in {"trusted_review_policies", "trusted_compute_policies"}:
+            raise InvalidInvocationError("unknown policy table")
+
+        def _get() -> dict[str, str] | None:
+            with closing(self._connect()) as connection:
+                row = connection.execute(
+                    f"SELECT * FROM {table} WHERE id = ?", (policy_id,)
+                ).fetchone()
+                return None if row is None else dict(row)
+
+        return await asyncio.to_thread(_get)
+
+    async def get_provider_profile(self, profile_id: str) -> dict[str, str | None] | None:
+        def _get() -> dict[str, str | None] | None:
+            with closing(self._connect()) as connection:
+                row = connection.execute(
+                    "SELECT * FROM provider_profiles WHERE id = ?", (profile_id,)
+                ).fetchone()
+                return None if row is None else dict(row)
+
+        return await asyncio.to_thread(_get)
+
+    async def update_provider_profile(
+        self,
+        *,
+        profile_id: str,
+        name: str,
+        provider: str,
+        credential_reference: str | None,
+        endpoint: str | None = None,
+    ) -> None:
+        def _update() -> None:
+            with closing(self._connect()) as connection:
+                connection.execute(
+                    "UPDATE provider_profiles SET name = ?, provider = ?, endpoint = ?, "
+                    "credential_reference = ? WHERE id = ?",
+                    (name, provider, endpoint, credential_reference, profile_id),
+                )
+                connection.commit()
+
+        async with self._lock:
+            await asyncio.to_thread(_update)
+
+    async def delete_provider_profile(self, profile_id: str) -> bool:
+        def _delete() -> bool:
+            with closing(self._connect()) as connection:
+                cursor = connection.execute(
+                    "DELETE FROM provider_profiles WHERE id = ?", (profile_id,)
+                )
+                connection.commit()
+                return cursor.rowcount > 0
+
+        async with self._lock:
+            return await asyncio.to_thread(_delete)
+
+    def _record_from_row(self, row: sqlite3.Row) -> ReviewRunRecord:
+        keys = set(row.keys())
+        return ReviewRunRecord(
+            attempt_id=row["attempt_id"],
+            run_status=RunStatus(row["run_status"]),
+            created_at=datetime.fromisoformat(row["created_at"]),
+            result_json=row["result_json"] if "result_json" in keys else None,
+            cost_usd=row["cost_usd"],
+            cost_unknown=bool(row["cost_unknown"]),
+            interrupted=bool(row["interrupted"]),
+            request_json=row["request_json"] if "request_json" in keys else None,
+            gate_state=row["gate_state"],
+        )
