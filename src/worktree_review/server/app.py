@@ -56,10 +56,18 @@ def default_web_database_path() -> Path:
     return root / "web.sqlite"
 
 
+def packaged_frontend_dist() -> Path:
+    """Frontend bundle shipped inside the installed wheel (PM-101)."""
+    return Path(__file__).resolve().parent / "static"
+
+
 def default_frontend_dist() -> Path:
     override = os.environ.get("WORKTREE_REVIEW_FRONTEND_DIST")
     if override:
         return Path(override)
+    packaged = packaged_frontend_dist()
+    if (packaged / "index.html").is_file():
+        return packaged
     return Path(__file__).resolve().parents[3] / "frontend" / "dist"
 
 
@@ -68,8 +76,10 @@ def require_frontend_dist(path: Path) -> Path:
     if not index.is_file():
         raise RuntimeError(
             "frontend production build is missing at "
-            f"{index}. Build frontend/dist or set WORKTREE_REVIEW_FRONTEND_DIST; "
-            "the local Web UI will not start with a blank page."
+            f"{index}. Run `npm --prefix frontend run build` and "
+            "`python scripts/sync_frontend_dist.py`, or set "
+            "WORKTREE_REVIEW_FRONTEND_DIST; the local Web UI will not start "
+            "with a blank page."
         )
     return path
 
