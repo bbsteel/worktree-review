@@ -51,18 +51,27 @@ describe('ApplicationShell', () => {
     expect(screen.queryByLabelText(/search/i)).not.toBeInTheDocument()
   })
 
-  it('marks unimplemented actions as Preview with an accessible reason', async () => {
+  it('links implemented pages and marks the rest as Preview with reasons', async () => {
     renderShell()
     await waitFor(() => {
-      expect(screen.getByText('New Review')).toBeInTheDocument()
+      expect(screen.getByRole('link', { name: /New Review/ })).toHaveAttribute(
+        'href',
+        '/reviews/new',
+      )
     })
-    expect(
-      screen.getByRole('button', { name: /New Review/ }),
-    ).toHaveAccessibleDescription(/Creating an attempt from the web is not available/)
-    expect(
-      screen.getByRole('button', { name: /Repositories/ }),
-    ).toHaveAccessibleDescription(/Repository registration is Preview/)
     expect(screen.getByRole('link', { name: 'Overview' })).toHaveAttribute('href', '/overview')
+    expect(screen.getByRole('link', { name: 'Repositories' })).toHaveAttribute(
+      'href',
+      '/repositories',
+    )
+    expect(screen.getByRole('link', { name: 'Policies' })).toHaveAttribute('href', '/policies')
+    expect(screen.getByRole('link', { name: 'Providers' })).toHaveAttribute('href', '/providers')
+    expect(screen.getByRole('button', { name: /Reviews/ })).toHaveAccessibleDescription(
+      /Reviews list is Preview/,
+    )
+    expect(screen.getByRole('button', { name: /Session Insight/ })).toHaveAccessibleDescription(
+      /Session Insight is disconnected/,
+    )
   })
 
   it('opens narrow navigation from the menu button', async () => {

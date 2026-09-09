@@ -1,8 +1,7 @@
 import { Plus } from 'lucide-react'
 import { useMemo } from 'react'
-import { useSearchParams } from 'react-router'
+import { Link, useSearchParams } from 'react-router'
 import { useDataSource } from '../../app/data-source.ts'
-import { PreviewControl } from '../ui/preview-control.tsx'
 import { ThemeSwitcher } from '../ui/theme-switcher.tsx'
 import { Tooltip } from '../ui/tooltip.tsx'
 import { formatProviderFreshness } from './format.ts'
@@ -59,11 +58,13 @@ export function TopBar() {
             Local
           </button>
         </Tooltip>
-        <PreviewControl
-          label="New Review"
-          reason="New Review is Preview. Creating an attempt from the web is not available in this Pre-Alpha prototype."
-          icon={Plus}
-        />
+        <Link
+          to="/reviews/new"
+          className="inline-flex min-h-10 items-center gap-2 rounded-md bg-action-primary px-3 text-sm font-medium text-background transition-[filter] duration-[var(--wr-motion-control)] hover:brightness-110 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+        >
+          <Plus aria-hidden="true" className="h-4 w-4" />
+          New Review
+        </Link>
         <span className="sr-only">
           Global search is hidden until Review and Attempt search is implemented.
         </span>
