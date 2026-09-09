@@ -8,6 +8,8 @@ import { createReviewDataSource } from '../data/sources/create-review-data-sourc
 import { ReviewNotFoundError, type ReviewDataSource } from '../data/sources/review-data-source.ts'
 import type { ReviewRunView } from '../domain/review.ts'
 import { CopyValue } from '../features/review-detail/CopyValue.tsx'
+import { MergeCandidatePath } from '../features/review-detail/MergeCandidatePath.tsx'
+import { OverviewTab } from '../features/review-detail/OverviewTab.tsx'
 import {
   REVIEW_DETAIL_TAB_LABEL,
   REVIEW_DETAIL_TABS,
@@ -126,6 +128,10 @@ export function ReviewDetailPage({ dataSource }: ReviewDetailPageProps) {
 
       <ReviewHeader run={run} />
 
+      <div className="mt-4">
+        <MergeCandidatePath run={run} />
+      </div>
+
       <Tabs
         value={activeTab}
         onValueChange={(tab) => {
@@ -144,9 +150,7 @@ export function ReviewDetailPage({ dataSource }: ReviewDetailPageProps) {
         </TabList>
 
         <TabPanel value="overview">
-          <p className="text-sm text-text-secondary">
-            Overview content (gate summaries, dimensions, pipeline) is delivered in B-011.
-          </p>
+          <OverviewTab run={run} />
         </TabPanel>
         <TabPanel value="findings">
           <p className="text-sm text-text-secondary">

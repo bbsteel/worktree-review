@@ -31,7 +31,7 @@ describe('ReviewDetailPage', () => {
       await screen.findByRole('heading', { name: 'acme/payment-service · PR #184' }),
     ).toBeInTheDocument()
     expect(screen.getByText('Mock data · Pre-Alpha')).toBeInTheDocument()
-    expect(screen.getByText('Blocked')).toBeInTheDocument()
+    expect(screen.getAllByText('Blocked').length).toBeGreaterThan(0)
   })
 
   it('renders all seven detail tabs', async () => {
@@ -96,7 +96,7 @@ describe('ReviewDetailPage', () => {
     expect(
       await screen.findByRole('heading', { name: 'acme/session-insight' }),
     ).toBeInTheDocument()
-    expect(screen.getByText('Passed')).toBeInTheDocument()
+    expect(screen.getAllByText('Passed').length).toBeGreaterThan(0)
     expect(screen.queryByText(/^Author$/)).not.toBeInTheDocument()
   })
 })
