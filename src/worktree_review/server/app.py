@@ -13,7 +13,8 @@ from worktree_review.observability import configure_logging
 
 try:
     from fastapi import FastAPI, Request, Response, status
-    from fastapi.responses import JSONResponse
+    from fastapi.responses import FileResponse, JSONResponse
+    from fastapi.staticfiles import StaticFiles
 except ImportError as exc:  # pragma: no cover - exercised only without the extra
     raise ImportError(
         "worktree_review.server.app requires the server extra: "
@@ -40,6 +41,8 @@ from worktree_review.platform.web.runtime import WebRuntime, open_web_runtime
 from worktree_review.platform.web.worker import execute_attempt, recover_interrupted
 from worktree_review.server.state import StateConflictError
 
+DEFAULT_BIND_HOST = "127.0.0.1"
+
 
 def default_web_database_path() -> Path:
     override = os.environ.get("WORKTREE_REVIEW_WEB_DATABASE")
@@ -53,6 +56,24 @@ def default_web_database_path() -> Path:
     return root / "web.sqlite"
 
 
+def default_frontend_dist() -> Path:
+    override = os.environ.get("WORKTREE_REVIEW_FRONTEND_DIST")
+    if override:
+        return Path(override)
+    return Path(__file__).resolve().parents[3] / "frontend" / "dist"
+
+
+def require_frontend_dist(path: Path) -> Path:
+    index = path / "index.html"
+    if not index.is_file():
+        raise RuntimeError(
+            "frontend production build is missing at "
+            f"{index}. Build frontend/dist or set WORKTREE_REVIEW_FRONTEND_DIST; "
+            "the local Web UI will not start with a blank page."
+        )
+    return path
+
+
 def create_app(
     *,
     github_webhook_secret: str | None = None,
@@ -61,6 +82,8 @@ def create_app(
     web_runtime: WebRuntime | None = None,
     enable_local_web: bool = True,
     start_worker: bool = True,
+    serve_frontend: bool | None = None,
+    frontend_dist: Path | None = None,
 ) -> FastAPI:
     configure_logging(json_output=True)
     configured_webhook_secret = github_webhook_secret or os.environ.get(
@@ -156,6 +179,31 @@ def create_app(
             content=dispatch.model_dump(mode="json"),
             status_code=status.HTTP_202_ACCEPTED,
         )
+
+    should_serve = enable_local_web if serve_frontend is None else serve_frontend
+    if should_serve:
+        dist = require_frontend_dist(frontend_dist or default_frontend_dist())
+        index_file = dist / "index.html"
+        assets_dir = dist / "assets"
+        if assets_dir.is_dir():
+            application.mount("/assets", StaticFiles(directory=assets_dir), name="assets")
+
+        @application.get("/")
+        async def frontend_index() -> FileResponse:
+            return FileResponse(index_file)
+
+        favicon = dist / "favicon.svg"
+        if favicon.is_file():
+
+            @application.get("/favicon.svg")
+            async def frontend_favicon() -> FileResponse:
+                return FileResponse(favicon)
+
+        @application.get("/{full_path:path}")
+        async def frontend_spa(full_path: str) -> FileResponse:
+            if full_path.startswith(("api/", "webhooks/")) or full_path == "healthz":
+                raise ApiError(404, "not_found", "not found")
+            return FileResponse(index_file)
 
     return application
 

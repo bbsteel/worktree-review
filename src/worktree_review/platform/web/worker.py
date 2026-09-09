@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 from pathlib import Path
 from typing import Any
@@ -13,6 +14,7 @@ from worktree_review.core.pipeline import ReviewRequest
 from worktree_review.core.provider import UsageRecord, build_provider
 from worktree_review.core.report import ReviewProgressEvent
 from worktree_review.platform.cli.invocation import prepare_cli_review
+from worktree_review.platform.cli.result import cli_result_document
 from worktree_review.platform.web.runtime import WebRuntime
 
 
@@ -34,6 +36,8 @@ async def recover_interrupted(runtime: WebRuntime) -> None:
             continue
         if run.run_status is RunStatus.RUNNING:
             await runtime.store.mark_interrupted(attempt_id)
+        if runtime.journal is not None:
+            runtime.journal.backfill(await runtime.store.list_events(attempt_id))
         await runtime.enqueue(attempt_id)
 
 
@@ -104,6 +108,14 @@ async def execute_attempt(runtime: WebRuntime, attempt_id: str) -> None:
         else build_provider(prepared.compute_policy, prepared.provider_configuration)
     )
     drainer = asyncio.create_task(_drain_progress())
+
+    async def _journal_heartbeat() -> None:
+        while True:
+            await asyncio.sleep(runtime.sse_heartbeat_seconds)
+            if runtime.journal is not None:
+                runtime.journal.touch_heartbeat(attempt_id)
+
+    heartbeat = asyncio.create_task(_journal_heartbeat())
     try:
         report = await ReviewApplicationService().execute(
             ReviewRequest(
@@ -121,6 +133,9 @@ async def execute_attempt(runtime: WebRuntime, attempt_id: str) -> None:
             on_progress=on_progress,
         )
     except Exception as exc:
+        heartbeat.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await heartbeat
         await progress_queue.put(None)
         await drainer
         await runtime.store.update_run_status(attempt_id, RunStatus.FAILED)
@@ -131,10 +146,17 @@ async def execute_attempt(runtime: WebRuntime, attempt_id: str) -> None:
             payload={"safe_detail": str(exc)},
         )
         return
+    heartbeat.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await heartbeat
     await progress_queue.put(None)
     await drainer
     cost_usd, cost_unknown = _cost_fields(report.usage)
     await runtime.store.save_result(report, cost_usd=cost_usd, cost_unknown=cost_unknown)
+    if runtime.journal is not None:
+        runtime.journal.write_result(
+            attempt_id, cli_result_document(report).model_dump_json(by_alias=True)
+        )
     await runtime.recorder.record(
         attempt_id=attempt_id,
         surface="web",

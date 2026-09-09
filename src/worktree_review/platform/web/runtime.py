@@ -11,6 +11,7 @@ from worktree_review.application.review_events import ReviewEvent
 from worktree_review.core.config import ProviderConfiguration
 from worktree_review.core.policy import ComputePolicy
 from worktree_review.core.provider import ProviderClient
+from worktree_review.platform.session_insight.journal import SessionJournalWriter
 from worktree_review.platform.web.local_store import SqliteReviewRunStore
 
 _SUBSCRIBER_BUFFER = 256
@@ -29,6 +30,7 @@ class WebRuntime:
         ) = None
         self.pipeline_invocations = 0
         self.sse_heartbeat_seconds = 15.0
+        self.journal: SessionJournalWriter | None = None
 
     def subscribe(self, attempt_id: str) -> asyncio.Queue[ReviewEvent | None]:
         queue: asyncio.Queue[ReviewEvent | None] = asyncio.Queue(maxsize=_SUBSCRIBER_BUFFER)
@@ -70,9 +72,10 @@ class WebRuntime:
             await self.execute_attempt(attempt_id)
 
 
-async def open_web_runtime(database_path: Path) -> WebRuntime:
+async def open_web_runtime(database_path: Path, *, journal_root: Path | None = None) -> WebRuntime:
     store = SqliteReviewRunStore(database_path)
     await store.migrate()
     runtime = WebRuntime(store)
-    runtime.recorder = ReviewEventRecorder(store, sinks=(runtime,))
+    runtime.journal = SessionJournalWriter(journal_root)
+    runtime.recorder = ReviewEventRecorder(store, sinks=(runtime, runtime.journal))
     return runtime
