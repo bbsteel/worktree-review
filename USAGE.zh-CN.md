@@ -12,10 +12,10 @@ GitHub server 目前已经有部分状态、webhook、retry 和 Checks adapter�
 - Python 3.12 或更新版本。
 - Git 2.38 或更新版本。Worktree Review 使用 `git merge-tree --write-tree`。
 - 一个 target 和 proposed commit 都能解析的本地 Git 仓库。
-- 远程 Provider 的 key 和 model（可选自定义 URL），或者一个本地检视命令，二选一。
+- 远程 Provider 的 key 和 model（可选自定义 URL），或者一个配合内置 adapter 的本地检视命令，二选一。
 
 CLI 不会执行 proposed change 中的代码。它会构造精确的 merge candidate，物化临时的
-只读 Review Worktree，按策略收集上下文，再只把生成的检视请求发送给配置的 Provider。
+只读 Review Worktree，按策略收集上下文，再把生成的检视请求交给配置的 Provider 或本地 command。
 
 ## 安装
 
@@ -36,11 +36,25 @@ pipx install worktree-review
 
 安装后的命令是 `worktree-review`。只有直接使用本仓库虚拟环境时才需要 `uv run` 前缀。
 
+## 快速开始
+
+交互式创建可信默认配置，然后在仓库中运行检视：
+
+```bash
+worktree-review init
+worktree-review
+```
+
+`init` 会把远程 Provider/key 或本地 command 写入
+`~/.config/worktree-review/config.yaml`。它只检查本地 executable 是否能找到，不执行该命令，
+也不会发出远程凭据请求。`worktree-review review` 仍是显式等价写法。
+
 ## 配置文件
 
 正常使用本地 CLI 时，面向用户的配置是一份小型 YAML 文件。它可以选择带 key 和 model
 （可选自定义 URL）的远程 Provider，或者选择一个本地检视命令。Review Policy 是可选的：
-省略 `--policy` 时，Worktree Review 使用内置的默认策略。
+省略 `--policy` 时，Worktree Review 使用内置的默认策略。推荐使用 `worktree-review init`
+创建配置；如果由 secret store 或部署系统管理，也可以手工维护 YAML。
 
 把 [config.example.yaml](config.example.yaml) 复制到可信的默认位置，再替换 key 引用：
 
@@ -83,7 +97,7 @@ OpenAI-compatible 或其他自定义 endpoint，再填写 `url`。`model` 可以
 Provider 的内置默认值。`key` 可以是可信文件中的明文 secret，但更推荐使用
 `${ANTHROPIC_API_KEY}` 这样的环境变量引用。
 
-### 本地 CLI Provider
+### 本地 CLI Provider 与 adapter
 
 也可以配置本地 executable：
 
@@ -94,7 +108,8 @@ command:
 ```
 
 数组中的每一项都是一个参数；命令行 flag 要分别写成后续数组项，不支持 shell pipeline、
-替换或重定向。命令不会经过 shell 启动，并从 stdin 接收一个 JSON 对象：
+替换或重定向。命令不会经过 shell 启动。默认使用 `worktree-json` adapter，并从 stdin 接收一个
+JSON 对象：
 
 ```json
 {
@@ -107,8 +122,34 @@ command:
 ```
 
 它必须向 stdout 写入一个 `dimension-findings.v1` JSON 对象（例如 `{"findings": []}`）并以
-状态 `0` 退出。本地命令是用户信任的工具；Worktree Review 自身不会解释 shell 字符串，也
-不会执行 proposed-change 代码。本地工具可能不报告 token 用量，因此结果中的用量和成本可能是未知的。
+状态 `0` 退出。
+
+如果已有命令能够从 stdin 接收 prompt，可以使用产品 adapter，不必另外开发项目专用 wrapper：
+
+```yaml
+provider: local-cli
+command:
+  - claude
+  - --print
+adapter: prompt-text-json
+```
+
+`prompt-json` 会把渲染后的 system/user prompt 写入 stdin，并要求 stdout 是一个 JSON 对象。
+`prompt-text-json` 还会从 fenced 或轻度装饰的响应中提取一个 JSON 对象。这两个 adapter 都不会
+把任意自然语言可靠转换为 finding；命令仍必须被指示或配置为返回 `dimension-findings.v1` 结构。
+需要 response schema、dimension metadata 作为输入字段的自定义 wrapper 应使用 `worktree-json`。
+
+如果 command 会把内容转交给 Provider 或服务，可以加上本地 command 的 disclosure metadata：
+
+```yaml
+data_destination: "Company review gateway"
+known_retention: "Retained according to the gateway policy."
+```
+
+省略时，Worktree Review 会展示保守的 command-defined 默认值。本地 executable 不是它不会联网
+或 retention 在本机的证明。CLI 会明确说检视内容将交给配置的 command，并展示不含 secret 的配置
+fingerprint；传输 disclosure 不会打印 command 参数。本地工具可能不报告 token 用量，因此结果
+中的用量和成本可能是未知的。
 
 ### 配置生成的 Compute Policy
 
@@ -252,7 +293,7 @@ known_retention: "填写部署所批准的 retention 条款。"
 | --- | --- | --- |
 | `schema` | 是 | 必须是 `worktree-review.compute-policy/v1`。 |
 | `version` | 是 | 记录在 Attempt 上的语义化版本。 |
-| `provider` | 是 | `anthropic`、`openai` 或 `local-cli`。 |
+| `provider` | 是 | `anthropic` 或 `openai`；本地 command 使用普通 `--config`。 |
 | `model` | 是 | 传给所选 Provider SDK 的 model 标识符。 |
 | `max_output_tokens_per_call` | 否 | 每次 Provider 调用请求的硬性最大输出；高级策略默认 `8192`。 |
 | `max_budget_usd` | 是 | 一次检视允许的最大配置预算。 |
@@ -265,8 +306,9 @@ known_retention: "填写部署所批准的 retention 条款。"
 
 使用 `--compute-policy` 执行 live CLI 检视时，只有在目的地和 retention 获得批准后才设置
 `permit_remote_transmission: true`。如果是 false，CLI 会在调用 Provider 前拒绝本次调用，
-并返回 `3`。最小的 `--config` 形式把配置的远程 Provider 和 key 视为这个同意；未填写 URL
-时使用标准 endpoint。
+并返回 `3`。最小的 `--config` 形式把配置的远程 Provider/key 或本地 command 视为把内容
+交给所选 Provider 的明确同意，但仍会披露本地 command 可能自行联网；未填写 URL 时使用标准
+remote endpoint。
 
 对于高级策略，`data_destination` 是披露元数据，不会配置自定义 API endpoint；所选 Provider
 SDK 仍使用自己的默认 endpoint。最小 `--config` 中的可选 `url` 会作为实际 Provider endpoint。
@@ -390,8 +432,9 @@ worktree-review review \
   > review-result.json
 ```
 
-远程传输披露和调用计划会在 Provider 调用前写到 stderr，因此只重定向 stdout 时仍会得到纯
-JSON。如果需要审计 Provider、model、目的地、retention 和 token 上限，不要丢弃 stderr。
+Provider handoff disclosure、调用计划和非权威进度行会在 Provider 调用前及运行期间写到
+stderr，因此只重定向 stdout 时仍会得到纯 JSON。如果需要审计 Provider、model、目的地、
+retention、本地配置 fingerprint、token 上限或当前阶段/dimension，不要丢弃 stderr。
 
 两种输出格式都会暴露 Attempt ID、Request Key、source 和不可变 head、stage outcomes、
 dimension outcomes、findings、draft findings、coverage、usage、call plan、策略版本和
@@ -424,17 +467,19 @@ CLI 永远不会输出 `Passed with bypass`。draft findings 只用于诊断，�
 把它移动到可信的用户或部署目录。包括 `AGENTS.md` 和 `CLAUDE.md` 在内的仓库文件，都不能
 改变 Review Policy 或 Compute Policy。
 
-### 远程传输被拒绝
+### Provider handoff 被拒绝
 
-检查 CLI 打印的传输披露。最小配置中，配置远程 Provider 和 key 就表示同意传输；使用高级
-Compute Policy 时，只有在 Provider、目的地和 retention 获得批准后，才设置
-`permit_remote_transmission: true`。
+检查 CLI 打印的传输披露。最小配置中，配置远程 Provider/key 或本地 command 就表示同意把内容
+交给所选 Provider。对于本地 command，应检查 command、adapter、目的地和 retention metadata，
+因为 Worktree Review 无法证明 command 是否联网。使用高级 Compute Policy 时，只有在 Provider、
+目的地和 retention 获得批准后，才设置 `permit_remote_transmission: true`。
 
 ### Provider 认证失败
 
 远程 Provider 要检查 `provider`、可选 URL 和 model 是否对应目标 SDK，并确认配置的 key
 可用。只有构造所选 Provider 时才会读取 key。本地 Provider 要检查 command 数组中的每一项
-都存在且可执行。
+都存在且可执行，并确认 adapter 与 command 的 stdin/stdout 行为相符。非零退出和格式错误会
+包含有长度限制、控制字符已转义的子进程 stderr/stdout 诊断。
 
 ### 高级 budget pre-flight 拒绝开始
 

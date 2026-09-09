@@ -216,10 +216,15 @@ decisions). Each document carries a semver; its *version identity* is
   Review Policy. Normal provider configuration is a minimal `--config` YAML file
   at `~/.config/worktree-review/config.yaml` (or an explicit path), containing
   a remote provider/key/model (with an optional custom URL) or a local CLI
-  command. It derives a hard 4096-token per-call output limit and no dollar
-  budget. `--compute-policy` remains an advanced path for deployments that need
-  direct compute controls. Every custom policy/config path must be outside the
-  reviewed repository (§8.9).
+  command. Local commands select one of the trusted product adapters
+  `worktree-json`, `prompt-json`, or `prompt-text-json`; the default is the
+  Worktree Review JSON stdin/stdout protocol. The normal path derives a hard
+  4096-token per-call output limit and no dollar budget. It also derives a
+  non-secret fingerprint over the complete local command configuration, and
+  carries optional local-command destination and retention disclosures.
+  `--compute-policy` remains an advanced path for deployments that need direct
+  compute controls; its external schema accepts remote providers only. Every
+  custom policy/config path must be outside the reviewed repository (§8.9).
 - GitHub: per-installation rows in Postgres, edited outside the reviewed
   repo; every review records the exact policy version hashes it used.
 
@@ -263,7 +268,10 @@ The normal `--config` path derives `max_output_tokens_per_call: 4096`, records
 input estimates without pricing them, and relies on the provider account for
 actual spend. It reports the planned call count, estimated input tokens, and
 per-call output limit before the first call; measured usage and cost availability
-after completion remain explicit.
+after completion remain explicit. Provider handoff disclosure applies equally to
+remote SDK calls and local commands. A local command is not assumed to be
+network-free; its command/adapter/destination/retention fingerprint is included
+in the derived Compute Policy identity and result.
 
 Advanced `--compute-policy` carries an optional per-review budget for internal
 derived policies and a required budget in the external advanced schema (§9.3, §20):
@@ -363,6 +371,13 @@ as the mechanism that keeps native overrides visible.
   records in the machine-readable result. Normal configuration reports measured
   input/output tokens when the provider returns them and otherwise directs the
   user to provider account billing for cost.
+- `worktree-review init` interactively selects a remote provider/key or local
+  command, checks that a local executable is available without executing it, and
+  writes a mode-600 trusted default configuration. The plain `worktree-review`
+  entry point invokes the same local review as the explicit `review` command.
+- Text and JSON modes write non-authoritative preparation, stage, and current
+  dimension progress to stderr, including elapsed time after work completes;
+  JSON stdout remains exclusively the versioned result document.
 - Exit codes: `0` = `Passed`, `1` = `Blocked`, `2` = `Error`,
   `3` = invalid invocation (unresolvable refs, policy inside repo, git too
   old, incompatible source-selection flags, or an unrepresentable worktree
@@ -377,11 +392,13 @@ as the mechanism that keeps native overrides visible.
   changes are outside the result.
 - `--policy` is optional and uses the built-in Review Policy when omitted. The
   normal `--config` file selects a remote provider/key/model with an optional
-  custom URL, or a local CLI command; it derives a 4096-token per-call output
-  limit and no dollar budget. The advanced `--compute-policy` path remains
-  available for direct compute control. Before any remote transmission, the CLI
-  prints provider, model, data destination, and known retention behavior. No
-  feedback or telemetry leaves the CLI without explicit opt-in (§22).
+  custom URL, or a local CLI command and product adapter; it derives a 4096-token
+  per-call output limit and no dollar budget. The advanced `--compute-policy`
+  path remains available for direct compute control and accepts remote providers
+  only. Before any provider handoff, the CLI prints provider, model, data
+  destination, known retention behavior, and the local configuration fingerprint
+  when applicable. No feedback or telemetry leaves the CLI without explicit
+  opt-in (§22).
 - `worktree-review prompts --dimension <id>` prints the trusted product-owned
   prompt hierarchy used for that dimension.
 - Every invocation generates an attempt ID. Construction failures emit the

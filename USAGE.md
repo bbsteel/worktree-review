@@ -15,12 +15,12 @@ end-to-end user-facing review service in this stage.
 - Git 2.38 or newer. Worktree Review uses `git merge-tree --write-tree`.
 - A local Git repository with a resolvable target and proposed commit.
 - Either a remote provider key and model (with an optional custom URL), or a
-  local review command.
+  local review command with one of the built-in local adapters.
 
 The CLI does not execute code from the proposed change. It constructs an exact
 merge candidate, materializes a temporary read-only Review Worktree, gathers
-policy-selected context, and sends only the resulting review request to the
-configured provider.
+policy-selected context, and hands the resulting review request to the
+configured provider or local command.
 
 ## Install
 
@@ -43,12 +43,30 @@ pipx install worktree-review
 The installed command is `worktree-review`. The `uv run` prefix is needed only
 when using the checkout's virtual environment directly.
 
+## Quick start
+
+Create the trusted default configuration interactively, then run the review from
+the repository:
+
+```bash
+worktree-review init
+worktree-review
+```
+
+`init` records a remote provider/key or local command in
+`~/.config/worktree-review/config.yaml`. It checks that a local executable can
+be found but does not execute it, and it does not make a remote credential
+request. `worktree-review review` remains the explicit equivalent of the plain
+command.
+
 ## Configuration files
 
 For the normal local CLI flow, the user-facing configuration is one small YAML
 file. It selects either a remote provider with a key and model (plus an optional
 custom URL), or a local review command. Review Policy is optional: if `--policy`
-is omitted, Worktree Review uses its built-in default policy.
+is omitted, Worktree Review uses its built-in default policy. `worktree-review
+init` is the recommended way to create this file; manual YAML is useful when
+configuration is managed by a secret store or deployment system.
 
 Copy [config.example.yaml](config.example.yaml) to the trusted default location
 and replace the key reference:
@@ -96,7 +114,7 @@ endpoint. `model` is optional and falls back to the built-in provider default.
 `key` may be a literal secret in a trusted file, but an environment reference
 such as `${ANTHROPIC_API_KEY}` is preferred.
 
-### Local CLI provider
+### Local CLI provider and adapters
 
 Instead of a remote provider, configure a local executable:
 
@@ -108,7 +126,8 @@ command:
 
 Each list item is one argument. Add command-line flags as additional list items;
 shell pipelines, substitutions, and redirections are not supported. The command
-is started without a shell and receives one JSON object on stdin:
+is started without a shell. By default it uses the `worktree-json` adapter and
+receives one JSON object on stdin:
 
 ```json
 {
@@ -121,10 +140,40 @@ is started without a shell and receives one JSON object on stdin:
 ```
 
 It must write one `dimension-findings.v1` JSON object to stdout, for example
-`{"findings": []}`, and exit with status `0`. The local command is a user-trusted
-tool; Worktree Review does not interpret shell strings or execute proposed-change
-code itself. Local tools may not report token usage, so the result can show
-unknown usage and cost.
+`{"findings": []}`, and exit with status `0`.
+
+Existing commands that accept a prompt on stdin can use a product adapter without
+a project-specific wrapper:
+
+```yaml
+provider: local-cli
+command:
+  - claude
+  - --print
+adapter: prompt-text-json
+```
+
+The `prompt-json` adapter sends the rendered system/user prompt to stdin and
+expects one JSON object on stdout. `prompt-text-json` also extracts one JSON
+object from a fenced or lightly decorated response. Neither adapter converts
+arbitrary prose into reliable findings; the command must still be instructed or
+configured to return the `dimension-findings.v1` shape. Use `worktree-json` for a
+custom wrapper that wants the response schema and dimension metadata as fields.
+
+You may add local-command disclosure metadata when the command delegates to a
+provider or service:
+
+```yaml
+data_destination: "Company review gateway"
+known_retention: "Retained according to the gateway policy."
+```
+
+If omitted, Worktree Review discloses conservative command-defined defaults. A
+local executable is not proof that it avoids network access or retention. The
+CLI explicitly says that review content is handed to the configured command and
+prints a non-secret configuration fingerprint; it does not print command
+arguments in the transmission disclosure. Local tools may not report token
+usage, so the result can show unknown usage and cost.
 
 ### Configuration-derived Compute Policy
 
@@ -281,7 +330,7 @@ Fields:
 | --- | --- | --- |
 | `schema` | yes | Must be `worktree-review.compute-policy/v1`. |
 | `version` | yes | Semantic version recorded on the Attempt. |
-| `provider` | yes | `anthropic`, `openai`, or `local-cli`. |
+| `provider` | yes | `anthropic` or `openai`. Local commands belong in normal `--config`. |
 | `model` | yes | Model identifier passed to the selected provider SDK. |
 | `max_output_tokens_per_call` | no | Hard maximum output requested for each provider call. Defaults to `8192` in advanced policy. |
 | `max_budget_usd` | yes | Maximum configured budget for one review. |
@@ -296,8 +345,9 @@ For a live CLI review using `--compute-policy`, set
 `permit_remote_transmission: true` only after the destination and retention are
 approved. If it is false, the CLI refuses the invocation before making a
 provider call and exits `3`. The minimal `--config` form treats a configured
-remote provider and key as this consent, using the standard endpoint when no
-URL is supplied.
+remote provider/key or local command as explicit consent to hand content to the
+selected provider, while still disclosing that a local command may make its own
+network requests. The standard remote endpoint is used when URL is omitted.
 
 For advanced policy, `data_destination` is disclosure metadata; it does not
 configure a custom API endpoint. The selected provider SDK uses its normal
@@ -433,10 +483,11 @@ worktree-review review \
   > review-result.json
 ```
 
-The remote-transmission disclosure and the call plan are printed to stderr before
-provider calls, so the redirected stdout remains JSON. Do not discard stderr if
-you need to audit the provider, model, destination, retention, or planned token
-limit.
+The provider-handoff disclosure, call plan, and non-authoritative progress lines
+are printed to stderr before and during provider calls, so the redirected stdout
+remains JSON. Do not discard stderr if you need to audit the provider, model,
+destination, retention, local configuration fingerprint, planned token limit, or
+current stage/dimension.
 
 Both output formats expose the Attempt ID, Request Key, source and immutable
 head, stage outcomes, dimension outcomes, findings, draft findings, coverage,
@@ -471,11 +522,13 @@ location.
 Move it to a trusted user or deployment directory. Repository files, including
 `AGENTS.md` and `CLAUDE.md`, cannot change Review Policy or Compute Policy.
 
-### Remote transmission is refused
+### Provider handoff is refused
 
 Review the disclosure printed by the CLI. For the minimal config, a configured
-remote provider and key are the explicit consent to transmit; the standard
-endpoint is used when URL is omitted. For an advanced Compute Policy, set
+remote provider/key or local command is the explicit consent to hand content to
+the selected provider. For a local command, inspect the command, adapter,
+destination, and retention metadata because Worktree Review cannot prove whether
+the command makes network requests. For an advanced Compute Policy, set
 `permit_remote_transmission: true` only when the provider, destination, and
 retention are approved.
 
@@ -484,7 +537,9 @@ retention are approved.
 For a remote provider, check that `provider`, optional URL, and model match the
 intended SDK and that the configured key is available. The key is read only when
 the selected provider is built. For a local provider, check that every command
-array item is present and executable.
+array item is present and executable, and that the selected adapter matches the
+command's stdin/stdout behavior. Non-zero exit and malformed-output errors
+include bounded, control-escaped child stderr/stdout diagnostics.
 
 ### Advanced budget pre-flight refuses to start
 

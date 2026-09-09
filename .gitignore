@@ -33,3 +33,6 @@ htmlcov/
 
 # Project-level competitor memory (never commit)
 docs/competitors.md
+
+# AI-interaction feature working docs (never commit)
+.ai-docs/

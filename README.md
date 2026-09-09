@@ -61,14 +61,19 @@ See the [CLI usage and configuration guide](USAGE.md) or the
 selection, output, and troubleshooting.
 
 ```bash
-uv run worktree-review review \
-  --config /path/to/config.yaml
+uv run worktree-review init
+uv run worktree-review
 ```
 
-The minimal `config.yaml` contains a provider, key, and model (with an optional
-custom URL), or a local CLI command. Review Policy is built in. Run
+`init` interactively writes the trusted default configuration and checks a local
+executable without running it. The minimal `config.yaml` contains a provider,
+key, and model (with an optional custom URL), or a local CLI command plus one of
+the built-in local adapters. Review Policy is built in. Run
 `uv run worktree-review prompts --dimension security` to inspect the
 product-owned prompt layers used by a dimension.
+
+Use `uv run worktree-review review --config /path/to/config.yaml` when an
+explicit command or configuration path is preferred.
 
 Use `--target main` to review the current worktree as it would merge into `main`,
 `--commits 3` to review the last three commits plus current worktree changes, or

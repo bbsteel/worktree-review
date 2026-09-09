@@ -9,4 +9,4 @@ permit_remote_transmission: true
 input_usd_per_million_tokens: 3
 output_usd_per_million_tokens: 15
 data_destination: https://api.anthropic.com
-known_retention: "See Anthropic's current API data retention terms; nothing is sent in this skeleton."
+known_retention: "Set this to the retention terms approved for your deployment."

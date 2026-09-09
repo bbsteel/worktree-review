@@ -377,11 +377,14 @@ that command is never loaded from the reviewed repository and is not interpreted
 through a shell. Findings and logs must redact complete credentials and other
 detected secrets.
 
-Before a CLI review sends repository content to a remote model provider, it must
-identify the provider, model, data destination, and known retention behavior and
-require explicit trusted configuration that permits that transmission. Local
-execution of the CLI must never imply that model inference or data retention is
-local.
+Before a CLI review hands repository content to a remote model provider or a
+configured local command, it must identify the provider, model, data destination,
+known retention behavior, and (for a local command) a safe configuration
+fingerprint. It must require explicit trusted configuration that permits the
+handoff. A local executable is not evidence that inference, network transmission,
+or data retention is local; the disclosure must say that content is handed to the
+configured command and that downstream behavior is outside Worktree Review's
+knowledge.
 
 ### 8.12 Product semantics are portable
 
@@ -762,7 +765,12 @@ Every surface presents:
   normal local CLI runs must expose the planned call count, estimated input
   tokens, and per-call output limit without inventing a dollar estimate.
 - The data destination, provider, model, and known retention behavior used for
-  analysis.
+  analysis. A local command result must also expose a non-secret configuration
+  fingerprint that binds its executable arguments, adapter, model, destination,
+  and retention disclosure to the Compute Policy identity.
+- During a local CLI run, text and JSON modes must expose non-authoritative
+  preparation, stage, and current-dimension progress on stderr, including
+  elapsed time for completed work.
 
 The GitHub integration additionally publishes eligible findings inline, a
 durable check result, and clear finding-bypass and GitHub-native override records
@@ -796,13 +804,25 @@ For the first product stage, the product must support:
   whether uncertain price or usage information permits a review to start.
 
 The normal local CLI path must also accept a minimal trusted configuration that
-specifies a remote provider, key, and optional model/URL, or an existing local
-CLI command. It uses a built-in Review Policy when none is supplied and derives
-a 4096-token maximum output per call. Before calls begin, it reports the planned
-call count, estimated input tokens, and per-call output limit. After completion,
-it reports provider-measured usage when available and does not invent a dollar
-cost when the provider does not return one; users can consult provider account
-billing for actual spend.
+specifies a remote provider, key, and optional model/URL, or a local command. It
+uses a built-in Review Policy when none is supplied and derives a 4096-token
+maximum output per call. A local command may use one of the product adapters
+`worktree-json`, `prompt-json`, or `prompt-text-json`; the strict default sends
+the Worktree Review JSON request, while the prompt adapters send the rendered
+prompt to stdin and parse structured JSON output. Worktree Review must not claim
+that an arbitrary existing executable understands the protocol without one of
+these explicit adapter choices.
+
+Selecting a local command is explicit consent to hand review content to that
+command, but is not proof that it avoids network transmission or retention. The
+configuration may describe the command's downstream data destination and known
+retention; conservative defaults are disclosed when omitted. The derived Compute
+Policy and result include a non-secret fingerprint of the complete command
+configuration, while command arguments are not printed in disclosures. Before
+calls begin, the CLI reports the planned call count, estimated input tokens, and
+per-call output limit. After completion, it reports provider-measured usage when
+available and does not invent a dollar cost when the provider does not return
+one; users can consult provider account billing for actual spend.
 More detailed compute controls remain available through trusted advanced
 configuration.
 
@@ -876,21 +896,26 @@ first product stage rather than entering this lifecycle.
 
 ### 21.3 Local CLI lifecycle
 
-1. The user invokes Worktree Review inside a local Git repository. The target
-   defaults to `HEAD`, may be selected with `--target`, or may be selected as
-   `HEAD~N` with `--commits N` to review the last N commits. The proposed source
-   defaults to the current worktree snapshot; `--proposed` selects an explicit
-   committed ref.
+1. The user runs `worktree-review init` once to interactively select and validate
+   a remote provider/key or local command and write the trusted default config.
+   The plain `worktree-review` command then starts a local review using that
+   config; `worktree-review review` remains an equivalent explicit spelling.
+   The target defaults to `HEAD`, may be selected with `--target`, or may be
+   selected as `HEAD~N` with `--commits N` to review the last N commits. The
+   proposed source defaults to the current worktree snapshot; `--proposed`
+   selects an explicit committed ref.
 2. The CLI resolves the target and captures the proposed source once. A dirty
    worktree is represented by an immutable snapshot commit containing tracked
    and non-ignored untracked files; a clean worktree uses the current `HEAD`.
    It then loads the product-owned built-in Review Policy unless a custom trusted
    Review Policy is supplied, loads the trusted provider configuration, and
-   identifies the configured model provider, data destination, and known retention
-   behavior. The normal provider configuration contains either a remote
-   provider/key/model with an optional URL or an existing local CLI command; it
-   uses the 4096-token per-call output limit and reports the call plan before
-   model calls.
+   identifies the configured model provider, data destination, known retention
+   behavior, and local configuration fingerprint. The normal provider
+   configuration contains either a remote provider/key/model with an optional
+   URL or a local command plus an explicit product adapter when the command does
+   not consume the default Worktree Review JSON protocol. It uses the 4096-token
+   per-call output limit, discloses local-command handoff semantics, and reports
+   the call plan and progress before and during model calls.
 3. The CLI creates an independent attempt identifier and runs the shared review
    pipeline against those immutable Git objects.
 4. The CLI writes human-readable and machine-readable results and exits with the

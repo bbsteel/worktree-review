@@ -215,8 +215,11 @@ Review/Compute Policy 永不来自被审查 Git refs。CLI 未提供自定义策
 
 不执行代码、测试、构建、hook 或 binary；凭据不可进入 Review Worktree，finding 与
 日志必须脱敏。工具、文件系统和网络权限只能来自可信产品策略或调用者明确选择的本地
-Provider command；command 永不从被审查仓库加载，也不会经过 shell 解释。CLI 向远程模型
-发送内容前必须展示 provider、model、目的地和已知保留行为，并由可信配置明确允许。
+Provider command；command 永不从被审查仓库加载，也不会经过 shell 解释。CLI 把仓库内容交给
+远程模型 Provider 或配置的本地 command 前，必须展示 provider、model、目的地、已知保留行为，
+并在本地 command 情况下展示不含 secret 的配置 fingerprint，由可信配置明确允许。CLI 不得
+把“可执行文件在本机”说成 inference、网络传输或 retention 一定发生在本机；必须说明内容会
+交给配置的 command，后续行为不在 Worktree Review 可知范围内。
 
 ### 8.12 产品语义可移植
 
@@ -405,7 +408,11 @@ unreviewable、Review Worktree 缺失、merge conflict 等同样失败关闭。�
 - mandatory、optional-missing、excluded、unreviewable、reviewed coverage。
 - Review/Compute Policy 版本、模型、用量、估计/实际成本和失败信息；普通本地 CLI 还要
   暴露计划调用次数、预计输入 token 和单次输出上限，不得编造美元费用预估。
-- 分析数据目的地、provider、model 和已知 retention。
+- 分析数据目的地、provider、model 和已知 retention。local command 还要暴露不含 secret 的
+  配置 fingerprint，将 executable 参数、adapter、model、目的地和 retention 绑定到 Compute
+  Policy identity。
+- 本地 CLI 运行期间，text 和 JSON 模式都要把非权威的准备、阶段和当前 dimension 进度写到
+  stderr；完成的工作要包含耗时。
 
 GitHub 还发布 inline finding、持久 check、finding bypass 和可观察的原生 override。
 CLI 还输出 terminal report、稳定机器格式和退出码；包含 target ref/head、proposed head
@@ -423,10 +430,18 @@ usage、用户声明限制、当前价格估计和推断可用性，不得把猜
 暗示普通路径的费用预估是权威。多 provider 路由、定时、配额优化和自动 fallback 延后。
 
 本地 CLI 的普通路径还必须接受一份最小可信配置，指定远程 Provider、key 和可选的 model/URL，
-或本机已有的 CLI command；没有提供自定义 Review Policy 时使用产品拥有的内置策略，并派生
-每次调用最多 4096 个输出 token。调用前要报告计划调用次数、预计输入 token 和单次输出上限；
-完成后报告 Provider 返回的 measured usage；Provider 未返回费用时不得自行编造费用，用户可
-查看 Provider 账户账单。更详细的 Compute 控制仍可通过可信的高级配置提供。
+或本地 command。没有提供自定义 Review Policy 时使用产品拥有的内置策略，并派生每次调用最多
+4096 个输出 token。本地 command 可以选择产品 adapter：`worktree-json`、`prompt-json` 或
+`prompt-text-json`；默认 adapter 发送 Worktree Review JSON request，prompt adapter 把渲染后的
+prompt 写入 stdin 并解析结构化 JSON。对任意已有 executable，不能在没有明确 adapter 的情况下
+宣称它理解本产品协议。
+
+选择本地 command 是把检视内容交给它的明确同意，但不是它不会联网或 retention 在本机的证明。
+配置可以描述 command 后续的数据目的地和已知 retention；省略时展示保守默认值。派生的 Compute
+Policy 和结果包含完整 command 配置的不含 secret fingerprint，但 disclosure 不打印 command 参数。
+调用前要报告计划调用次数、预计输入 token 和单次输出上限；运行期间展示阶段、当前 dimension 和
+耗时；完成后报告 Provider 返回的 measured usage。Provider 未返回费用时不得自行编造费用，用户
+可查看 Provider 账户账单。更详细的 Compute 控制仍可通过可信的高级配置提供。
 
 ## 21. Review 生命周期
 
@@ -466,15 +481,18 @@ Draft PR 无 standing pass；外部 fork 与托管私有仓库第一阶段明确
 
 ### 21.3 本地 CLI 生命周期
 
-1. 用户在本地 Git 仓库调用 Worktree Review。target 默认为 `HEAD`，可以用 `--target`
-   选择，也可以用 `--commits N` 选择 `HEAD~N`，从而检视最近 N 次提交。proposed source
-   默认是当前工作树 snapshot；`--proposed` 用于选择显式的已提交 ref。
+1. 用户先运行一次 `worktree-review init`，交互式选择并验证远程 Provider/key 或本地
+   command，并写入可信默认配置。之后直接运行 `worktree-review` 即开始本地检视；显式的
+   `worktree-review review` 仍然等价。target 默认为 `HEAD`，可以用 `--target` 选择，也可以
+   用 `--commits N` 选择 `HEAD~N`，从而检视最近 N 次提交。proposed source 默认是当前工作树
+   snapshot；`--proposed` 用于选择显式的已提交 ref。
 2. CLI 在调用时一次性解析 target 并捕获 proposed source。dirty worktree 会被表示为包含
    已跟踪和未被忽略未跟踪文件的不可变 snapshot commit；clean worktree 则使用当前
    `HEAD`。随后在未提供自定义 Review Policy 时加载产品拥有的内置策略，加载可信的 Provider
-   配置，并展示 provider/目的地/retention。普通 Provider 配置二选一包含远程 provider/key/model
-   （可选 URL）或本机已有的 CLI command；使用每次最多 4096 个输出 token，并在模型调用前展示
-   call plan。
+   配置，并展示 provider/目的地/retention 及本地配置 fingerprint。普通 Provider 配置二选一
+   包含远程 provider/key/model（可选 URL）或本地 command；如果 command 不理解默认协议，还要
+   指定产品 adapter。使用每次最多 4096 个输出 token，并在模型调用前展示 call plan，运行中
+   展示阶段、当前 dimension 和耗时。
 3. 创建独立 Attempt ID，对这些不可变 Git objects 运行共享 pipeline。
 4. 写人类/机器结果，以 `Passed`、`Blocked`、`Error` 或 invalid invocation 对应退出。
 

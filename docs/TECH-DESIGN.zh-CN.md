@@ -135,11 +135,14 @@ tests 保证“required dimension 不完整必为 Error”等性质。
 Review/Compute Policy 分离；每份具有 semver 和 canonical parsed bytes 的 SHA-256。
 CLI 的 `--policy` 可省略，省略时使用产品拥有的内置 Review Policy。普通 Provider 配置是
 `~/.config/worktree-review/config.yaml`（或显式路径）中的最小 YAML，包含远程
-provider/key/model（可选自定义 URL）或本地 CLI command，并派生每次调用最多 4096 个输出
-token、且不设置美元预算；`--compute-policy` 仍是需要直接控制 Compute 的高级路径。所有
-自定义策略/配置路径都必须在 worktree 外。GitHub 按 installation 保存到 Postgres。文件配置
-均以版本化 JSON Schema 验证并失败关闭；`AGENTS.md` 等只作为 untrusted context，永远不是
-策略或配置。
+provider/key/model（可选自定义 URL）或本地 CLI command。本地 command 必须选择产品提供的
+adapter：`worktree-json`、`prompt-json` 或 `prompt-text-json`；默认是 Worktree Review
+JSON stdin/stdout 协议。普通路径派生每次调用最多 4096 个输出 token，且不设置美元预算；
+同时对完整本地 command 配置派生不含 secret 的 fingerprint，并携带可选的 command 数据
+目的地与 retention disclosure。`--compute-policy` 仍是需要直接控制 Compute 的高级路径，
+其外部 schema 只接受远程 Provider。所有自定义策略/配置路径都必须在 worktree 外。GitHub
+按 installation 保存到 Postgres。文件配置均以版本化 JSON Schema 验证并失败关闭；`AGENTS.md`
+等只作为 untrusted context，永远不是策略或配置。
 
 **D6 — Provider 约束的结构化 finding，加 grounded evidence 校验。**
 
@@ -164,7 +167,9 @@ fingerprint；没有合法 span 时使用 sentinel path，绝不信任 provider 
 每份 Compute Policy 都携带每次 Provider 调用的硬性最大输出 token。普通 `--config` 路径
 派生 `max_output_tokens_per_call: 4096`，记录输入 token 预估但不为其预测美元费用，真实
 支出由 Provider 账户控制。首次调用前报告调用次数、预计输入 token 和单次输出上限；完成后
-明确报告 measured usage 以及费用是否可得。
+明确报告 measured usage 以及费用是否可得。Provider handoff disclosure 同时适用于远程 SDK
+和本地 command。本地 command 不被假定为无网络；其 command/adapter/目的地/retention 的
+fingerprint 会进入派生 Compute Policy identity 和结果。
 
 高级 `--compute-policy` 提供每次检视预算（内部派生策略可不设置；外部高级 schema 必须设置）：
 
@@ -224,11 +229,17 @@ override 记录审计。
   `proposed_head_oid` 报告其不可变 snapshot commit。target 和 proposed source 在共享
   pipeline 启动前只捕获一次，之后的变化不属于该结果。
 - `--policy` 可选，省略时使用内置 Review Policy。普通 `--config` 配置远程
-  provider/key/model（可选自定义 URL）或本地 CLI command，并派生每次调用最多 4096 个输出
-  token、且不设置美元预算；仍保留直接控制 Compute 的高级 `--compute-policy` 路径。远程
-  传输前打印 provider/model/destination/retention；feedback/telemetry 默认不发送。
+  provider/key/model（可选自定义 URL）或本地 CLI command 和产品 adapter，并派生每次调用最多
+  4096 个输出 token、且不设置美元预算；高级 `--compute-policy` 仍可直接控制 Compute，且
+  只接受远程 Provider。任何 Provider handoff 前打印 provider/model/destination/retention；
+  local command 还打印配置 fingerprint；feedback/telemetry 默认不发送。
 - CLI 在 Provider 调用前打印 call plan，并把它与 usage 一起放入机器结果；普通配置在
   Provider 返回时报告 measured 输入/输出 token，否则提示到 Provider 账户查询费用。
+- `worktree-review init` 交互式选择远程 Provider/key 或本地 command，检查本地 executable
+  是否可用但不执行它，并写入 mode-600 的可信默认配置。直接运行 `worktree-review` 与显式
+  `review` command 等价。
+- text 和 JSON 模式都把非权威的准备、阶段和当前 dimension 进度写入 stderr，完成后包含
+  耗时；JSON stdout 只保留版本化结果文档。
 - `worktree-review prompts --dimension <id>` 输出该 dimension 使用的可信产品提示词层级。
 - 每次调用生成 Attempt ID。构造失败输出 Request Key 和 `merge_tree_oid: null`；成功
   还输出 Merge Candidate/Review Identity。CLI Attempt 不进入 server 权威状态。
