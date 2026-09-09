@@ -237,14 +237,14 @@ export interface ProviderHealthView {
 }
 
 export const PIPELINE_STAGE_ORDER = [
-  'identity',
-  'merge',
-  'review-worktree',
-  'context',
-  'dimensions',
+  'derive-identity',
+  'construct-merge',
+  'prepare-review-worktree',
+  'gather-context',
+  'run-dimensions',
   'verify-dedup',
-  'completeness',
-  'gate',
+  'check-completeness',
+  'evaluate-gate',
   'publish',
 ] as const
 

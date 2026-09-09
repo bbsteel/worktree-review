@@ -80,9 +80,12 @@ export const errorMergeConflictCase: ReviewRunView = {
       blockingFindingCount: 0,
     },
   ],
-  pipeline: pipelineStages('identity', { stage: 'merge', safeError: MERGE_CONFLICT_ERROR }),
+  pipeline: pipelineStages('derive-identity', {
+    stage: 'construct-merge',
+    safeError: MERGE_CONFLICT_ERROR,
+  }),
   failure: {
-    stage: 'merge',
+    stage: 'construct-merge',
     category: 'merge_conflict',
     safeDetail: MERGE_CONFLICT_ERROR,
   },

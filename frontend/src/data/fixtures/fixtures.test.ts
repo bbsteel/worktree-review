@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { PIPELINE_STAGE_ORDER } from '../../domain/review.ts'
 import {
   BLOCKED_COST_USD,
   BLOCKED_DEMO_ATTEMPT_ID,
@@ -97,12 +98,30 @@ describe('fixture content', () => {
     expect(blockedCase.availableActions.bypass.enabled).toBe(false)
   })
 
+  it('uses Core StageName keys for the nine pipeline stages', () => {
+    expect(PIPELINE_STAGE_ORDER).toEqual([
+      'derive-identity',
+      'construct-merge',
+      'prepare-review-worktree',
+      'gather-context',
+      'run-dimensions',
+      'verify-dedup',
+      'check-completeness',
+      'evaluate-gate',
+      'publish',
+    ])
+  })
+
   it('does not fabricate Review Identity after merge failure', () => {
     expect(errorMergeConflictCase.identity.reviewIdentity).toBeNull()
     expect(errorMergeConflictCase.identity.mergeTreeOid).toBeNull()
     expect(errorMergeConflictCase.identity.identityUnavailableReason).toMatch(/merge candidate was not constructed/)
-    expect(errorMergeConflictCase.pipeline.find((stage) => stage.stage === 'merge')?.status).toBe('failed')
-    expect(errorMergeConflictCase.pipeline.find((stage) => stage.stage === 'gate')?.status).toBe('not-started')
+    expect(errorMergeConflictCase.pipeline.find((stage) => stage.stage === 'construct-merge')?.status).toBe(
+      'failed',
+    )
+    expect(errorMergeConflictCase.pipeline.find((stage) => stage.stage === 'evaluate-gate')?.status).toBe(
+      'not-started',
+    )
   })
 
   it('computes overview stats without putting Error in the pass-rate denominator', () => {
