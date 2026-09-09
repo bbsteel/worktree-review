@@ -49,12 +49,22 @@ async def _gather(
     proposed_oid: str,
     tmp_path: Path,
 ):
-    candidate = await construct_merge_candidate(_pair(repository, target_oid, proposed_oid))
+    candidate = await construct_merge_candidate(
+        _pair(repository, target_oid, proposed_oid),
+        repository_path=repository,
+    )
     review_worktree = await materialize_review_worktree(
-        candidate, destination=tmp_path / "worktree-review-ctx"
+        candidate,
+        repository_path=repository,
+        destination=tmp_path / "worktree-review-ctx",
     )
     try:
-        return await gather_context(review_worktree, candidate, policy)
+        return await gather_context(
+            review_worktree,
+            candidate,
+            policy,
+            repository_path=repository,
+        )
     finally:
         await cleanup_review_worktree(review_worktree)
 

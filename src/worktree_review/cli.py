@@ -16,6 +16,7 @@ import typer
 import yaml
 
 from worktree_review import __version__
+from worktree_review.application.review_service import ReviewApplicationService
 from worktree_review.core.config import (
     DEFAULT_REMOTE_MODELS,
     DEFAULT_USER_CONFIG_VERSION,
@@ -24,7 +25,7 @@ from worktree_review.core.config import (
     UserConfiguration,
 )
 from worktree_review.core.errors import InvalidInvocationError, WorktreeReviewError
-from worktree_review.core.pipeline import ReviewRequest, run_review_pipeline
+from worktree_review.core.pipeline import ReviewRequest
 from worktree_review.core.report import ReviewProgressEvent, ReviewReport
 from worktree_review.observability import configure_logging
 from worktree_review.platform.cli.exit_codes import CliExitCode, exit_code_for_gate_state
@@ -391,7 +392,7 @@ def review(
         )
         require_provider_transmission_permit(prepared.compute_policy)
         typer.secho(provider_transmission_disclosure(prepared.compute_policy), err=True)
-        return await run_review_pipeline(
+        return await ReviewApplicationService().execute(
             ReviewRequest(
                 resolved=prepared.resolved,
                 review_policy=prepared.review_policy,
@@ -401,6 +402,7 @@ def review(
                 surface="cli",
                 provider_configuration=prepared.provider_configuration,
             ),
+            repository_path=prepared.repository_path,
             on_call_plan_ready=lambda call_plan: typer.secho(
                 render_call_plan(call_plan), err=True, nl=False
             ),

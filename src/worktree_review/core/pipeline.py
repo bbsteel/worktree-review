@@ -6,8 +6,8 @@ failure cannot be hidden by later output.
 """
 
 import time
-import uuid
 from collections.abc import Callable
+from pathlib import Path
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
@@ -216,12 +216,21 @@ def _complete_report(
 async def run_review_pipeline(
     request: ReviewRequest,
     *,
+    repository_path: Path,
+    attempt_id: str,
     provider: ProviderClient | None = None,
     on_call_plan_ready: Callable[[ReviewCallPlan], None] | None = None,
     on_progress: Callable[[ReviewProgressEvent], None] | None = None,
 ) -> ReviewReport:
-    """Run the shared pipeline through verification, gate evaluation, and publication."""
+    """Run the shared pipeline through verification, gate evaluation, and publication.
 
+    ``attempt_id`` must already be allocated by the calling surface or application
+    service. ``repository_path`` is the trusted Git execution directory and is never
+    derived by wrapping ``resolved.source_repository`` in ``Path``.
+    """
+
+    if not attempt_id:
+        raise ValueError("attempt_id must be allocated before the pipeline starts")
     request_key = ReviewRequestKey(
         source_repository=request.resolved.source_repository,
         target_ref=request.resolved.target_ref,
@@ -229,7 +238,6 @@ async def run_review_pipeline(
         proposed_head_oid=request.resolved.proposed_head_oid,
         review_policy_version=request.review_policy_version,
     )
-    attempt_id = str(uuid.uuid4())
     execution = ExecutionRecord().with_outcome(
         StageOutcome(
             stage=StageName.DERIVE_IDENTITY,
@@ -252,7 +260,10 @@ async def run_review_pipeline(
             started_at=construct_started_at,
         )
         try:
-            candidate = await construct_merge_candidate(request.resolved)
+            candidate = await construct_merge_candidate(
+                request.resolved,
+                repository_path=repository_path,
+            )
             review_identity = ReviewIdentity(
                 candidate=candidate,
                 review_policy_version=request.review_policy_version,
@@ -307,6 +318,7 @@ async def run_review_pipeline(
         try:
             review_worktree = await materialize_review_worktree(
                 candidate,
+                repository_path=repository_path,
                 owner_note=owner_note,
             )
             execution = execution.with_outcome(
@@ -357,7 +369,12 @@ async def run_review_pipeline(
             started_at=gather_started_at,
         )
         try:
-            gathered = await gather_context(review_worktree, candidate, request.review_policy)
+            gathered = await gather_context(
+                review_worktree,
+                candidate,
+                request.review_policy,
+                repository_path=repository_path,
+            )
         except (WorktreeReviewError, UnimplementedStageError) as exc:
             execution = execution.with_outcome(
                 StageOutcome(

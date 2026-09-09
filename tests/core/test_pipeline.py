@@ -7,7 +7,8 @@ from tests.gitutil import checkout_new_branch, commit_files, git, head_oid
 
 from worktree_review.core.findings import EvidenceBand
 from worktree_review.core.identity import ResolvedCommitPair
-from worktree_review.core.pipeline import ReviewRequest, run_review_pipeline
+from worktree_review.core.pipeline import ReviewRequest
+from worktree_review.core.pipeline import run_review_pipeline as execute_pipeline
 from worktree_review.core.policy import load_compute_policy, load_review_policy
 from worktree_review.core.provider import ScriptedProvider
 from worktree_review.core.report import (
@@ -17,6 +18,14 @@ from worktree_review.core.report import (
     StageName,
     StageStatus,
 )
+
+FIXED_ATTEMPT_ID = "11111111-1111-4111-8111-111111111111"
+
+
+async def run_review_pipeline(request: ReviewRequest, **kwargs):
+    kwargs.setdefault("repository_path", Path(request.resolved.source_repository))
+    kwargs.setdefault("attempt_id", FIXED_ATTEMPT_ID)
+    return await execute_pipeline(request, **kwargs)
 
 
 def _request(

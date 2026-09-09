@@ -12,8 +12,11 @@ from worktree_review.core.identity import MergeCandidateIdentity, ResolvedCommit
 _TREE_OID_PATTERN = re.compile(r"^[0-9a-f]{40,64}$")
 
 
-def _repository_path(resolved: ResolvedCommitPair) -> Path:
-    return Path(resolved.source_repository)
+def _require_repository_path(repository_path: Path) -> Path:
+    resolved_path = repository_path.expanduser()
+    if not resolved_path.is_dir():
+        raise MergeConstructionError(f"source repository does not exist: {resolved_path}")
+    return resolved_path
 
 
 def _parse_tree_oid(first_line: str) -> str:
@@ -35,16 +38,19 @@ def _conflicted_paths(merge_tree_stdout: str) -> tuple[str, ...]:
     return tuple(paths)
 
 
-async def construct_merge_candidate(resolved: ResolvedCommitPair) -> MergeCandidateIdentity:
+async def construct_merge_candidate(
+    resolved: ResolvedCommitPair,
+    *,
+    repository_path: Path,
+) -> MergeCandidateIdentity:
     """Merge proposed head into target head in the object database. No checkout.
 
     Fail closed on conflict (PRD §8.1): a conflicted tree is never the merge
     candidate. Unrelated histories and missing objects are construction errors.
+    Git operations use ``repository_path``; ``resolved.source_repository`` is identity.
     """
 
-    repository = _repository_path(resolved)
-    if not repository.is_dir():
-        raise MergeConstructionError(f"source repository does not exist: {repository}")
+    repository = _require_repository_path(repository_path)
 
     result = await invoke_git(
         "merge-tree",
