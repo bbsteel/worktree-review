@@ -2,7 +2,7 @@ name: ci
 
 on:
   push:
-    branches: [master, main]
+    branches: [master, main, 'integration/**']
   pull_request:
 
 jobs:
@@ -31,3 +31,46 @@ jobs:
 
       - name: Tests
         run: uv run pytest
+
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm --prefix frontend ci
+
+      - name: Lint
+        run: npm --prefix frontend run lint
+
+      - name: Typecheck
+        run: npm --prefix frontend run typecheck
+
+      - name: Unit tests
+        run: npm --prefix frontend run test
+
+      - name: Build
+        run: npm --prefix frontend run build
+
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        with:
+          path: frontend/.playwright-browsers
+          key: playwright-${{ hashFiles('frontend/package-lock.json') }}
+
+      - name: Install Playwright Chromium
+        working-directory: frontend
+        run: npx playwright install --with-deps chromium
+
+      # Key demo-path smoke: foundation routes, Review Detail end to end,
+      # Dashboard overflow/contrast/keyboard QA. Screenshot-capture specs
+      # (demo-package) are excluded — they regenerate artifacts, not gates.
+      - name: Playwright smoke
+        run: npm --prefix frontend run test:e2e -- e2e/empty-routes.spec.ts e2e/review-detail.spec.ts e2e/dashboard-qa.spec.ts
