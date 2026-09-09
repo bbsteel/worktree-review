@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import sqlite3
-from datetime import UTC, datetime
 from contextlib import closing
+from datetime import UTC, datetime
 from pathlib import Path
 
 from worktree_review.application.lifecycle import RunStatus
@@ -254,6 +254,73 @@ class SqliteReviewRunStore:
 
         async with self._lock:
             await asyncio.to_thread(_insert)
+
+    async def insert_trusted_policy(
+        self,
+        *,
+        table: str,
+        policy_id: str,
+        path: str,
+        version_semver: str,
+        version_sha256: str,
+    ) -> None:
+        if table not in {"trusted_review_policies", "trusted_compute_policies"}:
+            raise InvalidInvocationError("unknown policy table")
+
+        def _insert() -> None:
+            with closing(self._connect()) as connection:
+                connection.execute(
+                    f"INSERT INTO {table}(id, path, version_semver, version_sha256, registered_at) "
+                    "VALUES (?, ?, ?, ?, ?)",
+                    (
+                        policy_id,
+                        path,
+                        version_semver,
+                        version_sha256,
+                        datetime.now(UTC).isoformat(),
+                    ),
+                )
+                connection.commit()
+
+        async with self._lock:
+            await asyncio.to_thread(_insert)
+
+    async def insert_provider_profile(
+        self,
+        *,
+        profile_id: str,
+        name: str,
+        provider: str,
+        credential_reference: str | None,
+        endpoint: str | None = None,
+    ) -> None:
+        def _insert() -> None:
+            with closing(self._connect()) as connection:
+                connection.execute(
+                    "INSERT INTO provider_profiles("
+                    "id, name, provider, endpoint, credential_reference, created_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    (
+                        profile_id,
+                        name,
+                        provider,
+                        endpoint,
+                        credential_reference,
+                        datetime.now(UTC).isoformat(),
+                    ),
+                )
+                connection.commit()
+
+        async with self._lock:
+            await asyncio.to_thread(_insert)
+
+    async def list_provider_profiles(self) -> list[dict[str, str | None]]:
+        def _list() -> list[dict[str, str | None]]:
+            with closing(self._connect()) as connection:
+                rows = connection.execute("SELECT * FROM provider_profiles ORDER BY name")
+                return [dict(row) for row in rows]
+
+        return await asyncio.to_thread(_list)
 
     async def list_repositories(self) -> list[dict[str, str]]:
         def _list() -> list[dict[str, str]]:
