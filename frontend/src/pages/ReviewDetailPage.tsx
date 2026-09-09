@@ -8,7 +8,12 @@ import { createReviewDataSource } from '../data/sources/create-review-data-sourc
 import { ReviewNotFoundError, type ReviewDataSource } from '../data/sources/review-data-source.ts'
 import type { ReviewRunView } from '../domain/review.ts'
 import { CopyValue } from '../features/review-detail/CopyValue.tsx'
+import { AttemptsTab } from '../features/review-detail/AttemptsTab.tsx'
+import { CoverageTab } from '../features/review-detail/CoverageTab.tsx'
 import { FindingsTab } from '../features/review-detail/FindingsTab.tsx'
+import { IdentityTab } from '../features/review-detail/IdentityTab.tsx'
+import { PoliciesTab } from '../features/review-detail/PoliciesTab.tsx'
+import { UsageTab } from '../features/review-detail/UsageTab.tsx'
 import { MergeCandidatePath } from '../features/review-detail/MergeCandidatePath.tsx'
 import { OverviewTab } from '../features/review-detail/OverviewTab.tsx'
 import {
@@ -157,19 +162,19 @@ export function ReviewDetailPage({ dataSource }: ReviewDetailPageProps) {
           <FindingsTab run={run} />
         </TabPanel>
         <TabPanel value="coverage">
-          <p className="text-sm text-text-secondary">Coverage detail is delivered in B-013.</p>
+          <CoverageTab run={run} />
         </TabPanel>
         <TabPanel value="attempts">
-          <p className="text-sm text-text-secondary">Attempt timeline is delivered in B-013.</p>
+          <AttemptsTab run={run} />
         </TabPanel>
         <TabPanel value="identity">
-          <p className="text-sm text-text-secondary">Identity and provenance are delivered in B-013.</p>
+          <IdentityTab run={run} />
         </TabPanel>
         <TabPanel value="policies">
-          <p className="text-sm text-text-secondary">Policy snapshots are delivered in B-013.</p>
+          <PoliciesTab run={run} />
         </TabPanel>
         <TabPanel value="usage">
-          <p className="text-sm text-text-secondary">Usage detail is delivered in B-013.</p>
+          <UsageTab run={run} />
         </TabPanel>
       </Tabs>
 

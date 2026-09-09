@@ -67,7 +67,7 @@ describe('ReviewDetailPage', () => {
 
     await screen.findByRole('heading', { name: 'acme/payment-service · PR #184' })
     expect(screen.getByRole('tab', { name: 'Coverage' })).toHaveAttribute('aria-selected', 'true')
-    expect(screen.getByRole('tabpanel')).toHaveTextContent('Coverage detail is delivered in B-013.')
+    expect(screen.getByRole('tabpanel')).toHaveTextContent('Required Coverage')
   })
 
   it('supports arrow-key tab navigation', async () => {
