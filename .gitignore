@@ -36,3 +36,6 @@ docs/competitors.md
 
 # AI-interaction feature working docs (never commit)
 .ai-docs/
+
+# Local git worktrees for parallel Agent A/B checkouts
+.worktrees/
