@@ -34,7 +34,8 @@ export function PrototypeBanner() {
         >
           <option value="">Select a case</option>
           {cases.map((item) => (
-            <option key={item.caseKey} value={item.attemptId}>
+            <option key={`${item.provenance}:${item.attemptId}`} value={item.attemptId}>
+              {item.provenance === 'pipeline-snapshot' ? 'Pipeline snapshot · ' : 'Mock data · '}
               {item.title}
             </option>
           ))}

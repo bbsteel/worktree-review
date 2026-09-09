@@ -3,7 +3,6 @@ import { blockedCase } from './blocked.ts'
 import {
   BLOCKED_DEMO_ATTEMPT_ID,
   ERROR_DEMO_ATTEMPT_ID,
-  MOCK_DATA_BADGE,
   PASSED_DEMO_ATTEMPT_ID,
   type FixtureCaseKey,
 } from './constants.ts'
@@ -56,29 +55,29 @@ export function listFixtureCases(): Array<{
   attemptId: string
   gateState: ReviewRunView['gateState']
   title: string
-  badge: typeof MOCK_DATA_BADGE
+  provenance: 'handwritten-mock'
 }> {
   return [
     {
       caseKey: 'passed',
       attemptId: passedCase.attemptId,
       gateState: passedCase.gateState,
-      title: 'Passed local worktree',
-      badge: MOCK_DATA_BADGE,
+      title: 'Passed local worktree (handwritten mock)',
+      provenance: 'handwritten-mock',
     },
     {
       caseKey: 'blocked',
       attemptId: blockedCase.attemptId,
       gateState: blockedCase.gateState,
-      title: 'Blocked GitHub pull request',
-      badge: MOCK_DATA_BADGE,
+      title: 'Blocked GitHub pull request (handwritten mock)',
+      provenance: 'handwritten-mock',
     },
     {
       caseKey: 'error_merge_conflict',
       attemptId: errorMergeConflictCase.attemptId,
       gateState: errorMergeConflictCase.gateState,
-      title: 'Error merge conflict',
-      badge: MOCK_DATA_BADGE,
+      title: 'Error merge conflict (handwritten mock)',
+      provenance: 'handwritten-mock',
     },
   ]
 }

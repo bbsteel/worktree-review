@@ -8,6 +8,7 @@ import {
   type FixtureCaseKey,
 } from '../fixtures/index.ts'
 import { buildOverview } from '../fixtures/overview.ts'
+import { getPipelineSnapshot, listPipelineSnapshots } from '../snapshots/index.ts'
 import { ReviewNotFoundError, type ReviewDataSource } from './review-data-source.ts'
 
 /**
@@ -23,7 +24,7 @@ export class MockReviewDataSource implements ReviewDataSource {
   }
 
   async getReviewRun(attemptId: string): Promise<ReviewRunView> {
-    const run = getFixtureByAttemptId(attemptId)
+    const run = getFixtureByAttemptId(attemptId) ?? getPipelineSnapshot(attemptId)
     if (!run) {
       throw new ReviewNotFoundError(attemptId)
     }
@@ -31,12 +32,7 @@ export class MockReviewDataSource implements ReviewDataSource {
   }
 
   async listCases(): Promise<FixtureCaseDescriptor[]> {
-    return listFixtureCases().map(({ caseKey, attemptId, gateState, title }) => ({
-      caseKey,
-      attemptId,
-      gateState,
-      title,
-    }))
+    return [...listFixtureCases(), ...listPipelineSnapshots()]
   }
 
   async getCase(caseKey: FixtureCaseKey): Promise<ReviewRunView> {

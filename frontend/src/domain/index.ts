@@ -2,6 +2,7 @@ export type {
   DimensionHealthView,
   FindingSeverityCountView,
   FixtureCaseDescriptor,
+  FixtureProvenance,
   OverviewStatsView,
   OverviewTrendPointView,
   OverviewView,
