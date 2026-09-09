@@ -1,4 +1,15 @@
 export type {
+  DimensionHealthView,
+  FindingSeverityCountView,
+  FixtureCaseDescriptor,
+  OverviewStatsView,
+  OverviewTrendPointView,
+  OverviewView,
+  PolicyUsageView,
+  SessionInsightConnectionState,
+  SessionInsightStatusView,
+} from './overview.ts'
+export type {
   Authority,
   AvailableReviewActionsView,
   BypassState,
@@ -14,6 +25,9 @@ export type {
   GitHubPullRequestSourceView,
   LocalReviewSourceKind,
   LocalReviewSourceView,
+  PipelineStageName,
+  PipelineStageStatus,
+  PipelineStageView,
   PolicySnapshotView,
   ProviderHealthStatus,
   ProviderHealthView,
@@ -22,6 +36,7 @@ export type {
   ReviewActionCapabilityView,
   ReviewAttemptView,
   ReviewDimensionView,
+  ReviewFailureView,
   ReviewFindingView,
   ReviewIdentityView,
   ReviewRunView,
@@ -32,3 +47,4 @@ export type {
   ReviewUsageView,
   RunStatus,
 } from './review.ts'
+export { PIPELINE_STAGE_ORDER } from './review.ts'

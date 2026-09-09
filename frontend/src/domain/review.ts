@@ -236,6 +236,35 @@ export interface ProviderHealthView {
   observedAt: string | null
 }
 
+export const PIPELINE_STAGE_ORDER = [
+  'identity',
+  'merge',
+  'review-worktree',
+  'context',
+  'dimensions',
+  'verify-dedup',
+  'completeness',
+  'gate',
+  'publish',
+] as const
+
+export type PipelineStageName = (typeof PIPELINE_STAGE_ORDER)[number]
+
+export type PipelineStageStatus = 'not-started' | 'running' | 'completed' | 'failed'
+
+export interface PipelineStageView {
+  stage: PipelineStageName
+  status: PipelineStageStatus
+  elapsedMs: number | null
+  safeError: string | null
+}
+
+export interface ReviewFailureView {
+  stage: PipelineStageName
+  category: string
+  safeDetail: string
+}
+
 export interface ReviewRunView {
   attemptId: string
   runStatus: RunStatus
@@ -249,6 +278,8 @@ export interface ReviewRunView {
   findings: ReviewFindingView[]
   coverage: CoverageView
   dimensions: ReviewDimensionView[]
+  pipeline: PipelineStageView[]
+  failure: ReviewFailureView | null
   attempts: ReviewAttemptView[]
   identity: ReviewIdentityView
   policies: PolicySnapshotView
