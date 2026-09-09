@@ -5,6 +5,25 @@
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Worktree Review</title>
+    <script>
+      (function () {
+        var storageKey = 'worktree-review.theme'
+        var preference = 'dark'
+        try {
+          var stored = window.localStorage.getItem(storageKey)
+          if (stored === 'light' || stored === 'dark' || stored === 'system') {
+            preference = stored
+          }
+        } catch (error) {}
+        var resolved = preference
+        if (preference === 'system') {
+          resolved = window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark'
+        }
+        document.documentElement.dataset.theme = resolved
+        document.documentElement.dataset.themePreference = preference
+        document.documentElement.style.colorScheme = resolved
+      })()
+    </script>
   </head>
   <body>
     <div id="root"></div>
