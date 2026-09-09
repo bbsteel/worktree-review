@@ -136,7 +136,11 @@ async def test_pipeline_reports_stage_and_dimension_progress(
     )
 
     assert report.gate_state is GateState.PASSED
-    assert progress_events[0].name == StageName.CONSTRUCT_MERGE.value
+    assert progress_events[0].name == StageName.DERIVE_IDENTITY.value
+    assert any(event.name == StageName.CONSTRUCT_MERGE.value for event in progress_events)
+    assert any(event.name == StageName.CHECK_COMPLETENESS.value for event in progress_events)
+    assert any(event.name == StageName.EVALUATE_GATE.value for event in progress_events)
+    assert any(event.name == StageName.PUBLISH.value for event in progress_events)
     assert any(
         event.phase == "dimension" and event.name == "correctness" and event.status == "started"
         for event in progress_events

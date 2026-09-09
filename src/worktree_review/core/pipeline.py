@@ -143,6 +143,7 @@ def _complete_report(
     usage: tuple[UsageRecord, ...] = (),
     call_plan: ReviewCallPlan | None = None,
     allow_passing_gate: bool = False,
+    progress_callback: Callable[[ReviewProgressEvent], None] | None = None,
 ) -> ReviewReport:
     resolved_coverage = coverage or CoverageRecord(required_coverage_complete=False)
     resolved_outcomes = dimension_outcomes or tuple(
@@ -151,6 +152,14 @@ def _complete_report(
     )
     dimensions_complete = bool(resolved_outcomes) and all(
         outcome.status is StageStatus.COMPLETED for outcome in resolved_outcomes
+    )
+    completeness_started_at = time.monotonic()
+    _notify_progress(
+        progress_callback,
+        phase="stage",
+        name=StageName.CHECK_COMPLETENESS.value,
+        status="started",
+        started_at=completeness_started_at,
     )
     execution = execution.with_outcome(
         StageOutcome(
@@ -162,6 +171,21 @@ def _complete_report(
                 else "required dimensions and coverage did not complete"
             ),
         )
+    )
+    _notify_progress(
+        progress_callback,
+        phase="stage",
+        name=StageName.CHECK_COMPLETENESS.value,
+        status="completed",
+        started_at=completeness_started_at,
+    )
+    gate_started_at = time.monotonic()
+    _notify_progress(
+        progress_callback,
+        phase="stage",
+        name=StageName.EVALUATE_GATE.value,
+        status="started",
+        started_at=gate_started_at,
     )
     gate_state = evaluate_gate(
         GateEvaluationInput(
@@ -180,8 +204,30 @@ def _complete_report(
     execution = execution.with_outcome(
         StageOutcome(stage=StageName.EVALUATE_GATE, status=StageStatus.COMPLETED)
     )
+    _notify_progress(
+        progress_callback,
+        phase="stage",
+        name=StageName.EVALUATE_GATE.value,
+        status="completed",
+        started_at=gate_started_at,
+    )
+    publish_started_at = time.monotonic()
+    _notify_progress(
+        progress_callback,
+        phase="stage",
+        name=StageName.PUBLISH.value,
+        status="started",
+        started_at=publish_started_at,
+    )
     execution = execution.with_outcome(
         StageOutcome(stage=StageName.PUBLISH, status=StageStatus.COMPLETED)
+    )
+    _notify_progress(
+        progress_callback,
+        phase="stage",
+        name=StageName.PUBLISH.value,
+        status="completed",
+        started_at=publish_started_at,
     )
     return ReviewReport(
         gate_state=gate_state,
@@ -238,12 +284,27 @@ async def run_review_pipeline(
         proposed_head_oid=request.resolved.proposed_head_oid,
         review_policy_version=request.review_policy_version,
     )
+    derive_started_at = time.monotonic()
+    _notify_progress(
+        on_progress,
+        phase="stage",
+        name=StageName.DERIVE_IDENTITY.value,
+        status="started",
+        started_at=derive_started_at,
+    )
     execution = ExecutionRecord().with_outcome(
         StageOutcome(
             stage=StageName.DERIVE_IDENTITY,
             status=StageStatus.COMPLETED,
             detail=f"attempt {attempt_id}",
         )
+    )
+    _notify_progress(
+        on_progress,
+        phase="stage",
+        name=StageName.DERIVE_IDENTITY.value,
+        status="completed",
+        started_at=derive_started_at,
     )
     candidate: MergeCandidateIdentity | None = None
     review_identity: ReviewIdentity | None = None
@@ -300,6 +361,7 @@ async def run_review_pipeline(
                 request,
                 execution,
                 attempt_id=attempt_id,
+                progress_callback=on_progress,
                 request_key=request_key,
                 merge_tree_oid=None,
                 review_identity=None,
@@ -353,6 +415,7 @@ async def run_review_pipeline(
                 request,
                 execution,
                 attempt_id=attempt_id,
+                progress_callback=on_progress,
                 request_key=request_key,
                 merge_tree_oid=candidate.merge_tree_oid,
                 review_identity=review_identity,
@@ -397,6 +460,7 @@ async def run_review_pipeline(
                 request,
                 execution,
                 attempt_id=attempt_id,
+                progress_callback=on_progress,
                 request_key=request_key,
                 merge_tree_oid=candidate.merge_tree_oid,
                 review_identity=review_identity,
@@ -422,6 +486,7 @@ async def run_review_pipeline(
                 request,
                 execution,
                 attempt_id=attempt_id,
+                progress_callback=on_progress,
                 request_key=request_key,
                 merge_tree_oid=candidate.merge_tree_oid,
                 review_identity=review_identity,
@@ -491,6 +556,7 @@ async def run_review_pipeline(
                 request,
                 execution,
                 attempt_id=attempt_id,
+                progress_callback=on_progress,
                 request_key=request_key,
                 merge_tree_oid=candidate.merge_tree_oid,
                 review_identity=review_identity,
@@ -566,6 +632,7 @@ async def run_review_pipeline(
                 request,
                 execution,
                 attempt_id=attempt_id,
+                progress_callback=on_progress,
                 request_key=request_key,
                 merge_tree_oid=candidate.merge_tree_oid,
                 review_identity=review_identity,
@@ -596,6 +663,7 @@ async def run_review_pipeline(
                 request,
                 execution,
                 attempt_id=attempt_id,
+                progress_callback=on_progress,
                 request_key=request_key,
                 merge_tree_oid=candidate.merge_tree_oid,
                 review_identity=review_identity,
@@ -612,6 +680,7 @@ async def run_review_pipeline(
             request,
             execution,
             attempt_id=attempt_id,
+            progress_callback=on_progress,
             request_key=request_key,
             merge_tree_oid=candidate.merge_tree_oid,
             review_identity=review_identity,
