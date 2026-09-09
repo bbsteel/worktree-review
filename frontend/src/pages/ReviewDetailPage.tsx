@@ -8,6 +8,7 @@ import { createReviewDataSource } from '../data/sources/create-review-data-sourc
 import { ReviewNotFoundError, type ReviewDataSource } from '../data/sources/review-data-source.ts'
 import type { ReviewRunView } from '../domain/review.ts'
 import { CopyValue } from '../features/review-detail/CopyValue.tsx'
+import { FindingsTab } from '../features/review-detail/FindingsTab.tsx'
 import { MergeCandidatePath } from '../features/review-detail/MergeCandidatePath.tsx'
 import { OverviewTab } from '../features/review-detail/OverviewTab.tsx'
 import {
@@ -153,9 +154,7 @@ export function ReviewDetailPage({ dataSource }: ReviewDetailPageProps) {
           <OverviewTab run={run} />
         </TabPanel>
         <TabPanel value="findings">
-          <p className="text-sm text-text-secondary">
-            Findings workspace ({run.findings.length} findings) is delivered in B-012.
-          </p>
+          <FindingsTab run={run} />
         </TabPanel>
         <TabPanel value="coverage">
           <p className="text-sm text-text-secondary">Coverage detail is delivered in B-013.</p>
