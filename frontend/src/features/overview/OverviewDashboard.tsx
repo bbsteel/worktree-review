@@ -7,6 +7,7 @@ import { OverviewCharts } from './OverviewCharts.tsx'
 import { filterOverviewLists, type SurfaceFilter } from './filter.ts'
 import { formatCost, formatDuration, gateBadge } from './format.ts'
 import { ReviewSummaryCard } from './ReviewSummaryCard.tsx'
+import { SessionInsightCard } from './SessionInsightCard.tsx'
 import { StatsStrip } from './StatsStrip.tsx'
 
 export function OverviewDashboard() {
@@ -112,10 +113,7 @@ export function OverviewDashboard() {
             Session Insight
           </h2>
           <div className="mt-3 rounded-md border border-border bg-surface p-3">
-            <Badge tone="awaiting" label={overview.sessionInsight.state} />
-            <p className="mt-2 text-sm text-text-secondary">
-              Session Insight is not connected in this Pre-Alpha prototype. Review Gate does not depend on it.
-            </p>
+            <SessionInsightCard status={overview.sessionInsight} />
           </div>
         </section>
       </div>

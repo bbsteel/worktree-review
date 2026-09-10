@@ -4,6 +4,10 @@ import { ExternalLink, Eye, RotateCcw, ShieldAlert } from 'lucide-react'
 import { Button } from '../../components/ui/button.tsx'
 import { Tooltip } from '../../components/ui/tooltip.tsx'
 import type { AvailableReviewActionsView, ReviewActionCapabilityView, ReviewRunView } from '../../domain/review.ts'
+import {
+  configuredSessionInsightBaseUrl,
+  sessionInsightDeepLink,
+} from '../session-insight/session-insight.ts'
 import { BypassRiskDialog } from './BypassRiskDialog.tsx'
 import { RetryConfirmDialog } from './RetryConfirmDialog.tsx'
 
@@ -27,6 +31,11 @@ export function ReviewActionsBar({ run }: { run: ReviewRunView }) {
   const { availableActions: actions } = run
   const [activeDialog, setActiveDialog] = useState<ActiveDialog>(null)
   const [simulatedAction, setSimulatedAction] = useState<string | null>(null)
+
+  const sessionInsightLink = sessionInsightDeepLink(
+    configuredSessionInsightBaseUrl(),
+    run.attemptId,
+  )
 
   const definitions: ActionDefinition[] = [
     { key: 'retry', label: 'Retry', icon: RotateCcw, capability: actions.retry },
@@ -52,6 +61,44 @@ export function ReviewActionsBar({ run }: { run: ReviewRunView }) {
         <div className="flex flex-wrap items-center gap-2" aria-label="Review actions">
           {visible.map((definition) => {
             const { capability } = definition
+
+            // Open Session Insight is a navigation action: when the service
+            // reports it enabled and a trusted address is configured, it is
+            // a real external link showing its destination host (design 19.4).
+            if (definition.key === 'openSessionInsight' && capability.enabled) {
+              if (sessionInsightLink !== null) {
+                return (
+                  <a
+                    key={definition.key}
+                    href={sessionInsightLink}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex min-h-9 items-center gap-2 rounded-md border border-border bg-surface px-2.5 text-sm font-medium text-text-primary transition-colors duration-[var(--wr-motion-control)] hover:bg-surface-subtle focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                  >
+                    <definition.icon aria-hidden="true" className="h-4 w-4" />
+                    {definition.label} ({new URL(sessionInsightLink).host})
+                  </a>
+                )
+              }
+              return (
+                <Tooltip
+                  key={definition.key}
+                  content="Session Insight address is not configured in this environment."
+                >
+                  <span
+                    tabIndex={0}
+                    aria-label="Open Session Insight unavailable: Session Insight address is not configured in this environment."
+                    className="inline-flex rounded-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                  >
+                    <Button variant="secondary" size="sm" disabled>
+                      <definition.icon aria-hidden="true" className="h-4 w-4" />
+                      {definition.label}
+                    </Button>
+                  </span>
+                </Tooltip>
+              )
+            }
+
             const opensDialog = definition.key === 'retry' || definition.key === 'bypass'
             const button = (
               <Button
