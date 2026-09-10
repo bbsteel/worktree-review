@@ -90,11 +90,13 @@ class GitHubRetryCoordinator:
         authorizer: RetryAuthorizer,
         resolver: RetryRequestResolver,
         enqueue_attempt: AttemptEnqueuer | None = None,
+        prepare_queued_attempt: Callable[[AttemptLease], Awaitable[None]] | None = None,
     ) -> None:
         self._state = state
         self._authorizer = authorizer
         self._resolver = resolver
         self._enqueue_attempt = enqueue_attempt
+        self._prepare_queued_attempt = prepare_queued_attempt
 
     async def request_retry(self, retry_request: RetryRequest) -> RetryAccepted:
         if retry_request.delivery_id is not None:
@@ -160,6 +162,8 @@ class GitHubRetryCoordinator:
                 "request_key": resolution.request_key.model_dump(mode="json"),
             },
         )
+        if self._prepare_queued_attempt is not None:
+            await self._prepare_queued_attempt(lease)
         if self._enqueue_attempt is not None:
             try:
                 await self._enqueue_attempt(lease)

@@ -155,6 +155,17 @@ class AuthoritativeAttemptStore(Protocol):
         payload: dict[str, object],
     ) -> None: ...
 
+    async def invalidate_standing_decision(
+        self,
+        change_request: GitHubChangeRequestLocator,
+        *,
+        reason: str,
+    ) -> None: ...
+
+    async def invalidate_standing_for_target(
+        self, *, repository: str, target_ref: str, reason: str
+    ) -> int: ...
+
 
 def _review_identity_matches_request_key(
     review_identity: ReviewIdentity,
@@ -479,6 +490,44 @@ class InMemoryAuthoritativeAttemptStore:
         async with self._lock:
             job = self._jobs.get(attempt_id)
             return None if job is None else job.status
+
+    async def invalidate_standing_decision(
+        self,
+        change_request: GitHubChangeRequestLocator,
+        *,
+        reason: str,
+    ) -> None:
+        async with self._lock:
+            current_state = self._change_requests.get(change_request)
+            if current_state is None:
+                return
+            prior_standing = current_state.standing_attempt_id
+            current_state.standing_attempt_id = None
+            current_state.standing_gate_state = None
+            self._audit_events.append(
+                {
+                    "event_type": "standing_decision_invalidated",
+                    "change_request": change_request.model_dump(mode="json"),
+                    "attempt_id": prior_standing,
+                    "payload": {"reason": reason},
+                }
+            )
+
+    async def invalidate_standing_for_target(
+        self, *, repository: str, target_ref: str, reason: str
+    ) -> int:
+        count = 0
+        aliases = {target_ref, f"refs/heads/{target_ref}"}
+        if target_ref.startswith("refs/heads/"):
+            aliases.add(target_ref.removeprefix("refs/heads/"))
+        for locator, current_state in list(self._change_requests.items()):
+            if locator.repository != repository:
+                continue
+            if current_state.request_key.target_ref not in aliases:
+                continue
+            await self.invalidate_standing_decision(locator, reason=reason)
+            count += 1
+        return count
 
 
 POSTGRES_SCHEMA_SQL = """
@@ -1166,3 +1215,72 @@ class PostgresAuthoritativeAttemptStore:
             attempt_id,
             json.dumps(payload, sort_keys=True),
         )
+
+    async def invalidate_standing_decision(
+        self,
+        change_request: GitHubChangeRequestLocator,
+        *,
+        reason: str,
+    ) -> None:
+        async with self._pool.acquire() as connection:
+            row = await connection.fetchrow(
+                """
+                SELECT standing_attempt_id
+                FROM change_requests
+                WHERE installation_id = $1 AND repository = $2
+                  AND pull_request_number = $3
+                FOR UPDATE
+                """,
+                change_request.installation_id,
+                change_request.repository,
+                change_request.pull_request_number,
+            )
+            if row is None:
+                return
+            prior_standing = row["standing_attempt_id"]
+            await connection.execute(
+                """
+                UPDATE change_requests
+                SET standing_attempt_id = NULL, standing_gate_state = NULL
+                WHERE installation_id = $1 AND repository = $2
+                  AND pull_request_number = $3
+                """,
+                change_request.installation_id,
+                change_request.repository,
+                change_request.pull_request_number,
+            )
+            await self._append_audit_event_on_connection(
+                connection,
+                event_type="standing_decision_invalidated",
+                change_request=change_request,
+                attempt_id=None if prior_standing is None else str(prior_standing),
+                payload={"reason": reason},
+            )
+
+    async def invalidate_standing_for_target(
+        self, *, repository: str, target_ref: str, reason: str
+    ) -> int:
+        aliases = (target_ref, f"refs/heads/{target_ref}", target_ref.removeprefix("refs/heads/"))
+        async with self._pool.acquire() as connection:
+            rows = await connection.fetch(
+                """
+                SELECT installation_id, repository, pull_request_number
+                FROM change_requests
+                WHERE repository = $1
+                  AND request_key->>'target_ref' = ANY($2::text[])
+                """,
+                repository,
+                list(aliases),
+            )
+        count = 0
+        for row in rows:
+            await self.invalidate_standing_decision(
+                GitHubChangeRequestLocator(
+                    installation_id=row["installation_id"],
+                    repository=row["repository"],
+                    pull_request_number=row["pull_request_number"],
+                ),
+                reason=reason,
+            )
+            count += 1
+        return count

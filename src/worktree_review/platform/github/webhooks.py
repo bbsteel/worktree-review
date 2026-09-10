@@ -19,6 +19,7 @@ from worktree_review.server.state import GitHubChangeRequestLocator
 
 if TYPE_CHECKING:
     from worktree_review.platform.github.retry import GitHubRetryCoordinator
+    from worktree_review.platform.github.triggers import GitHubTriggerCoordinator
 
 
 RETRY_ACTION_IDENTIFIER = "worktree-review-retry"
@@ -163,6 +164,7 @@ async def handle_github_webhook(
     event_name: str | None = None,
     delivery_id: str | None = None,
     retry_coordinator: GitHubRetryCoordinator | None = None,
+    trigger_coordinator: GitHubTriggerCoordinator | None = None,
 ) -> WebhookDispatchResult:
     event = parse_github_webhook(
         payload=payload,
@@ -171,6 +173,8 @@ async def handle_github_webhook(
         event_name=event_name,
         delivery_id=delivery_id,
     )
+    if event.event_name in {"pull_request", "push"} and trigger_coordinator is not None:
+        return await trigger_coordinator.handle(event)
     if event.action != "requested_action":
         return WebhookDispatchResult(
             status="ignored",
