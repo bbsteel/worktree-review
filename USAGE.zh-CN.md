@@ -515,13 +515,16 @@ uv sync --extra server
 
 - `WORKTREE_REVIEW_GITHUB_WEBHOOK_SECRET`
 - `WORKTREE_REVIEW_DATABASE_URL`
-- `WORKTREE_REVIEW_GITHUB_TOKEN`
 - `WORKTREE_REVIEW_REVIEW_POLICY_PATH`
+- `WORKTREE_REVIEW_COMPUTE_POLICY_PATH`
+- `WORKTREE_REVIEW_GITHUB_APP_ID` 与 App 私钥（正式 App 模式）
+- `WORKTREE_REVIEW_GITHUB_AUTH_MODE=smoke-pat` 与 `WORKTREE_REVIEW_GITHUB_TOKEN`（仅 Pre-Alpha smoke）
 - `WORKTREE_REVIEW_GITHUB_API_URL`（可选，默认 `https://api.github.com`）
+- `WORKTREE_REVIEW_PUBLIC_BASE_URL`（可选，默认 `http://127.0.0.1:8000`）
 
-`GET /healthz` 可作为 liveness endpoint。webhook 和 retry state 部分已经存在，但内置 review
-worker 以及端到端 shared pipeline publication 仍未完成。当前应把上面的本地 CLI 作为支持的
-用户工作流；部署 server 作为检视服务前，先完成 GitHub worker。
+`GET /healthz` 可作为 liveness endpoint。已签名的 `ready_for_review` webhook 会创建权威
+Attempt；durable worker 从不可变 snapshot 恢复并运行 shared Pipeline；终态 Check 与 Web
+Review Detail 发布到同一个 `check_run_id`。
 
 ## 进一步阅读
 

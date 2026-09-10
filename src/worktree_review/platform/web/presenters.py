@@ -18,12 +18,16 @@ from worktree_review.application.lifecycle import (
 from worktree_review.application.mapping import local_source_from_report, project_available_actions
 from worktree_review.application.projections import project_coverage, project_usage
 from worktree_review.application.review_runs import OverviewAggregate, ReviewRunRecord
-from worktree_review.application.views import SurfaceProjection
+from worktree_review.application.views import GitHubPullRequestSourceView, SurfaceProjection
 from worktree_review.core.findings import EvidenceBand, Finding, Severity
 from worktree_review.core.policy import ComputePolicy, ReviewPolicy
 from worktree_review.core.report import PIPELINE_STAGE_ORDER, ReviewReport, StageStatus
+from worktree_review.platform.cli.result import load_review_report_from_cli_result
+from worktree_review.platform.github.checks import github_check_run_url
+from worktree_review.platform.github.snapshot import AttemptExecutionSnapshot
 from worktree_review.platform.web.local_store import SqliteReviewRunStore
 from worktree_review.platform.web.registry import parse_credential_reference
+from worktree_review.server.state import AuthoritativeChangeRequestState
 
 
 def _cost_number(value: str | None) -> float | None:
@@ -123,6 +127,8 @@ def _summary_dto(
     provider: str = "unknown",
     model: str = "unknown",
     completed_at: str | None = None,
+    authority: str = Authority.LOCAL_NON_AUTHORITATIVE.value,
+    publication_status: str = PublicationStatus.NOT_APPLICABLE.value,
 ) -> dict[str, Any]:
     return {
         "attempt_id": attempt_id,
@@ -130,8 +136,8 @@ def _summary_dto(
         "source": source,
         "run_status": run_status,
         "gate_state": gate_state,
-        "authority": Authority.LOCAL_NON_AUTHORITATIVE.value,
-        "publication_status": PublicationStatus.NOT_APPLICABLE.value,
+        "authority": authority,
+        "publication_status": publication_status,
         "bypass_state": BypassState.NONE.value,
         "finding_count": finding_count,
         "highest_severity": highest_severity,
@@ -531,6 +537,336 @@ def present_review_run(
         },
         "available_actions": _local_actions(terminal=False),
     }
+
+
+def github_source_view(
+    snapshot: AttemptExecutionSnapshot, *, check_run_id: int | None
+) -> GitHubPullRequestSourceView:
+    locator = snapshot.change_request
+    check_url = (
+        None
+        if check_run_id is None
+        else github_check_run_url(repository=locator.repository, check_run_id=check_run_id)
+    )
+    return GitHubPullRequestSourceView(
+        repository_full_name=locator.repository,
+        pull_request_number=locator.pull_request_number,
+        pull_request_title=snapshot.pull_request_title or "",
+        author_login=snapshot.author_login or "",
+        proposed_branch=snapshot.proposed_ref,
+        target_branch=snapshot.request_key.target_ref,
+        commit_sha=snapshot.request_key.proposed_head_oid,
+        check_url=check_url,
+    )
+
+
+def github_authority_for_attempt(
+    *,
+    attempt_id: str,
+    change_state: AuthoritativeChangeRequestState,
+) -> Authority:
+    if change_state.authoritative_attempt_id == attempt_id:
+        return Authority.AUTHORITATIVE
+    if change_state.standing_attempt_id == attempt_id:
+        return Authority.AUTHORITATIVE
+    return Authority.SUPERSEDED
+
+
+def present_github_review_run(
+    *,
+    snapshot: AttemptExecutionSnapshot,
+    change_state: AuthoritativeChangeRequestState,
+    publication_status: PublicationStatus | None,
+    check_run_id: int | None,
+    result_json: str | None,
+    created_at: datetime,
+) -> dict[str, Any]:
+    """Map a PostgreSQL GitHub Attempt onto the frozen Review Detail DTO."""
+
+    attempt_id = snapshot.attempt_id
+    source = github_source_view(snapshot, check_run_id=check_run_id)
+    authority = github_authority_for_attempt(attempt_id=attempt_id, change_state=change_state)
+    publication = publication_status or (
+        PublicationStatus.QUEUED if check_run_id is not None else PublicationStatus.NOT_APPLICABLE
+    )
+    display_name = snapshot.change_request.repository
+    source_payload = source.model_dump()
+    if result_json:
+        report = load_review_report_from_cli_result(result_json)
+        run_status = RunStatus.COMPLETED.value
+        gate_state = project_gate_state(report.gate_state).value
+        surface = SurfaceProjection(
+            source=source,
+            run_status=RunStatus.COMPLETED,
+            authority=authority,
+            publication_status=publication,
+            bypass_state=BypassState.NONE,
+        )
+        actions = project_available_actions(
+            gate_state=project_gate_state(report.gate_state),
+            surface=surface,
+        )
+        blocking_severities = (Severity.CRITICAL, Severity.MAJOR)
+        blocking = [
+            finding.fingerprint
+            for finding in report.findings
+            if finding.severity in blocking_severities
+            and finding.evidence_band is not EvidenceBand.INSUFFICIENT
+        ]
+        identity_unavailable = (
+            None
+            if report.review_identity is not None
+            else "Review identity unavailable — merge candidate was not constructed."
+        )
+        dimensions = [
+            {
+                "dimension_id": outcome.dimension_id,
+                "status": outcome.status.value,
+                "elapsed_ms": None,
+                "finding_count": sum(
+                    1 for finding in report.findings if finding.dimension_id == outcome.dimension_id
+                ),
+                "blocking_finding_count": sum(
+                    1
+                    for finding in report.findings
+                    if finding.dimension_id == outcome.dimension_id
+                    and finding.fingerprint in blocking
+                ),
+            }
+            for outcome in report.dimension_outcomes
+        ]
+        failed = next(
+            (
+                outcome
+                for outcome in report.execution.outcomes
+                if outcome.status is StageStatus.FAILED
+            ),
+            None,
+        )
+        summary = _summary_dto(
+            attempt_id=attempt_id,
+            display_name=display_name,
+            source=source_payload,
+            run_status=run_status,
+            gate_state=gate_state,
+            created_at=created_at,
+            finding_count=len(report.findings),
+            highest_severity=_highest_severity(report),
+            cost_usd=_cost_number(None),
+            cost_unknown=True,
+            provider=report.compute_policy_disclosure.provider,
+            model=report.compute_policy_disclosure.model,
+            completed_at=created_at.isoformat(),
+            authority=authority.value,
+            publication_status=publication.value,
+        )
+        return {
+            "attempt_id": attempt_id,
+            "run_status": run_status,
+            "gate_state": gate_state,
+            "authority": authority.value,
+            "publication_status": publication.value,
+            "bypass_state": BypassState.NONE.value,
+            "source": source_payload,
+            "summary": summary,
+            "gate": {
+                "gate_state": gate_state,
+                "blocking_fingerprints": blocking,
+                "summary": report.summary,
+                "required_coverage_complete": (
+                    report.coverage.required_coverage_complete if report.coverage else False
+                ),
+            },
+            "findings": [
+                _finding_dto(finding, blocking_severities=blocking_severities)
+                for finding in report.findings
+            ],
+            "coverage": _coverage_from_report(report),
+            "dimensions": dimensions,
+            "pipeline": _pipeline_from_report(report),
+            "failure": None
+            if failed is None
+            else {
+                "stage": failed.stage.value,
+                "category": "pipeline",
+                "safe_detail": failed.detail or report.error_detail or "stage failed",
+            },
+            "attempts": [
+                {
+                    "attempt_id": attempt_id,
+                    "authority": authority.value,
+                    "gate_state": gate_state,
+                    "trigger": "github-pull-request",
+                    "provider": report.compute_policy_disclosure.provider,
+                    "model": report.compute_policy_disclosure.model,
+                    "review_policy_version": report.review_policy_version.semver,
+                    "compute_policy_version": report.compute_policy_version.semver,
+                    "token_count": None,
+                    "cost_usd": None,
+                    "cost_unknown": True,
+                    "started_at": created_at.isoformat(),
+                    "duration_ms": None,
+                }
+            ],
+            "identity": {
+                "review_request_key": (
+                    f"{report.request_key.source_repository}:"
+                    f"{report.request_key.target_ref}:"
+                    f"{report.request_key.target_head_oid}:"
+                    f"{report.request_key.proposed_head_oid}"
+                ),
+                "source_repository": report.resolved.source_repository,
+                "target_ref": report.resolved.target_ref,
+                "target_head_oid": report.resolved.target_head_oid,
+                "proposed_source": report.resolved.proposed_source.value,
+                "proposed_head_oid": report.resolved.proposed_head_oid,
+                "merge_tree_oid": report.merge_tree_oid,
+                "review_identity": (
+                    None
+                    if report.review_identity is None
+                    else report.review_identity.candidate.merge_tree_oid
+                ),
+                "identity_unavailable_reason": identity_unavailable,
+            },
+            "policies": {
+                "review_policy_name": "review-policy",
+                "review_policy_version": report.review_policy_version.semver,
+                "review_policy_sha256": report.review_policy_version.sha256,
+                "compute_policy_name": "compute-policy",
+                "compute_policy_version": report.compute_policy_version.semver,
+                "compute_policy_sha256": report.compute_policy_version.sha256,
+                "data_destination": report.compute_policy_disclosure.data_destination,
+                "retention_disclosure": report.compute_policy_disclosure.known_retention,
+                "provider_configuration_fingerprint": (
+                    report.compute_policy_disclosure.provider_configuration_fingerprint
+                ),
+            },
+            "usage": _usage_from_report(report),
+            "provider_health": {
+                "profile_name": report.compute_policy_disclosure.provider,
+                "status": "not_tested",
+                "observed_at": None,
+            },
+            "available_actions": actions.model_dump(),
+        }
+
+    gate_state = ViewGateState.IN_PROGRESS.value
+    summary = _summary_dto(
+        attempt_id=attempt_id,
+        display_name=display_name,
+        source=source_payload,
+        run_status=RunStatus.QUEUED.value,
+        gate_state=gate_state,
+        created_at=created_at,
+        authority=authority.value,
+        publication_status=publication.value,
+    )
+    surface = SurfaceProjection(
+        source=source,
+        run_status=RunStatus.QUEUED,
+        authority=authority,
+        publication_status=publication,
+        bypass_state=BypassState.NONE,
+    )
+    actions = project_available_actions(
+        gate_state=ViewGateState.IN_PROGRESS,
+        surface=surface,
+    )
+    return {
+        "attempt_id": attempt_id,
+        "run_status": RunStatus.QUEUED.value,
+        "gate_state": gate_state,
+        "authority": authority.value,
+        "publication_status": publication.value,
+        "bypass_state": BypassState.NONE.value,
+        "source": source_payload,
+        "summary": summary,
+        "gate": {
+            "gate_state": gate_state,
+            "blocking_fingerprints": [],
+            "summary": "Attempt queued",
+            "required_coverage_complete": False,
+        },
+        "findings": [],
+        "coverage": {
+            "required_coverage": "incomplete",
+            "reviewed_count": 0,
+            "excluded_count": 0,
+            "missing_count": 0,
+            "files": [],
+        },
+        "dimensions": [],
+        "pipeline": _empty_pipeline(),
+        "failure": None,
+        "attempts": [
+            {
+                "attempt_id": attempt_id,
+                "authority": authority.value,
+                "gate_state": gate_state,
+                "trigger": "github-pull-request",
+                "provider": "unknown",
+                "model": "unknown",
+                "review_policy_version": snapshot.review_policy_semver,
+                "compute_policy_version": snapshot.compute_policy_semver,
+                "token_count": None,
+                "cost_usd": None,
+                "cost_unknown": True,
+                "started_at": created_at.isoformat(),
+                "duration_ms": None,
+            }
+        ],
+        "identity": {
+            "review_request_key": (
+                f"{snapshot.request_key.source_repository}:"
+                f"{snapshot.request_key.target_ref}:"
+                f"{snapshot.request_key.target_head_oid}:"
+                f"{snapshot.request_key.proposed_head_oid}"
+            ),
+            "source_repository": snapshot.request_key.source_repository,
+            "target_ref": snapshot.request_key.target_ref,
+            "target_head_oid": snapshot.request_key.target_head_oid,
+            "proposed_source": "github-pull-request",
+            "proposed_head_oid": snapshot.request_key.proposed_head_oid,
+            "merge_tree_oid": None,
+            "review_identity": None,
+            "identity_unavailable_reason": (
+                "Review identity is assigned after merge construction."
+            ),
+        },
+        "policies": {
+            "review_policy_name": "review-policy",
+            "review_policy_version": snapshot.review_policy_semver,
+            "review_policy_sha256": snapshot.review_policy_sha256,
+            "compute_policy_name": "compute-policy",
+            "compute_policy_version": snapshot.compute_policy_semver,
+            "compute_policy_sha256": snapshot.compute_policy_sha256,
+            "data_destination": "unknown",
+            "retention_disclosure": "unknown",
+            "provider_configuration_fingerprint": None,
+        },
+        "usage": {
+            "estimated_cost_usd": None,
+            "actual_cost_usd": None,
+            "cost_unknown": True,
+            "unknown_cost_record_count": 0,
+            "input_tokens": None,
+            "output_tokens": None,
+            "calls": [],
+        },
+        "provider_health": {
+            "profile_name": "unknown",
+            "status": "not_tested",
+            "observed_at": None,
+        },
+        "available_actions": actions.model_dump(),
+    }
+
+
+def _highest_severity(report: ReviewReport) -> str | None:
+    severities = [finding.severity.value for finding in report.findings]
+    if not severities:
+        return None
+    return max(severities, key=["suggestion", "minor", "major", "critical"].index)
 
 
 def present_overview(

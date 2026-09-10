@@ -18,10 +18,12 @@ from worktree_review.application.review_events import ReviewEvent
 from worktree_review.application.review_service import allocate_attempt_id
 from worktree_review.core.git import invoke_git, worktree_is_clean
 from worktree_review.core.policy import load_compute_policy, load_review_policy
+from worktree_review.platform.github.runtime import ServerRuntime
 from worktree_review.platform.web.errors import ApiError
 from worktree_review.platform.web.local_store import IdempotencyConflictError
 from worktree_review.platform.web.presenters import (
     present_compute_policy,
+    present_github_review_run,
     present_overview,
     present_provider_profile,
     present_repository,
@@ -88,6 +90,37 @@ def _runtime(request: Request) -> WebRuntime:
     if not isinstance(runtime, WebRuntime):
         raise ApiError(500, "web_runtime_missing", "local web runtime is not configured")
     return runtime
+
+
+def _web_runtime(request: Request) -> WebRuntime | None:
+    runtime = getattr(request.app.state, "web_runtime", None)
+    return runtime if isinstance(runtime, WebRuntime) else None
+
+
+def _server_runtime(request: Request) -> ServerRuntime | None:
+    runtime = getattr(request.app.state, "server_runtime", None)
+    return runtime if isinstance(runtime, ServerRuntime) else None
+
+
+async def _github_review_dto(request: Request, attempt_id: str) -> dict[str, Any] | None:
+    server = _server_runtime(request)
+    if server is None or server.github_store is None or server.attempt_store is None:
+        return None
+    snapshot = await server.github_store.get_execution_snapshot(attempt_id)
+    if snapshot is None:
+        return None
+    change_state = await server.attempt_store.get_change_request_state(snapshot.change_request)
+    publication_status = await server.github_store.publication_status(attempt_id)
+    check_run_id = await server.github_store.get_check_run_id(attempt_id)
+    result_json = await server.github_store.get_review_result(attempt_id)
+    return present_github_review_run(
+        snapshot=snapshot,
+        change_state=change_state,
+        publication_status=publication_status,
+        check_run_id=check_run_id,
+        result_json=result_json,
+        created_at=datetime.now(UTC),
+    )
 
 
 def _mutation_guard(request: Request, csrf_token: str | None) -> None:
@@ -186,19 +219,23 @@ def create_api_router() -> APIRouter:
 
     @router.get("/api/v1/reviews/{attempt_id}")
     async def get_review(attempt_id: str, request: Request) -> dict[str, Any]:
-        runtime = _runtime(request)
-        run = await runtime.store.get_run(attempt_id)
-        if run is None:
-            raise ApiError(404, "attempt_not_found", "unknown attempt")
-        request_body = json.loads(run.request_json) if run.request_json else {}
-        display = await repository_display_name(runtime.store, request_body)
-        review_policy, compute_policy = await _load_policies(runtime, request_body)
-        return present_review_run(
-            run,
-            display_name=display,
-            review_policy=review_policy,
-            compute_policy=compute_policy,
-        )
+        runtime = _web_runtime(request)
+        if runtime is not None:
+            run = await runtime.store.get_run(attempt_id)
+            if run is not None:
+                request_body = json.loads(run.request_json) if run.request_json else {}
+                display = await repository_display_name(runtime.store, request_body)
+                review_policy, compute_policy = await _load_policies(runtime, request_body)
+                return present_review_run(
+                    run,
+                    display_name=display,
+                    review_policy=review_policy,
+                    compute_policy=compute_policy,
+                )
+        github = await _github_review_dto(request, attempt_id)
+        if github is not None:
+            return github
+        raise ApiError(404, "attempt_not_found", "unknown attempt")
 
     @router.get("/api/v1/reviews/{attempt_id}/events")
     async def review_events(
@@ -225,13 +262,24 @@ def create_api_router() -> APIRouter:
 
     @router.get("/api/v1/reviews/{attempt_id}/result")
     async def get_review_result(attempt_id: str, request: Request) -> Any:
-        runtime = _runtime(request)
-        run = await runtime.store.get_run(attempt_id)
-        if run is None:
-            raise ApiError(404, "attempt_not_found", "unknown attempt")
-        if not run.result_json:
-            raise ApiError(409, "result_unavailable", "terminal result is not available yet")
-        return json.loads(run.result_json)
+        runtime = _web_runtime(request)
+        if runtime is not None:
+            run = await runtime.store.get_run(attempt_id)
+            if run is not None:
+                if not run.result_json:
+                    raise ApiError(
+                        409, "result_unavailable", "terminal result is not available yet"
+                    )
+                return json.loads(run.result_json)
+        server = _server_runtime(request)
+        if server is not None and server.github_store is not None:
+            result_json = await server.github_store.get_review_result(attempt_id)
+            if result_json:
+                return json.loads(result_json)
+            snapshot = await server.github_store.get_execution_snapshot(attempt_id)
+            if snapshot is not None:
+                raise ApiError(409, "result_unavailable", "terminal result is not available yet")
+        raise ApiError(404, "attempt_not_found", "unknown attempt")
 
     @router.post("/api/v1/reviews/{attempt_id}/retry", status_code=202)
     async def retry_review(

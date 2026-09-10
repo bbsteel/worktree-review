@@ -92,6 +92,7 @@ def create_app(
     web_runtime: WebRuntime | None = None,
     enable_local_web: bool = True,
     start_worker: bool = True,
+    start_github_worker: bool = True,
     serve_frontend: bool | None = None,
     frontend_dist: Path | None = None,
 ) -> FastAPI:
@@ -106,12 +107,22 @@ def create_app(
         opened_web: WebRuntime | None = None
         if retry_coordinator is not None:
             application.state.retry_coordinator = retry_coordinator
+            application.state.trigger_coordinator = None
         elif configured_webhook_secret:
             builder = runtime_builder or build_server_runtime_from_environment
             runtime = await builder()
+            application.state.server_runtime = runtime
             application.state.retry_coordinator = runtime.retry_coordinator
+            application.state.trigger_coordinator = runtime.trigger_coordinator
+            if (
+                start_github_worker
+                and runtime.durable_worker is not None
+                and runtime.worker_task is None
+            ):
+                runtime.worker_task = asyncio.create_task(runtime.durable_worker.run_forever())
         else:
             application.state.retry_coordinator = None
+            application.state.trigger_coordinator = None
             application.state.retry_disabled_reason = (
                 "WORKTREE_REVIEW_GITHUB_WEBHOOK_SECRET is not configured"
             )
@@ -176,6 +187,7 @@ def create_app(
                     "retry_coordinator",
                     retry_coordinator,
                 ),
+                trigger_coordinator=getattr(application.state, "trigger_coordinator", None),
             )
         except WebhookValidationError as exc:
             return Response(content=str(exc), status_code=status.HTTP_401_UNAUTHORIZED)

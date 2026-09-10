@@ -11,9 +11,10 @@ from worktree_review.platform.github.checks import (
     CheckRunTransport,
     annotation_level_for_severity,
     build_check_run_payload,
+    web_review_detail_url,
 )
+from worktree_review.platform.github.errors import GitHubApiError
 from worktree_review.platform.github.persistence import GitHubReviewStore
-from worktree_review.platform.github.runtime import GitHubApiError
 from worktree_review.platform.github.snapshot import PublicationIntent
 from worktree_review.server.state import (
     AuthoritativeAttemptStore,
@@ -55,11 +56,20 @@ class GitHubCheckPublisher:
         github_store: GitHubReviewStore,
         checks: CheckRunTransport,
         details_url: str | None = None,
+        public_base_url: str | None = None,
     ) -> None:
         self._state = state
         self._github_store = github_store
         self._checks = checks
         self._details_url = details_url
+        self._public_base_url = public_base_url
+
+    def _details_url_for(self, attempt_id: str) -> str | None:
+        if self._public_base_url:
+            return web_review_detail_url(
+                public_base_url=self._public_base_url, attempt_id=attempt_id
+            )
+        return self._details_url
 
     async def publish_terminal(self, *, attempt_id: str, report: ReviewReport) -> PublishResult:
         check_run_id = await self._github_store.get_check_run_id(attempt_id)
@@ -68,7 +78,7 @@ class GitHubCheckPublisher:
         payload = build_check_run_payload(
             report,
             annotations=limited_annotations(report),
-            details_url=self._details_url,
+            details_url=self._details_url_for(attempt_id),
         )
         await self._github_store.enqueue_publication(
             PublicationIntent(
@@ -118,7 +128,7 @@ class GitHubCheckPublisher:
         payload = build_check_run_payload(
             report,
             annotations=limited_annotations(report),
-            details_url=self._details_url,
+            details_url=self._details_url_for(attempt_id),
         )
         if cas.disposition is not PublishDisposition.PUBLISHED:
             # This Attempt's own Check may complete as audit-only. Never create a

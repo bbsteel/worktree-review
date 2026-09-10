@@ -27,6 +27,20 @@ from worktree_review.core.report import (
 CHECK_RUN_NAME = "Worktree Review"
 CHECK_RUN_ANNOTATION_BATCH_SIZE = 50
 ATTEMPT_FINGERPRINT_LENGTH = 12
+DEFAULT_PUBLIC_BASE_URL = "http://127.0.0.1:8000"
+
+
+def web_review_detail_url(*, public_base_url: str, attempt_id: str) -> str:
+    """Canonical Web Review Detail URL shared by queued, in-progress, and terminal Checks."""
+
+    if not attempt_id:
+        raise ValueError("attempt_id is required for the review detail URL")
+    base = public_base_url.rstrip("/") or DEFAULT_PUBLIC_BASE_URL
+    return f"{base}/reviews/{attempt_id}"
+
+
+def github_check_run_url(*, repository: str, check_run_id: int) -> str:
+    return f"https://github.com/{repository}/runs/{check_run_id}"
 
 
 class CheckRunStatus(StrEnum):

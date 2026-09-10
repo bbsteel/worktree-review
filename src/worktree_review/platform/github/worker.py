@@ -18,6 +18,7 @@ from worktree_review.platform.cli.result import cli_result_document
 from worktree_review.platform.github.checks import (
     CheckRunTransport,
     build_in_progress_check_run_payload,
+    web_review_detail_url,
 )
 from worktree_review.platform.github.mirrors import RepositoryMirrorManager
 from worktree_review.platform.github.persistence import GitHubReviewStore
@@ -45,6 +46,7 @@ class GitHubReviewWorker:
         resolve_clone_url: CloneUrlResolver,
         provider_factory: ProviderFactory,
         details_url: str | None = None,
+        public_base_url: str | None = None,
     ) -> None:
         self._state = state
         self._github_store = github_store
@@ -55,8 +57,16 @@ class GitHubReviewWorker:
         self._resolve_clone_url = resolve_clone_url
         self._provider_factory = provider_factory
         self._details_url = details_url
+        self._public_base_url = public_base_url
         self._recorder = ReviewEventRecorder(github_store)
         self.pipeline_invocations = 0
+
+    def _details_url_for(self, attempt_id: str) -> str | None:
+        if self._public_base_url:
+            return web_review_detail_url(
+                public_base_url=self._public_base_url, attempt_id=attempt_id
+            )
+        return self._details_url
 
     async def execute_claimed_attempt(self, attempt_id: str) -> ReviewReport | None:
         lease = await self._state.claim_attempt_job(attempt_id)
@@ -80,7 +90,7 @@ class GitHubReviewWorker:
                 payload=build_in_progress_check_run_payload(
                     attempt_id=attempt_id,
                     head_sha=snapshot.request_key.proposed_head_oid,
-                    details_url=self._details_url,
+                    details_url=self._details_url_for(attempt_id),
                 ),
             )
         clone_url = await self._resolve_clone_url(snapshot)

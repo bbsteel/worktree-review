@@ -16,7 +16,7 @@ from typing import Protocol
 
 import httpx
 
-from worktree_review.platform.github.runtime import GitHubApiError, ServerConfigurationError
+from worktree_review.platform.github.errors import GitHubApiError, ServerConfigurationError
 
 SMOKE_PAT_MODE = "smoke-pat"
 APP_MODE = "app"

@@ -579,15 +579,17 @@ The current development runtime recognizes these deployment variables:
 
 - `WORKTREE_REVIEW_GITHUB_WEBHOOK_SECRET`
 - `WORKTREE_REVIEW_DATABASE_URL`
-- `WORKTREE_REVIEW_GITHUB_TOKEN`
 - `WORKTREE_REVIEW_REVIEW_POLICY_PATH`
+- `WORKTREE_REVIEW_COMPUTE_POLICY_PATH`
+- `WORKTREE_REVIEW_GITHUB_APP_ID` and App private key (formal App mode)
+- `WORKTREE_REVIEW_GITHUB_AUTH_MODE=smoke-pat` with `WORKTREE_REVIEW_GITHUB_TOKEN` (Pre-Alpha smoke only)
 - `WORKTREE_REVIEW_GITHUB_API_URL` (optional; defaults to `https://api.github.com`)
+- `WORKTREE_REVIEW_PUBLIC_BASE_URL` (optional; defaults to `http://127.0.0.1:8000`)
 
-`GET /healthz` is available as a liveness endpoint. The webhook and retry state
-pieces are present, but the embedded review worker and end-to-end shared
-pipeline publication are still incomplete. Treat the local CLI above as the
-current supported user workflow; finish the GitHub worker before deploying the
-server as a review service.
+`GET /healthz` is available as a liveness endpoint. A signed `ready_for_review`
+webhook creates an authoritative Attempt, the durable worker restores the
+immutable snapshot and runs the shared Pipeline, and the terminal Check plus
+Web Review Detail are published to the same `check_run_id`.
 
 ## Further reading
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, Protocol
@@ -386,7 +387,9 @@ class PostgresGitHubReviewStore:
             )
         if value is None:
             return None
-        return value if isinstance(value, str) else str(value)
+        if isinstance(value, str):
+            return value
+        return json.dumps(value)
 
     async def record_webhook_idempotency(
         self, *, installation_id: int, delivery_id: str, attempt_id: str, request_digest: str

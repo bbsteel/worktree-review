@@ -9,7 +9,11 @@ from typing import Any
 
 from worktree_review.core.identity import ReviewRequestKey
 from worktree_review.core.policy import load_compute_policy, load_review_policy
-from worktree_review.platform.github.checks import CheckRunTransport, build_queued_check_run_payload
+from worktree_review.platform.github.checks import (
+    CheckRunTransport,
+    build_queued_check_run_payload,
+    web_review_detail_url,
+)
 from worktree_review.platform.github.persistence import GitHubReviewStore
 from worktree_review.platform.github.retry import AttemptEnqueuer
 from worktree_review.platform.github.snapshot import AttemptExecutionSnapshot
@@ -35,6 +39,7 @@ class GitHubTriggerCoordinator:
         compute_policy_path: Path,
         provider_profile_id: str | None = None,
         details_url: str | None = None,
+        public_base_url: str | None = None,
     ) -> None:
         self._state = state
         self._github_store = github_store
@@ -44,6 +49,14 @@ class GitHubTriggerCoordinator:
         self._compute_policy_path = compute_policy_path
         self._provider_profile_id = provider_profile_id
         self._details_url = details_url
+        self._public_base_url = public_base_url
+
+    def _details_url_for(self, attempt_id: str) -> str | None:
+        if self._public_base_url:
+            return web_review_detail_url(
+                public_base_url=self._public_base_url, attempt_id=attempt_id
+            )
+        return self._details_url
 
     async def handle(self, event: GitHubWebhookEvent) -> WebhookDispatchResult:
         if event.event_name == "push":
@@ -178,7 +191,7 @@ class GitHubTriggerCoordinator:
             payload=build_queued_check_run_payload(
                 attempt_id=lease.attempt_id,
                 head_sha=request_key.proposed_head_oid,
-                details_url=self._details_url,
+                details_url=self._details_url_for(lease.attempt_id),
             ),
         )
         await self._github_store.set_check_run_id(lease.attempt_id, check_run_id)
@@ -209,6 +222,7 @@ class QueuedAttemptPreparer:
         compute_policy_path: Path,
         provider_profile_id: str | None = None,
         details_url: str | None = None,
+        public_base_url: str | None = None,
     ) -> None:
         self._github_store = github_store
         self._checks = checks
@@ -216,6 +230,14 @@ class QueuedAttemptPreparer:
         self._compute_policy_path = compute_policy_path
         self._provider_profile_id = provider_profile_id
         self._details_url = details_url
+        self._public_base_url = public_base_url
+
+    def _details_url_for(self, attempt_id: str) -> str | None:
+        if self._public_base_url:
+            return web_review_detail_url(
+                public_base_url=self._public_base_url, attempt_id=attempt_id
+            )
+        return self._details_url
 
     async def __call__(self, lease: AttemptLease) -> None:
         if await self._github_store.get_check_run_id(lease.attempt_id) is not None:
@@ -240,7 +262,7 @@ class QueuedAttemptPreparer:
             payload=build_queued_check_run_payload(
                 attempt_id=lease.attempt_id,
                 head_sha=lease.request_key.proposed_head_oid,
-                details_url=self._details_url,
+                details_url=self._details_url_for(lease.attempt_id),
             ),
         )
         await self._github_store.set_check_run_id(lease.attempt_id, check_run_id)
