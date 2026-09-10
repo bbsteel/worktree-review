@@ -36,6 +36,7 @@ export function ReviewActionsBar({ run }: { run: ReviewRunView }) {
     configuredSessionInsightBaseUrl(),
     run.attemptId,
   )
+  const checkUrl = run.source.kind === 'github-pull-request' ? run.source.checkUrl : null
 
   const definitions: ActionDefinition[] = [
     { key: 'retry', label: 'Retry', icon: RotateCcw, capability: actions.retry },
@@ -62,32 +63,37 @@ export function ReviewActionsBar({ run }: { run: ReviewRunView }) {
           {visible.map((definition) => {
             const { capability } = definition
 
-            // Open Session Insight is a navigation action: when the service
-            // reports it enabled and a trusted address is configured, it is
-            // a real external link showing its destination host (design 19.4).
-            if (definition.key === 'openSessionInsight' && capability.enabled) {
-              if (sessionInsightLink !== null) {
+            // Open Check / Open Session Insight are navigation actions: when
+            // the capability is enabled and the target URL exists, they are
+            // real external links showing the destination host (design 19.4).
+            if (
+              (definition.key === 'openCheck' || definition.key === 'openSessionInsight') &&
+              capability.enabled
+            ) {
+              const href = definition.key === 'openCheck' ? checkUrl : sessionInsightLink
+              if (href !== null) {
                 return (
                   <a
                     key={definition.key}
-                    href={sessionInsightLink}
+                    href={href}
                     target="_blank"
                     rel="noopener noreferrer"
                     className="inline-flex min-h-9 items-center gap-2 rounded-md border border-border bg-surface px-2.5 text-sm font-medium text-text-primary transition-colors duration-[var(--wr-motion-control)] hover:bg-surface-subtle focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                   >
                     <definition.icon aria-hidden="true" className="h-4 w-4" />
-                    {definition.label} ({new URL(sessionInsightLink).host})
+                    {definition.label} ({new URL(href).host})
                   </a>
                 )
               }
+              const missingReason =
+                definition.key === 'openCheck'
+                  ? 'No GitHub Check URL was recorded for this attempt.'
+                  : 'Session Insight address is not configured in this environment.'
               return (
-                <Tooltip
-                  key={definition.key}
-                  content="Session Insight address is not configured in this environment."
-                >
+                <Tooltip key={definition.key} content={missingReason}>
                   <span
                     tabIndex={0}
-                    aria-label="Open Session Insight unavailable: Session Insight address is not configured in this environment."
+                    aria-label={`${definition.label} unavailable: ${missingReason}`}
                     className="inline-flex rounded-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                   >
                     <Button variant="secondary" size="sm" disabled>

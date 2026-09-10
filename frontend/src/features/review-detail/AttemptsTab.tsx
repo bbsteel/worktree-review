@@ -12,7 +12,9 @@ import { AUTHORITY_PRESENTATION, GATE_PRESENTATION, SOURCE_KIND_LABEL } from './
  * Attempt timeline for one Review Request (design 13.7). The current
  * authoritative attempt is emphasized; superseded attempts always carry the
  * loss-of-authority explanation. Attempts are immutable history — a retry
- * creates a new attempt and never overwrites an old one.
+ * creates a new attempt and never overwrites an old one. For GitHub sources
+ * the tab also explains where authorized retry happens, because this
+ * single-user web deployment cannot act as a GitHub actor (design 20.4).
  */
 export function AttemptsTab({ run }: { run: ReviewRunView }) {
   const reduced = usePrefersReducedMotion()
@@ -29,6 +31,14 @@ export function AttemptsTab({ run }: { run: ReviewRunView }) {
   return (
     <section aria-label="Attempt timeline" className="rounded-lg border border-border bg-surface p-4">
       <h2 className="text-sm font-semibold text-text-primary">Attempts</h2>
+      {run.source.kind === 'github-pull-request' ? (
+        <p className="mt-2 rounded-md border border-border bg-surface-subtle px-3 py-2 text-meta text-text-secondary">
+          Authorized retry runs from the GitHub Checks requested action. This single-user web
+          deployment cannot prove a GitHub actor, so the web Retry button stays disabled and only
+          explains the requirement. A superseded attempt can never overwrite the current standing
+          decision.
+        </p>
+      ) : null}
       <ol className="mt-3 flex flex-col gap-2">
         <AnimatePresence initial={false}>
           {run.attempts.map((attempt) => {
