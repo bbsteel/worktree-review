@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import hmac
 import json
 import subprocess
+import time
 import uuid
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -17,13 +20,15 @@ from tests.gitutil import head_oid
 from tests.platform.postgres_harness import database_url_for_name, open_postgres_url
 
 from worktree_review.application.lifecycle import Authority, PublicationStatus
-from worktree_review.core.provider import ScriptedProvider
-from worktree_review.core.report import GateState
+from worktree_review.core.provider import (
+    DEFAULT_MAX_OUTPUT_TOKENS_PER_CALL,
+    ScriptedProvider,
+    UsageRecord,
+)
 from worktree_review.platform.github.runtime import build_server_runtime
 from worktree_review.platform.github.snapshot import AttemptExecutionSnapshot
 from worktree_review.platform.github.tokens import InstallationTokenProvider
 from worktree_review.server.app import create_app
-from worktree_review.server.state import PublishDisposition
 
 pytest.importorskip("fastapi")
 pytest.importorskip("asyncpg")
@@ -129,6 +134,62 @@ class _GitHubMock:
         return httpx.Response(404, json={"message": f"unhandled {request.method} {path}"})
 
 
+class _HoldingProvider:
+    """Scripted provider that pauses the first Attempt until the test releases it."""
+
+    def __init__(
+        self,
+        inner: ScriptedProvider,
+        *,
+        seen: asyncio.Event,
+        release: asyncio.Event,
+        hold: bool,
+    ) -> None:
+        self._inner = inner
+        self._seen = seen
+        self._release = release
+        self._hold = hold
+        self.provider_name = inner.provider_name
+        self.model = inner.model
+
+    def estimate_input_tokens(self, text: str) -> UsageRecord:
+        return self._inner.estimate_input_tokens(text)
+
+    async def complete_structured(
+        self,
+        *,
+        system: str,
+        user: str,
+        response_schema: dict[str, object],
+        dimension_id: str,
+        max_output_tokens: int = DEFAULT_MAX_OUTPUT_TOKENS_PER_CALL,
+    ) -> tuple[dict[str, object], UsageRecord]:
+        if self._hold:
+            self._seen.set()
+            await self._release.wait()
+        return await self._inner.complete_structured(
+            system=system,
+            user=user,
+            response_schema=response_schema,
+            dimension_id=dimension_id,
+            max_output_tokens=max_output_tokens,
+        )
+
+
+async def _poll_until(
+    condition: Callable[[], Awaitable[bool]],
+    *,
+    limit_seconds: float = 20.0,
+    interval: float = 0.05,
+) -> None:
+    deadline = time.monotonic() + limit_seconds
+    while time.monotonic() < deadline:
+        if await condition():
+            return
+        await asyncio.sleep(interval)
+    raise AssertionError("timed out waiting for GitHub Gate worker")
+
+
 @pytest.mark.asyncio
 @pytest.mark.filterwarnings("ignore::ResourceWarning")
 @pytest.mark.filterwarnings("ignore::pytest.PytestUnraisableExceptionWarning")
@@ -155,6 +216,19 @@ async def test_ready_pr_webhook_through_web_detail_dto(
     async def resolve_clone(_snapshot: AttemptExecutionSnapshot) -> str:
         return str(git_repository)
 
+    first_seen = asyncio.Event()
+    first_release = asyncio.Event()
+    hold_first = True
+
+    def provider_factory(_snapshot: AttemptExecutionSnapshot) -> ScriptedProvider:
+        nonlocal hold_first
+        inner = ScriptedProvider(payloads={"correctness": {"findings": []}})
+        should_hold = hold_first
+        hold_first = False
+        return _HoldingProvider(  # type: ignore[return-value]
+            inner, seen=first_seen, release=first_release, hold=should_hold
+        )
+
     runtime = await build_server_runtime(
         database_url=github_database_url,
         github_api_url="https://api.github.test",
@@ -165,10 +239,10 @@ async def test_ready_pr_webhook_through_web_detail_dto(
         environ=environ,
         http_client=github_http,
         clone_url_resolver=resolve_clone,
-        provider_factory=lambda _snapshot: ScriptedProvider(
-            payloads={"correctness": {"findings": []}}
-        ),
+        provider_factory=provider_factory,
     )
+    assert runtime.durable_worker is not None
+    runtime.durable_worker.idle_seconds = 0.05
 
     async def builder() -> Any:
         return runtime
@@ -178,7 +252,7 @@ async def test_ready_pr_webhook_through_web_detail_dto(
         runtime_builder=builder,
         enable_local_web=False,
         start_worker=False,
-        start_github_worker=False,
+        start_github_worker=True,
         serve_frontend=False,
     )
 
@@ -246,12 +320,10 @@ async def test_ready_pr_webhook_through_web_detail_dto(
             queued_dto = queued_detail.json()
             assert queued_dto["source"]["kind"] == "github-pull-request"
             assert queued_dto["authority"] == Authority.AUTHORITATIVE.value
-            assert queued_dto["publication_status"] == PublicationStatus.QUEUED.value
+            created_at = queued_dto["summary"]["created_at"]
+            assert created_at
 
-            report_a = await runtime.review_worker.execute_claimed_attempt(attempt_a)  # type: ignore[union-attr]
-            assert report_a is not None
-            assert report_a.attempt_id == attempt_a
-            assert report_a.gate_state is GateState.PASSED
+            await asyncio.wait_for(first_seen.wait(), timeout=20)
 
             second = await post_webhook(
                 client, _pr_payload(action="synchronize", oid=oid), delivery_id="delivery-sync"
@@ -259,58 +331,69 @@ async def test_ready_pr_webhook_through_web_detail_dto(
             assert second.status_code == 202
             attempt_b = second.json()["attempt_id"]
             assert attempt_b != attempt_a
+
+            async def _check_b_queued() -> bool:
+                return await runtime.github_store.get_check_run_id(attempt_b) is not None
+
+            await _poll_until(_check_b_queued)
             check_b = await runtime.github_store.get_check_run_id(attempt_b)
             assert check_b == 9002
+            first_release.set()
 
-            late = await runtime.publisher.publish_terminal(attempt_id=attempt_a, report=report_a)
-            assert late.disposition is PublishDisposition.SUPERSEDED
+            async def _b_published() -> bool:
+                response = await client.get(f"/api/v1/reviews/{attempt_b}")
+                if response.status_code != 200:
+                    return False
+                body = response.json()
+                return (
+                    body.get("publication_status") == PublicationStatus.PUBLISHED.value
+                    and body.get("authority") == Authority.AUTHORITATIVE.value
+                    and body.get("gate_state") == "passed"
+                )
+
+            await _poll_until(_b_published)
+
+            async def _a_superseded() -> bool:
+                response = await client.get(f"/api/v1/reviews/{attempt_a}")
+                if response.status_code != 200:
+                    return False
+                body = response.json()
+                return (
+                    body.get("authority") == Authority.SUPERSEDED.value
+                    and body.get("gate_state") == "passed"
+                )
+
+            await _poll_until(_a_superseded)
+
             standing = await runtime.attempt_store.get_change_request_state(snapshot.change_request)
             assert standing.authoritative_attempt_id == attempt_b
-            assert standing.standing_attempt_id != attempt_a
-            assert standing.standing_gate_state is None
+            assert standing.standing_attempt_id == attempt_b
+            assert standing.standing_gate_state is not None
+            assert standing.standing_gate_state.value == "Passed"
+            assert mock.fail_next_completed is False
+            completed_b = [
+                item
+                for item in mock.patched
+                if item[0] == check_b and item[1].get("status") == "completed"
+            ]
+            assert completed_b
+            assert completed_b[-1][1]["details_url"] == f"{public_base}/reviews/{attempt_b}"
             superseded_patches = [item for item in mock.patched if item[0] == check_a]
             assert superseded_patches
-            assert superseded_patches[0][0] == check_a
 
-            report_b = await runtime.durable_worker.execute_attempt(attempt_b)
-            assert report_b is not None
-            assert report_b.gate_state is GateState.PASSED
-            assert (
-                await runtime.github_store.publication_status(attempt_b) is PublicationStatus.FAILED
-            )
-            after_fail = await runtime.attempt_store.get_change_request_state(
-                snapshot.change_request
-            )
-            assert after_fail.standing_gate_state is GateState.PASSED
-            assert after_fail.standing_attempt_id == attempt_b
-
-            retry = await runtime.publisher.retry_outbox(attempt_b, report_b)
-            assert retry.disposition is PublishDisposition.PUBLISHED
-            assert (
-                await runtime.github_store.publication_status(attempt_b)
-                is PublicationStatus.PUBLISHED
-            )
-            completed = [item for item in mock.patched if item[0] == check_b]
-            assert completed
-            assert all(item[0] == check_b for item in completed)
-            assert completed[-1][1]["details_url"] == f"{public_base}/reviews/{attempt_b}"
-            assert completed[-1][1]["status"] == "completed"
-
-            detail_a = (await client.get(f"/api/v1/reviews/{attempt_a}")).json()
-            detail_b = (await client.get(f"/api/v1/reviews/{attempt_b}")).json()
-            assert detail_a["attempt_id"] == attempt_a
-            assert detail_a["source"]["kind"] == "github-pull-request"
-            assert detail_a["authority"] == Authority.SUPERSEDED.value
-            assert detail_a["gate_state"] == "passed"
-            assert detail_b["attempt_id"] == attempt_b
-            assert detail_b["authority"] == Authority.AUTHORITATIVE.value
-            assert detail_b["publication_status"] == PublicationStatus.PUBLISHED.value
-            assert detail_b["gate_state"] == "passed"
-            assert detail_b["source"]["check_url"] == (
+            later_a = (await client.get(f"/api/v1/reviews/{attempt_a}")).json()
+            later_b = (await client.get(f"/api/v1/reviews/{attempt_b}")).json()
+            assert later_a["summary"]["created_at"] == created_at
+            assert later_b["attempt_id"] == attempt_b
+            assert later_b["source"]["kind"] == "github-pull-request"
+            assert later_b["source"]["check_url"] == (
                 f"https://github.com/octo/example/runs/{check_b}"
             )
-            assert detail_b["source"]["pull_request_number"] == 42
-            assert detail_b["summary"]["authority"] == Authority.AUTHORITATIVE.value
+            assert later_b["source"]["pull_request_number"] == 42
+            assert later_b["summary"]["authority"] == Authority.AUTHORITATIVE.value
+            persisted_created = await runtime.github_store.get_attempt_created_at(attempt_a)
+            assert persisted_created is not None
+            assert later_a["summary"]["created_at"] == persisted_created.isoformat()
 
             assert mock.token_calls >= 2
             assert isinstance(runtime.token_provider, InstallationTokenProvider)

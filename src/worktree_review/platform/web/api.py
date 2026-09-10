@@ -113,13 +113,17 @@ async def _github_review_dto(request: Request, attempt_id: str) -> dict[str, Any
     publication_status = await server.github_store.publication_status(attempt_id)
     check_run_id = await server.github_store.get_check_run_id(attempt_id)
     result_json = await server.github_store.get_review_result(attempt_id)
+    created_at = await server.github_store.get_attempt_created_at(attempt_id)
+    if created_at is None:
+        events = await server.github_store.list_review_events(attempt_id)
+        created_at = events[0].occurred_at if events else datetime.fromtimestamp(0, tz=UTC)
     return present_github_review_run(
         snapshot=snapshot,
         change_state=change_state,
         publication_status=publication_status,
         check_run_id=check_run_id,
         result_json=result_json,
-        created_at=datetime.now(UTC),
+        created_at=created_at,
     )
 
 

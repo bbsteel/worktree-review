@@ -120,6 +120,8 @@ class GitHubReviewStore(Protocol):
 
     async def list_recoverable_queued(self) -> tuple[AttemptExecutionSnapshot, ...]: ...
 
+    async def get_attempt_created_at(self, attempt_id: str) -> datetime | None: ...
+
 
 @dataclass
 class _AttemptExtras:
@@ -129,6 +131,7 @@ class _AttemptExtras:
     events: list[ReviewEvent] = field(default_factory=list)
     result_json: str | None = None
     outbox: PublicationIntent | None = None
+    created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
 
 class InMemoryGitHubReviewStore:
@@ -264,6 +267,11 @@ class InMemoryGitHubReviewStore:
                 ):
                     recoverable.append(extras.snapshot)
             return tuple(recoverable)
+
+    async def get_attempt_created_at(self, attempt_id: str) -> datetime | None:
+        async with self._lock:
+            extras = self._attempts.get(attempt_id)
+            return None if extras is None else extras.created_at
 
 
 class PostgresGitHubReviewStore:
@@ -515,9 +523,20 @@ class PostgresGitHubReviewStore:
             )
         snapshots: list[AttemptExecutionSnapshot] = []
         for row in rows:
-            payload = row["execution_snapshot"]
-            snapshots.append(AttemptExecutionSnapshot.model_validate(payload))
+            snapshots.append(_parse_snapshot(row["execution_snapshot"]))
         return tuple(snapshots)
+
+    async def get_attempt_created_at(self, attempt_id: str) -> datetime | None:
+        async with self._pool.acquire() as connection:
+            value = await connection.fetchval(
+                "SELECT created_at FROM review_attempts WHERE attempt_id = $1::uuid",
+                attempt_id,
+            )
+        if value is None:
+            return None
+        if isinstance(value, datetime):
+            return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
 
 
 def recoverable_from_snapshot(
