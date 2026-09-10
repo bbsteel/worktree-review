@@ -1,25 +1,27 @@
 import type { OverviewStatsView } from '../../domain/overview.ts'
+import { useI18n } from '../../i18n.tsx'
 import { formatCost, formatDuration, formatPercent } from './format.ts'
 
 export function StatsStrip({ stats }: { stats: OverviewStatsView }) {
+  const { t } = useI18n()
   return (
     <section aria-labelledby="overview-stats-heading" className="border-t border-border pt-6">
       <h2 id="overview-stats-heading" className="text-sm font-semibold text-text-primary">
-        Statistics
+        {t('Statistics')}
       </h2>
       <p className="mt-1 text-xs text-text-secondary">
-        Gate pass rate is Passed / (Passed + Blocked). Error is excluded from that denominator.
-        Unknown cost is counted separately and is never stored or shown as $0.00.
+        {t('Gate pass rate is Passed / (Passed + Blocked). Error is excluded from that denominator.')}{' '}
+        {t('Unknown cost is counted separately and is never stored or shown as $0.00.')}
       </p>
       <div className="mt-3 grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
-        <Stat label="Attempts" value={String(stats.attemptCount)} />
-        <Stat label="Gate pass rate" value={formatPercent(stats.gatePassRate)} />
-        <Stat label="Blocked" value={String(stats.blockedCount)} />
-        <Stat label="Error rate" value={formatPercent(stats.errorRate)} />
-        <Stat label="Average duration" value={formatDuration(stats.averageDurationMs)} />
+        <Stat label={t('Attempts')} value={String(stats.attemptCount)} />
+        <Stat label={t('Gate pass rate')} value={t(formatPercent(stats.gatePassRate))} />
+        <Stat label={t('Blocked')} value={String(stats.blockedCount)} />
+        <Stat label={t('Error rate')} value={t(formatPercent(stats.errorRate))} />
+        <Stat label={t('Average duration')} value={t(formatDuration(stats.averageDurationMs))} />
         <Stat
-          label="Known model cost"
-          value={`${formatCost(stats.knownCostUsd, false)} · ${String(stats.unknownCostRecordCount)} unknown`}
+          label={t('Known model cost')}
+          value={`${t(formatCost(stats.knownCostUsd, false))} · ${String(stats.unknownCostRecordCount)} ${t('unknown')}`}
         />
       </div>
     </section>

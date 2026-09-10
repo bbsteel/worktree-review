@@ -3,6 +3,7 @@ import { X } from 'lucide-react'
 import { useEffect, useId, useRef, type KeyboardEvent, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { motionDurationSeconds, usePrefersReducedMotion } from '../../app/motion.ts'
+import { useI18n } from '../../i18n.tsx'
 import { Button } from './button.tsx'
 import { cx } from './cx.ts'
 
@@ -24,6 +25,7 @@ export function Dialog({ open, title, description, onClose, children, className 
   const previousFocus = useRef<HTMLElement | null>(null)
   const reduced = usePrefersReducedMotion()
   const duration = motionDurationSeconds('--wr-motion-dialog', reduced, 260)
+  const { t } = useI18n()
 
   useEffect(() => {
     if (!open) {
@@ -86,7 +88,7 @@ export function Dialog({ open, title, description, onClose, children, className 
         >
           <button
             type="button"
-            aria-label="Close dialog overlay"
+            aria-label={t('Close dialog overlay')}
             className="absolute inset-0 cursor-default"
             onClick={onClose}
           />
@@ -117,7 +119,7 @@ export function Dialog({ open, title, description, onClose, children, className 
                   </p>
                 ) : null}
               </div>
-              <Button variant="ghost" size="icon" aria-label="Close dialog" onClick={onClose}>
+              <Button variant="ghost" size="icon" aria-label={t('Close dialog')} onClick={onClose}>
                 <X aria-hidden="true" className="h-4 w-4" />
               </Button>
             </div>

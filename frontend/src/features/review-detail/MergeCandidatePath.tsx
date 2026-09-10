@@ -1,6 +1,7 @@
 import { Circle, CircleCheck, CircleDot, CircleX, MoveRight, type LucideIcon } from 'lucide-react'
 import { cx } from '../../components/ui/cx.ts'
 import type { PipelineStageName, PipelineStageStatus, ReviewRunView } from '../../domain/review.ts'
+import { useI18n } from '../../i18n.tsx'
 import { PIPELINE_STAGE_LABEL, STAGE_STATUS_PRESENTATION } from './presentation.ts'
 
 interface ConceptNode {
@@ -40,18 +41,18 @@ const STATUS_CLASS: Record<PipelineStageStatus, string> = {
  * state after completeness and gate evaluation finished.
  */
 export function MergeCandidatePath({ run }: { run: ReviewRunView }) {
+  const { t } = useI18n()
   const stageByName = new Map(run.pipeline.map((stage) => [stage.stage, stage]))
   const failed = run.pipeline.find((stage) => stage.status === 'failed')
 
   return (
     <section
-      aria-label="Merge candidate review path"
+      aria-label={t('Merge candidate review path')}
       className="rounded-lg border border-border bg-surface p-4"
     >
-      <h2 className="text-sm font-semibold text-text-primary">Merge candidate review path</h2>
+      <h2 className="text-sm font-semibold text-text-primary">{t('Merge candidate review path')}</h2>
       <p className="mt-0.5 text-meta text-text-secondary">
-        The reviewed content is the exact merge result of target and proposed heads, evaluated in a
-        read-only review worktree.
+        {t('The reviewed content is the exact merge result of target and proposed heads, evaluated in a read-only review worktree.')}
       </p>
 
       <ol className="mt-3 flex flex-wrap items-stretch gap-y-2">
@@ -81,8 +82,8 @@ export function MergeCandidatePath({ run }: { run: ReviewRunView }) {
                 )}
               >
                 <Icon aria-hidden="true" className="h-3.5 w-3.5" />
-                <span>{node.label}</span>
-                <span className="sr-only">{STAGE_STATUS_PRESENTATION[status].label}</span>
+                <span>{t(node.label)}</span>
+                <span className="sr-only">{t(STAGE_STATUS_PRESENTATION[status].label)}</span>
               </div>
             </li>
           )
@@ -91,8 +92,7 @@ export function MergeCandidatePath({ run }: { run: ReviewRunView }) {
 
       {failed !== undefined ? (
         <p role="alert" className="mt-3 text-sm text-status-error">
-          {PIPELINE_STAGE_LABEL[failed.stage]} failed — the review path stops at this node. The safe
-          failure detail is shown in the pipeline section below.
+          {t(PIPELINE_STAGE_LABEL[failed.stage])} {t('failed')} — {t('the review path stops at this node. The safe failure detail is shown in the pipeline section below.')}
         </p>
       ) : null}
     </section>

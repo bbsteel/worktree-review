@@ -1,16 +1,27 @@
 import type { ProviderHealthView } from '../../domain/review.ts'
 
-export function formatProviderFreshness(health: ProviderHealthView | undefined): string {
+type Translator = (key: string, variables?: Record<string, string | number>) => string
+
+export function formatProviderFreshness(
+  health: ProviderHealthView | undefined,
+  translate: Translator = (key) => key,
+): string {
   if (!health) {
-    return 'Provider not tested'
+    return translate('Provider not tested')
   }
   if (health.status === 'not_tested' || !health.observedAt) {
-    return `${health.profileName}: not tested`
+    return translate('{profile}: not tested', { profile: health.profileName })
   }
   if (health.status === 'last_call_failed') {
-    return `${health.profileName}: last call failed at ${formatUtc(health.observedAt)}`
+    return translate('{profile}: last call failed at {timestamp}', {
+      profile: health.profileName,
+      timestamp: formatUtc(health.observedAt),
+    })
   }
-  return `${health.profileName}: healthy at ${formatUtc(health.observedAt)}`
+  return translate('{profile}: healthy at {timestamp}', {
+    profile: health.profileName,
+    timestamp: formatUtc(health.observedAt),
+  })
 }
 
 export function formatUtc(iso: string): string {

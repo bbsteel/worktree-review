@@ -9,6 +9,7 @@
     "lint": "oxlint src",
     "typecheck": "tsc -b --pretty false",
     "test": "vitest run",
+    "test:i18n": "vitest run src/i18n.test.tsx",
     "test:e2e": "playwright test",
     "preview": "vite preview --host 127.0.0.1"
   },

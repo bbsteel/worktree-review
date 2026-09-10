@@ -1,20 +1,22 @@
 import { Monitor, Moon, Sun } from 'lucide-react'
 import { useTheme, type ThemePreference } from '../../app/theme.ts'
+import { useI18n } from '../../i18n.tsx'
 import { cx } from './cx.ts'
 
-const options: Array<{ value: ThemePreference; label: string; icon: typeof Moon }> = [
-  { value: 'dark', label: 'Dark', icon: Moon },
-  { value: 'light', label: 'Light', icon: Sun },
-  { value: 'system', label: 'System', icon: Monitor },
+const options: Array<{ value: ThemePreference; labelKey: string; icon: typeof Moon }> = [
+  { value: 'dark', labelKey: 'Dark', icon: Moon },
+  { value: 'light', labelKey: 'Light', icon: Sun },
+  { value: 'system', labelKey: 'System', icon: Monitor },
 ]
 
 export function ThemeSwitcher({ className }: { className?: string }) {
   const { preference, setPreference } = useTheme()
+  const { t } = useI18n()
 
   return (
     <div
       role="radiogroup"
-      aria-label="Theme"
+      aria-label={t('Theme')}
       className={cx('inline-flex rounded-md border border-border bg-surface p-1', className)}
     >
       {options.map((option) => {
@@ -36,7 +38,7 @@ export function ThemeSwitcher({ className }: { className?: string }) {
             }}
           >
             <Icon aria-hidden="true" className="h-4 w-4" />
-            {option.label}
+            {t(option.labelKey)}
           </button>
         )
       })}

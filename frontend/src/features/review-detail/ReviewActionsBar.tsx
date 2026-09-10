@@ -4,6 +4,7 @@ import { ExternalLink, Eye, RotateCcw, ShieldAlert } from 'lucide-react'
 import { Button } from '../../components/ui/button.tsx'
 import { Tooltip } from '../../components/ui/tooltip.tsx'
 import type { AvailableReviewActionsView, ReviewActionCapabilityView, ReviewRunView } from '../../domain/review.ts'
+import { useI18n } from '../../i18n.tsx'
 import {
   configuredSessionInsightBaseUrl,
   sessionInsightDeepLink,
@@ -28,6 +29,7 @@ type ActiveDialog = 'retry' | 'bypass' | null
  * confirming only simulates the interaction locally and sends no request.
  */
 export function ReviewActionsBar({ run }: { run: ReviewRunView }) {
+  const { t } = useI18n()
   const { availableActions: actions } = run
   const [activeDialog, setActiveDialog] = useState<ActiveDialog>(null)
   const [simulatedAction, setSimulatedAction] = useState<string | null>(null)
@@ -39,12 +41,12 @@ export function ReviewActionsBar({ run }: { run: ReviewRunView }) {
   const checkUrl = run.source.kind === 'github-pull-request' ? run.source.checkUrl : null
 
   const definitions: ActionDefinition[] = [
-    { key: 'retry', label: 'Retry', icon: RotateCcw, capability: actions.retry },
-    { key: 'bypass', label: 'Bypass', icon: ShieldAlert, capability: actions.bypass },
-    { key: 'openCheck', label: 'Open Check', icon: ExternalLink, capability: actions.openCheck },
+    { key: 'retry', label: t('Retry'), icon: RotateCcw, capability: actions.retry },
+    { key: 'bypass', label: t('Bypass'), icon: ShieldAlert, capability: actions.bypass },
+    { key: 'openCheck', label: t('Open Check'), icon: ExternalLink, capability: actions.openCheck },
     {
       key: 'openSessionInsight',
-      label: 'Open Session Insight',
+      label: t('Open Session Insight'),
       icon: Eye,
       capability: actions.openSessionInsight,
     },
@@ -53,13 +55,13 @@ export function ReviewActionsBar({ run }: { run: ReviewRunView }) {
   const visible = definitions.filter((definition) => definition.capability.visible)
 
   function onSimulatedConfirm(label: string) {
-    setSimulatedAction(label)
+    setSimulatedAction(t(label))
   }
 
   return (
     <div className="flex flex-col gap-2">
       {visible.length > 0 ? (
-        <div className="flex flex-wrap items-center gap-2" aria-label="Review actions">
+        <div className="flex flex-wrap items-center gap-2" aria-label={t('Review actions')}>
           {visible.map((definition) => {
             const { capability } = definition
 
@@ -87,13 +89,16 @@ export function ReviewActionsBar({ run }: { run: ReviewRunView }) {
               }
               const missingReason =
                 definition.key === 'openCheck'
-                  ? 'No GitHub Check URL was recorded for this attempt.'
-                  : 'Session Insight address is not configured in this environment.'
+                  ? t('No GitHub Check URL was recorded for this attempt.')
+                  : t('Session Insight address is not configured in this environment.')
               return (
                 <Tooltip key={definition.key} content={missingReason}>
                   <span
                     tabIndex={0}
-                    aria-label={`${definition.label} unavailable: ${missingReason}`}
+                    aria-label={t('{label} unavailable: {reason}', {
+                      label: definition.label,
+                      reason: missingReason,
+                    })}
                     className="inline-flex rounded-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                   >
                     <Button variant="secondary" size="sm" disabled>
@@ -130,7 +135,10 @@ export function ReviewActionsBar({ run }: { run: ReviewRunView }) {
               <Tooltip key={definition.key} content={capability.disabledReason}>
                 <span
                   tabIndex={0}
-                  aria-label={`${definition.label} unavailable: ${capability.disabledReason}`}
+                  aria-label={t('{label} unavailable: {reason}', {
+                    label: definition.label,
+                    reason: capability.disabledReason,
+                  })}
                   className="inline-flex rounded-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                 >
                   {button}
@@ -143,8 +151,9 @@ export function ReviewActionsBar({ run }: { run: ReviewRunView }) {
 
       {simulatedAction !== null ? (
         <p role="status" className="text-meta text-text-secondary">
-          {simulatedAction} confirmed — simulated locally. This Pre-Alpha prototype sent no request
-          and no state was changed.
+          {t('{action} confirmed — simulated locally. This Pre-Alpha prototype sent no request and no state was changed.', {
+            action: simulatedAction,
+          })}
         </p>
       ) : null}
 

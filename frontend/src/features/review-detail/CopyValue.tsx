@@ -1,6 +1,7 @@
 import { Check, Copy } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { cx } from '../../components/ui/cx.ts'
+import { useI18n } from '../../i18n.tsx'
 import { shortenHash } from './formatting.ts'
 
 interface CopyValueProps {
@@ -17,6 +18,7 @@ interface CopyValueProps {
  * full value via the title attribute and the copy button always copies it.
  */
 export function CopyValue({ value, label, truncate = true, className }: CopyValueProps) {
+  const { t } = useI18n()
   const [copied, setCopied] = useState(false)
   const resetTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
@@ -55,7 +57,7 @@ export function CopyValue({ value, label, truncate = true, className }: CopyValu
       </code>
       <button
         type="button"
-        aria-label={`Copy ${label}`}
+        aria-label={t('Copy {label}', { label })}
         onClick={() => {
           void copyValue()
         }}
@@ -64,7 +66,7 @@ export function CopyValue({ value, label, truncate = true, className }: CopyValu
         <Icon aria-hidden="true" className="h-3.5 w-3.5" />
       </button>
       <span aria-live="polite" className="sr-only">
-        {copied ? `${label} copied` : ''}
+        {copied ? t('{label} copied', { label }) : ''}
       </span>
     </span>
   )

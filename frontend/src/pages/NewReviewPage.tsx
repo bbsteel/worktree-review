@@ -1,6 +1,7 @@
 import { useEffect, useState, type ReactNode } from 'react'
 import { Link, useNavigate } from 'react-router'
 import { useAdminClient } from '../app/admin-client.ts'
+import { useI18n } from '../i18n.tsx'
 import { Button } from '../components/ui/button.tsx'
 import { EmptyState } from '../components/ui/empty-state.tsx'
 import { Skeleton } from '../components/ui/skeleton.tsx'
@@ -61,6 +62,7 @@ const SOURCE_MODE_LABEL: Record<ReviewSourceMode, string> = {
  * create a duplicate attempt.
  */
 export function NewReviewPage() {
+  const { t } = useI18n()
   const client = useAdminClient()
   const navigate = useNavigate()
 
@@ -94,14 +96,14 @@ export function NewReviewPage() {
           setLoadError(
             caught instanceof Error
               ? caught.message
-              : 'Configuration could not be loaded from the review service.',
+              : t('Configuration could not be loaded from the review service.'),
           )
         }
       })
     return () => {
       cancelled = true
     }
-  }, [client])
+  }, [client, t])
 
   useEffect(() => {
     if (form.repositoryId === '') {
@@ -136,8 +138,10 @@ export function NewReviewPage() {
     return (
       <main className="mx-auto w-full max-w-4xl px-6 py-6">
         <EmptyState
-          title="New Review requires the live review service"
-          description={`Configuration could not be loaded: ${loadError}. The prototype mock mode does not create attempts.`}
+          title={t('New Review requires the live review service')}
+          description={`${t('Configuration could not be loaded: {error}.', { error: loadError })} ${t(
+            'The prototype mock mode does not create attempts.',
+          )}`}
         />
       </main>
     )
@@ -146,8 +150,8 @@ export function NewReviewPage() {
   if (catalog === null) {
     return (
       <main className="mx-auto w-full max-w-4xl px-6 py-6" aria-busy="true">
-        <Skeleton className="h-8 w-48" label="Loading New Review" />
-        <Skeleton className="mt-4 h-64 w-full" label="Loading configuration" />
+        <Skeleton className="h-8 w-48" label={t('Loading New Review')} />
+        <Skeleton className="mt-4 h-64 w-full" label={t('Loading configuration')} />
       </main>
     )
   }
@@ -206,10 +210,9 @@ export function NewReviewPage() {
 
   return (
     <main className="mx-auto w-full max-w-4xl px-6 py-6">
-      <h1 className="text-xl font-semibold text-text-primary">New Review</h1>
-      <p className="mt-1 text-sm text-text-secondary">
-        Start one local, non-authoritative review attempt. All sections are visible before you
-        start; nothing is hidden behind a wizard.
+        <h1 className="text-xl font-semibold text-text-primary">{t('New Review')}</h1>
+        <p className="mt-1 text-sm text-text-secondary">
+          {t('Start one local, non-authoritative review attempt. All sections are visible before you start; nothing is hidden behind a wizard.')}
       </p>
 
       <form
@@ -219,24 +222,24 @@ export function NewReviewPage() {
           void submit()
         }}
       >
-        <Section legend="Repository">
+        <Section legend={t('Repository')}>
           {catalog.repositories.length === 0 ? (
             <EmptyState
-              title="No authorized repositories"
-              description="Register a local repository before starting a review. Browsers cannot browse your filesystem; only explicitly registered roots are accepted."
+              title={t('No authorized repositories')}
+              description={t('Register a local repository before starting a review. Browsers cannot browse your filesystem; only explicitly registered roots are accepted.')}
               action={
                 <Link
                   to="/repositories"
                   className="text-sm text-action-primary underline-offset-2 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                 >
-                  Open Repositories
+                  {t('Open Repositories')}
                 </Link>
               }
             />
           ) : (
             <>
               <label className="flex flex-col gap-1 text-meta text-text-secondary">
-                Authorized repository
+                {t('Authorized repository')}
                 <select
                   value={form.repositoryId}
                   onChange={(event) => {
@@ -244,7 +247,7 @@ export function NewReviewPage() {
                   }}
                   className={FIELD_CLASS}
                 >
-                  <option value="">Select a repository…</option>
+                  <option value="">{t('Select a repository…')}</option>
                   {catalog.repositories.map((repository) => (
                     <option key={repository.repository_id} value={repository.repository_id}>
                       {repository.display_name}
@@ -256,7 +259,7 @@ export function NewReviewPage() {
               {selectedRepository !== null ? (
                 <dl className="grid grid-cols-1 gap-1 text-meta sm:grid-cols-2">
                   <div className="flex gap-1.5">
-                    <dt className="text-text-secondary">Root</dt>
+                    <dt className="text-text-secondary">{t('Root')}</dt>
                     <dd className="break-all font-mono text-text-primary">
                       {selectedRepository.canonical_root}
                     </dd>
@@ -264,15 +267,18 @@ export function NewReviewPage() {
                   {repositoryStatus !== null ? (
                     <>
                       <div className="flex gap-1.5">
-                        <dt className="text-text-secondary">Branch</dt>
+                        <dt className="text-text-secondary">{t('Branch')}</dt>
                         <dd className="font-mono text-text-primary">{repositoryStatus.branch}</dd>
                       </div>
                       <div className="flex gap-1.5">
-                        <dt className="text-text-secondary">Worktree</dt>
+                        <dt className="text-text-secondary">{t('Worktree')}</dt>
                         <dd className="text-text-primary">
                           {repositoryStatus.dirty
-                            ? `Modified — ${repositoryStatus.tracked_modifications} tracked, ${repositoryStatus.untracked_files} untracked`
-                            : 'Clean'}
+                            ? t('Modified — {tracked} tracked, {untracked} untracked', {
+                                tracked: repositoryStatus.tracked_modifications,
+                                untracked: repositoryStatus.untracked_files,
+                              })
+                            : t('Clean')}
                         </dd>
                       </div>
                     </>
@@ -283,8 +289,8 @@ export function NewReviewPage() {
           )}
         </Section>
 
-        <Section legend="Review Source">
-          <div role="radiogroup" aria-label="Review source" className="flex flex-col gap-2">
+        <Section legend={t('Review Source')}>
+          <div role="radiogroup" aria-label={t('Review source')} className="flex flex-col gap-2">
             {(Object.keys(SOURCE_MODE_LABEL) as ReviewSourceMode[]).map((mode) => (
               <label key={mode} className="flex min-h-9 items-center gap-2 text-sm text-text-primary">
                 <input
@@ -297,7 +303,7 @@ export function NewReviewPage() {
                   }}
                   className="h-4 w-4 accent-[var(--wr-action-primary)]"
                 />
-                {SOURCE_MODE_LABEL[mode]}
+                {t(SOURCE_MODE_LABEL[mode])}
               </label>
             ))}
           </div>
@@ -305,7 +311,7 @@ export function NewReviewPage() {
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             {form.sourceMode !== 'local-recent-commits' ? (
               <label className="flex flex-col gap-1 text-meta text-text-secondary">
-                Target ref (optional, defaults to HEAD)
+                {t('Target ref (optional, defaults to HEAD)')}
                 <input
                   type="text"
                   value={form.targetRef}
@@ -318,7 +324,7 @@ export function NewReviewPage() {
               </label>
             ) : (
               <label className="flex flex-col gap-1 text-meta text-text-secondary">
-                Commit count (N ≥ 0; target derives to HEAD~N)
+                {t('Commit count (N ≥ 0; target derives to HEAD~N)')}
                 <input
                   type="number"
                   min={0}
@@ -334,7 +340,7 @@ export function NewReviewPage() {
             )}
 
             <label className="flex flex-col gap-1 text-meta text-text-secondary">
-              Proposed
+              {t('Proposed')}
               <input
                 type="text"
                 value={
@@ -353,14 +359,14 @@ export function NewReviewPage() {
           <FieldError message={errors.proposedRef} />
           {form.sourceMode === 'local-committed-ref' ? (
             <p className="text-meta text-text-secondary">
-              The worktree must be clean for committed-ref reviews.
+              {t('The worktree must be clean for committed-ref reviews.')}
             </p>
           ) : null}
         </Section>
 
-        <Section legend="Review Policy">
+        <Section legend={t('Review Policy')}>
           <label className="flex flex-col gap-1 text-meta text-text-secondary">
-            Trusted Review Policy (decides what is reviewed and the gate)
+            {t('Trusted Review Policy (decides what is reviewed and the gate)')}
             <select
               value={form.reviewPolicyId}
               onChange={(event) => {
@@ -368,11 +374,11 @@ export function NewReviewPage() {
               }}
               className={FIELD_CLASS}
             >
-              <option value="">Select a Review Policy…</option>
+              <option value="">{t('Select a Review Policy…')}</option>
               {catalog.reviewPolicies.map((policy) => (
                 <option key={policy.policy_id} value={policy.policy_id}>
                   {policy.name} {policy.version}
-                  {policy.builtin ? ' (built-in)' : ''}
+                  {policy.builtin ? ` (${t('built-in')})` : ''}
                 </option>
               ))}
             </select>
@@ -387,15 +393,15 @@ export function NewReviewPage() {
                 </dd>
               </div>
               <div className="flex gap-1.5">
-                <dt className="text-text-secondary">Required dimensions</dt>
+                <dt className="text-text-secondary">{t('Required dimensions')}</dt>
                 <dd className="font-mono text-text-primary">
-                  {selectedReviewPolicy.required_dimensions.join(', ') || 'none'}
+                  {selectedReviewPolicy.required_dimensions.join(', ') || t('none')}
                 </dd>
               </div>
               <div className="flex gap-1.5">
-                <dt className="text-text-secondary">Blocking severities</dt>
+                <dt className="text-text-secondary">{t('Blocking severities')}</dt>
                 <dd className="text-text-primary">
-                  {selectedReviewPolicy.blocking_severities.join(', ')} (min evidence:{' '}
+                  {selectedReviewPolicy.blocking_severities.join(', ')} ({t('min evidence')}:{' '}
                   {selectedReviewPolicy.minimum_blocking_evidence_band})
                 </dd>
               </div>
@@ -403,9 +409,9 @@ export function NewReviewPage() {
           ) : null}
         </Section>
 
-        <Section legend="Compute Policy & Provider Profile">
+        <Section legend={t('Compute Policy & Provider Profile')}>
           <label className="flex flex-col gap-1 text-meta text-text-secondary">
-            Trusted Compute Policy (decides model, budget and call limits)
+            {t('Trusted Compute Policy (decides model, budget and call limits)')}
             <select
               value={form.computePolicyId}
               onChange={(event) => {
@@ -413,7 +419,7 @@ export function NewReviewPage() {
               }}
               className={FIELD_CLASS}
             >
-              <option value="">Select a Compute Policy…</option>
+              <option value="">{t('Select a Compute Policy…')}</option>
               {catalog.computePolicies.map((policy) => (
                 <option key={policy.policy_id} value={policy.policy_id}>
                   {policy.name} {policy.version} — {policy.provider} / {policy.model}
@@ -425,39 +431,39 @@ export function NewReviewPage() {
           {selectedComputePolicy !== null ? (
             <dl className="grid grid-cols-1 gap-1 text-meta sm:grid-cols-2">
               <div className="flex gap-1.5">
-                <dt className="text-text-secondary">Provider Profile</dt>
+                <dt className="text-text-secondary">{t('Provider Profile')}</dt>
                 <dd className="text-text-primary">
                   {resolvedProfile?.name ?? selectedComputePolicy.provider_profile_name}
                 </dd>
               </div>
               <div className="flex gap-1.5">
-                <dt className="text-text-secondary">Destination</dt>
+                <dt className="text-text-secondary">{t('Destination')}</dt>
                 <dd className="text-text-primary">
                   {resolvedProfile?.local_cli_adapter !== null &&
                   resolvedProfile?.local_cli_adapter !== undefined
-                    ? `local command (${resolvedProfile.local_cli_adapter})`
+                    ? `${t('local command')} (${resolvedProfile.local_cli_adapter})`
                     : (resolvedProfile?.endpoint ?? selectedComputePolicy.data_destination)}
                 </dd>
               </div>
               <div className="flex gap-1.5">
-                <dt className="text-text-secondary">Credential reference</dt>
+                <dt className="text-text-secondary">{t('Credential reference')}</dt>
                 <dd className="font-mono text-text-primary">
-                  {resolvedProfile?.credential_reference ?? 'n/a'} (
-                  {resolvedProfile?.credential_state ?? 'unknown'})
+                  {resolvedProfile?.credential_reference ?? t('n/a')} (
+                  {resolvedProfile?.credential_state ?? t('unknown')})
                 </dd>
               </div>
               <div className="flex gap-1.5">
-                <dt className="text-text-secondary">Max output tokens / call</dt>
+                <dt className="text-text-secondary">{t('Max output tokens / call')}</dt>
                 <dd className="text-text-primary tabular-nums">
                   {selectedComputePolicy.max_output_tokens_per_call.toLocaleString('en-US')}
                 </dd>
               </div>
               <div className="flex gap-1.5">
-                <dt className="text-text-secondary">Budget</dt>
+                <dt className="text-text-secondary">{t('Budget')}</dt>
                 <dd className="text-text-primary">
                   {selectedComputePolicy.budget_usd !== null
                     ? `$${selectedComputePolicy.budget_usd.toFixed(2)}`
-                    : 'No budget limit'}
+                    : t('No budget limit')}
                 </dd>
               </div>
             </dl>
@@ -465,60 +471,60 @@ export function NewReviewPage() {
         </Section>
 
         <section
-          aria-label="Start confirmation"
+          aria-label={t('Start confirmation')}
           className="rounded-lg border border-action-primary bg-surface p-4"
         >
-          <h2 className="text-sm font-semibold text-text-primary">Confirm before starting</h2>
+          <h2 className="text-sm font-semibold text-text-primary">{t('Confirm before starting')}</h2>
           <dl className="mt-2 flex flex-col gap-1 text-sm">
             <div className="flex gap-1.5">
-              <dt className="text-text-secondary">Repository</dt>
+              <dt className="text-text-secondary">{t('Repository')}</dt>
               <dd className="text-text-primary">
-                {selectedRepository?.display_name ?? '(not selected)'}
+                {selectedRepository?.display_name ?? t('(not selected)')}
               </dd>
             </div>
             <div className="flex gap-1.5">
-              <dt className="text-text-secondary">Target → Proposed</dt>
+              <dt className="text-text-secondary">{t('Target → Proposed')}</dt>
               <dd className="font-mono text-text-primary">
                 {sourceSelection.target} → {sourceSelection.proposed}
               </dd>
             </div>
             <div className="flex gap-1.5">
-              <dt className="text-text-secondary">Provider / Model</dt>
+              <dt className="text-text-secondary">{t('Provider / Model')}</dt>
               <dd className="font-mono text-text-primary">
                 {selectedComputePolicy
                   ? `${selectedComputePolicy.provider} / ${selectedComputePolicy.model}`
-                  : '(not selected)'}
+                  : t('(not selected)')}
               </dd>
             </div>
             <div className="flex gap-1.5">
-              <dt className="text-text-secondary">Data destination</dt>
+              <dt className="text-text-secondary">{t('Data destination')}</dt>
               <dd className="text-text-primary">
-                {selectedComputePolicy?.data_destination ?? '(not selected)'}
+                {selectedComputePolicy?.data_destination ?? t('(not selected)')}
               </dd>
             </div>
             <div className="flex gap-1.5">
-              <dt className="text-text-secondary">Known retention</dt>
+              <dt className="text-text-secondary">{t('Known retention')}</dt>
               <dd className="text-text-primary">
-                {selectedComputePolicy?.known_retention ?? '(not selected)'}
+                {selectedComputePolicy?.known_retention ?? t('(not selected)')}
               </dd>
             </div>
             <div className="flex gap-1.5">
-              <dt className="text-text-secondary">Policy versions</dt>
+              <dt className="text-text-secondary">{t('Policy versions')}</dt>
               <dd className="font-mono text-text-primary">
-                review {selectedReviewPolicy?.version ?? '—'} · compute{' '}
+                {t('review')} {selectedReviewPolicy?.version ?? '—'} · {t('compute')}{' '}
                 {selectedComputePolicy?.version ?? '—'}
               </dd>
             </div>
             <div className="flex gap-1.5">
-              <dt className="text-text-secondary">Budget / max output</dt>
+              <dt className="text-text-secondary">{t('Budget / max output')}</dt>
               <dd className="text-text-primary">
                 {selectedComputePolicy !== null
                   ? `${
                       selectedComputePolicy.budget_usd !== null
                         ? `$${selectedComputePolicy.budget_usd.toFixed(2)}`
-                        : 'no budget limit'
-                    } / ${selectedComputePolicy.max_output_tokens_per_call.toLocaleString('en-US')} tokens`
-                  : '(not selected)'}
+                        : t('no budget limit')
+                    } / ${selectedComputePolicy.max_output_tokens_per_call.toLocaleString('en-US')} {t('tokens')}`
+                  : t('(not selected)')}
               </dd>
             </div>
           </dl>
@@ -531,11 +537,10 @@ export function NewReviewPage() {
 
           <div className="mt-4 flex items-center gap-3">
             <Button type="submit" disabled={submitting || catalog.repositories.length === 0}>
-              {submitting ? 'Starting…' : 'Start review'}
+              {submitting ? t('Starting…') : t('Start review')}
             </Button>
             <p className="text-meta text-text-secondary">
-              Creates one attempt and opens its live detail. Repeated submission of this unchanged
-              form returns the same attempt (idempotent).
+              {t('Creates one attempt and opens its live detail. Repeated submission of this unchanged form returns the same attempt (idempotent).')}
             </p>
           </div>
         </section>

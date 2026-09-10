@@ -4,6 +4,7 @@ import { EmptyState } from '../../components/ui/empty-state.tsx'
 import { cx } from '../../components/ui/cx.ts'
 import { usePrefersReducedMotion } from '../../app/motion.ts'
 import type { ReviewRunView } from '../../domain/review.ts'
+import { useI18n } from '../../i18n.tsx'
 import { CopyValue } from './CopyValue.tsx'
 import { formatCostUsd, formatDurationMs, formatTimestamp, formatTokenCount } from './formatting.ts'
 import { AUTHORITY_PRESENTATION, GATE_PRESENTATION, SOURCE_KIND_LABEL } from './presentation.ts'
@@ -17,26 +18,24 @@ import { AUTHORITY_PRESENTATION, GATE_PRESENTATION, SOURCE_KIND_LABEL } from './
  * single-user web deployment cannot act as a GitHub actor (design 20.4).
  */
 export function AttemptsTab({ run }: { run: ReviewRunView }) {
+  const { t } = useI18n()
   const reduced = usePrefersReducedMotion()
 
   if (run.attempts.length === 0) {
     return (
       <EmptyState
-        title="No attempts recorded"
-        description="This view lists every attempt of the review request. The current attempt is missing from history, which indicates an incomplete record."
+        title={t('No attempts recorded')}
+        description={t('This view lists every attempt of the review request. The current attempt is missing from history, which indicates an incomplete record.')}
       />
     )
   }
 
   return (
-    <section aria-label="Attempt timeline" className="rounded-lg border border-border bg-surface p-4">
-      <h2 className="text-sm font-semibold text-text-primary">Attempts</h2>
+    <section aria-label={t('Attempt timeline')} className="rounded-lg border border-border bg-surface p-4">
+      <h2 className="text-sm font-semibold text-text-primary">{t('Attempts')}</h2>
       {run.source.kind === 'github-pull-request' ? (
         <p className="mt-2 rounded-md border border-border bg-surface-subtle px-3 py-2 text-meta text-text-secondary">
-          Authorized retry runs from the GitHub Checks requested action. This single-user web
-          deployment cannot prove a GitHub actor, so the web Retry button stays disabled and only
-          explains the requirement. A superseded attempt can never overwrite the current standing
-          decision.
+          {t('Authorized retry runs from the GitHub Checks requested action. This single-user web deployment cannot prove a GitHub actor, so the web Retry button stays disabled and only explains the requirement. A superseded attempt can never overwrite the current standing decision.')}
         </p>
       ) : null}
       <ol className="mt-3 flex flex-col gap-2">
@@ -61,48 +60,47 @@ export function AttemptsTab({ run }: { run: ReviewRunView }) {
                 )}
               >
               <div className="flex flex-wrap items-center gap-2">
-                <Badge tone={gate.tone} label={gate.label} />
-                <Badge tone={authority.tone} label={authority.label} />
-                {isCurrent ? <Badge tone="neutral" label="Current attempt" /> : null}
-                <CopyValue value={attempt.attemptId} label="Attempt ID" truncate={false} />
+                <Badge tone={gate.tone} label={t(gate.label)} />
+                <Badge tone={authority.tone} label={t(authority.label)} />
+                {isCurrent ? <Badge tone="neutral" label={t('Current attempt')} /> : null}
+                <CopyValue value={attempt.attemptId} label={t('Attempt ID')} truncate={false} />
               </div>
-              <p className="mt-1 text-meta text-text-secondary">{authority.description}</p>
+              <p className="mt-1 text-meta text-text-secondary">{t(authority.description)}</p>
               <dl className="mt-2 grid grid-cols-1 gap-x-6 gap-y-1 text-meta sm:grid-cols-2 lg:grid-cols-3">
                 <div className="flex gap-1.5">
-                  <dt className="text-text-secondary">Trigger</dt>
+                  <dt className="text-text-secondary">{t('Trigger')}</dt>
                   <dd className="text-text-primary">
-                    {SOURCE_KIND_LABEL[attempt.trigger as keyof typeof SOURCE_KIND_LABEL] ??
-                      attempt.trigger}
+                    {t(SOURCE_KIND_LABEL[attempt.trigger as keyof typeof SOURCE_KIND_LABEL] ?? attempt.trigger)}
                   </dd>
                 </div>
                 <div className="flex gap-1.5">
-                  <dt className="text-text-secondary">Provider / Model</dt>
+                  <dt className="text-text-secondary">{t('Provider / Model')}</dt>
                   <dd className="font-mono text-text-primary">
                     {attempt.provider} / {attempt.model}
                   </dd>
                 </div>
                 <div className="flex gap-1.5">
-                  <dt className="text-text-secondary">Policies</dt>
+                  <dt className="text-text-secondary">{t('Policies')}</dt>
                   <dd className="font-mono text-text-primary">
-                    review {attempt.reviewPolicyVersion} · compute {attempt.computePolicyVersion}
+                    {t('review')} {attempt.reviewPolicyVersion} · {t('compute')} {attempt.computePolicyVersion}
                   </dd>
                 </div>
                 <div className="flex gap-1.5">
-                  <dt className="text-text-secondary">Tokens</dt>
+                  <dt className="text-text-secondary">{t('Tokens')}</dt>
                   <dd className="text-text-primary tabular-nums">
-                    {formatTokenCount(attempt.tokenCount)}
+                    {t(formatTokenCount(attempt.tokenCount))}
                   </dd>
                 </div>
                 <div className="flex gap-1.5">
-                  <dt className="text-text-secondary">Cost</dt>
+                  <dt className="text-text-secondary">{t('Cost')}</dt>
                   <dd className="text-text-primary tabular-nums">
-                    {formatCostUsd(attempt.costUsd, attempt.costUnknown)}
+                    {t(formatCostUsd(attempt.costUsd, attempt.costUnknown))}
                   </dd>
                 </div>
                 <div className="flex gap-1.5">
-                  <dt className="text-text-secondary">Started · Duration</dt>
+                  <dt className="text-text-secondary">{t('Started · Duration')}</dt>
                   <dd className="text-text-primary tabular-nums">
-                    {formatTimestamp(attempt.startedAt)} · {formatDurationMs(attempt.durationMs)}
+                    {formatTimestamp(attempt.startedAt)} · {t(formatDurationMs(attempt.durationMs))}
                   </dd>
                 </div>
               </dl>

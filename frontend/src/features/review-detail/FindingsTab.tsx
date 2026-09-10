@@ -4,6 +4,7 @@ import { Button } from '../../components/ui/button.tsx'
 import { EmptyState } from '../../components/ui/empty-state.tsx'
 import { cx } from '../../components/ui/cx.ts'
 import type { ReviewFindingView, ReviewRunView } from '../../domain/review.ts'
+import { useI18n } from '../../i18n.tsx'
 import { FindingDetail } from './FindingDetail.tsx'
 import { shortenFingerprint } from './formatting.ts'
 import {
@@ -29,6 +30,7 @@ interface FindingsTabProps {
  * Filtering only changes the view; it never changes the Gate.
  */
 export function FindingsTab({ run }: FindingsTabProps) {
+  const { t } = useI18n()
   const [searchParams, setSearchParams] = useSearchParams()
   const filter = readFindingFilter(searchParams)
   const filtered = filterFindings(run.findings, filter)
@@ -48,8 +50,10 @@ export function FindingsTab({ run }: FindingsTabProps) {
   if (run.findings.length === 0) {
     return (
       <EmptyState
-        title="No findings"
-        description="This attempt finished without findings. The gate result is shown in the Overview tab; this empty state is not a substituted success."
+        title={t('No findings')}
+        description={t(
+          'This attempt finished without findings. The gate result is shown in the Overview tab; this empty state is not a substituted success.',
+        )}
       />
     )
   }
@@ -61,11 +65,11 @@ export function FindingsTab({ run }: FindingsTabProps) {
       <div className="flex min-w-0 flex-col gap-3">
         <div
           role="group"
-          aria-label="Finding filters"
+          aria-label={t('Finding filters')}
           className="flex flex-col gap-2 rounded-lg border border-border bg-surface p-3"
         >
           <label className="flex flex-col gap-1 text-meta text-text-secondary">
-            Search problem, path, or fingerprint
+            {t('Search problem, path, or fingerprint')}
             <input
               type="search"
               value={filter.query}
@@ -73,13 +77,13 @@ export function FindingsTab({ run }: FindingsTabProps) {
                 updateFilter({ ...filter, query: event.target.value })
               }}
               className={FIELD_CLASS}
-              placeholder="e.g. verify.py or fp_9f3c1a2b"
+              placeholder={t('e.g. verify.py or fp_9f3c1a2b')}
             />
           </label>
 
           <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
             <label className="flex flex-col gap-1 text-meta text-text-secondary">
-              Severity
+              {t('Severity')}
               <select
                 value={filter.severity}
                 onChange={(event) => {
@@ -90,16 +94,16 @@ export function FindingsTab({ run }: FindingsTabProps) {
                 }}
                 className={FIELD_CLASS}
               >
-                <option value="all">All severities</option>
-                <option value="critical">Critical</option>
-                <option value="major">Major</option>
-                <option value="minor">Minor</option>
-                <option value="suggestion">Suggestion</option>
+                <option value="all">{t('All severities')}</option>
+                <option value="critical">{t('Critical')}</option>
+                <option value="major">{t('Major')}</option>
+                <option value="minor">{t('Minor')}</option>
+                <option value="suggestion">{t('Suggestion')}</option>
               </select>
             </label>
 
             <label className="flex flex-col gap-1 text-meta text-text-secondary">
-              Dimension
+              {t('Dimension')}
               <select
                 value={filter.dimensionId}
                 onChange={(event) => {
@@ -107,7 +111,7 @@ export function FindingsTab({ run }: FindingsTabProps) {
                 }}
                 className={FIELD_CLASS}
               >
-                <option value="all">All dimensions</option>
+                <option value="all">{t('All dimensions')}</option>
                 {dimensionIds.map((dimensionId) => (
                   <option key={dimensionId} value={dimensionId}>
                     {dimensionId}
@@ -117,7 +121,7 @@ export function FindingsTab({ run }: FindingsTabProps) {
             </label>
 
             <label className="flex flex-col gap-1 text-meta text-text-secondary">
-              Evidence band
+              {t('Evidence band')}
               <select
                 value={filter.evidenceBand}
                 onChange={(event) => {
@@ -128,9 +132,9 @@ export function FindingsTab({ run }: FindingsTabProps) {
                 }}
                 className={FIELD_CLASS}
               >
-                <option value="all">All bands</option>
-                <option value="supported">Supported</option>
-                <option value="insufficient">Insufficient</option>
+                <option value="all">{t('All bands')}</option>
+                <option value="supported">{t('Supported')}</option>
+                <option value="insufficient">{t('Insufficient')}</option>
               </select>
             </label>
           </div>
@@ -144,12 +148,12 @@ export function FindingsTab({ run }: FindingsTabProps) {
               }}
               className="h-4 w-4 accent-[var(--wr-action-primary)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
             />
-            Blocking only
+            {t('Blocking only')}
           </label>
 
           <div className="flex items-center justify-between gap-2 text-meta text-text-secondary">
             <span aria-live="polite">
-              {filtered.length} of {run.findings.length} findings
+              {t('{filtered} of {total} findings', { filtered: filtered.length, total: run.findings.length })}
             </span>
             {!isDefaultFindingFilter(filter) ? (
               <Button
@@ -165,7 +169,7 @@ export function FindingsTab({ run }: FindingsTabProps) {
                   })
                 }}
               >
-                Clear filters
+                {t('Clear filters')}
               </Button>
             ) : null}
           </div>
@@ -173,11 +177,11 @@ export function FindingsTab({ run }: FindingsTabProps) {
 
         {filtered.length === 0 ? (
           <EmptyState
-            title="No findings match the filters"
-            description="Filters only change this view. The gate result is unchanged."
+            title={t('No findings match the filters')}
+            description={t('Filters only change this view. The gate result is unchanged.')}
           />
         ) : (
-          <ul aria-label="Findings" className="flex flex-col gap-1">
+          <ul aria-label={t('Findings')} className="flex flex-col gap-1">
             {filtered.map((finding) => {
               const severity = SEVERITY_PRESENTATION[finding.severity]
               const isSelected = selected?.fingerprint === finding.fingerprint
@@ -198,8 +202,8 @@ export function FindingsTab({ run }: FindingsTabProps) {
                     )}
                   >
                     <span className="flex flex-wrap items-center gap-2">
-                      <Badge tone={severity.tone} label={severity.label} />
-                      {finding.blocking ? <Badge tone="blocked" label="Blocking" /> : null}
+                      <Badge tone={severity.tone} label={t(severity.label)} />
+                      {finding.blocking ? <Badge tone="blocked" label={t('Blocking')} /> : null}
                       <span className="font-mono text-meta text-text-secondary tabular-nums">
                         {shortenFingerprint(finding.fingerprint)}
                       </span>
@@ -221,8 +225,8 @@ export function FindingsTab({ run }: FindingsTabProps) {
           <FindingDetail finding={selected} />
         ) : (
           <EmptyState
-            title="Select a finding"
-            description="Choose a finding on the left to inspect its evidence, impact and repair guidance."
+            title={t('Select a finding')}
+            description={t('Choose a finding on the left to inspect its evidence, impact and repair guidance.')}
           />
         )}
       </div>

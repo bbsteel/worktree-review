@@ -12,9 +12,11 @@ import {
 import { usePrefersReducedMotion } from '../../app/motion.ts'
 import type { OverviewView } from '../../domain/overview.ts'
 import { BLOCKED_COST_USD, PASSED_COST_USD } from '../../data/fixtures/constants.ts'
+import { useI18n } from '../../i18n.tsx'
 
 export function OverviewCharts({ overview }: { overview: OverviewView }) {
   const reduced = usePrefersReducedMotion()
+  const { t } = useI18n()
   const costTrend = overview.gateTrend.map((point) => ({
     date: point.date.slice(5),
     knownCost: Number((point.passed * PASSED_COST_USD + point.blocked * BLOCKED_COST_USD).toFixed(2)),
@@ -24,8 +26,8 @@ export function OverviewCharts({ overview }: { overview: OverviewView }) {
   return (
     <div className="grid gap-4 xl:grid-cols-2">
       <ChartCard
-        title="Gate trend"
-        caption="Daily Passed, Blocked, Error, and In Progress. Charts show trend only; exact counts are in Statistics."
+        title={t('Gate trend')}
+        caption={t('Daily Passed, Blocked, Error, and In Progress. Charts show trend only; exact counts are in Statistics.')}
       >
         <ResponsiveContainer width="100%" height={220}>
           <BarChart data={overview.gateTrend} accessibilityLayer>
@@ -33,7 +35,7 @@ export function OverviewCharts({ overview }: { overview: OverviewView }) {
             <XAxis dataKey="date" tick={{ fill: 'var(--wr-text-secondary)', fontSize: 12 }} />
             <YAxis allowDecimals={false} tick={{ fill: 'var(--wr-text-secondary)', fontSize: 12 }} />
             <Tooltip />
-            <Legend />
+            <Legend formatter={(value) => t(String(value))} />
             <Bar dataKey="passed" stackId="gate" fill="var(--wr-status-passed)" isAnimationActive={!reduced} />
             <Bar dataKey="blocked" stackId="gate" fill="var(--wr-status-blocked)" isAnimationActive={!reduced} />
             <Bar dataKey="error" stackId="gate" fill="var(--wr-status-error)" isAnimationActive={!reduced} />
@@ -47,8 +49,11 @@ export function OverviewCharts({ overview }: { overview: OverviewView }) {
         </ResponsiveContainer>
       </ChartCard>
       <ChartCard
-        title="Token and cost trend"
-        caption={`Known cost scales Passed at $${PASSED_COST_USD.toFixed(2)} and Blocked at $${BLOCKED_COST_USD.toFixed(2)} from demo cases. Error days add unknown-cost attempts, not $0.00.`}
+        title={t('Token and cost trend')}
+        caption={t(
+          'Known cost scales Passed at ${passed} and Blocked at ${blocked} from demo cases. Error days add unknown-cost attempts, not $0.00.',
+          { passed: PASSED_COST_USD.toFixed(2), blocked: BLOCKED_COST_USD.toFixed(2) },
+        )}
       >
         <ResponsiveContainer width="100%" height={220}>
           <BarChart data={costTrend} accessibilityLayer>
@@ -56,14 +61,14 @@ export function OverviewCharts({ overview }: { overview: OverviewView }) {
             <XAxis dataKey="date" tick={{ fill: 'var(--wr-text-secondary)', fontSize: 12 }} />
             <YAxis tick={{ fill: 'var(--wr-text-secondary)', fontSize: 12 }} />
             <Tooltip />
-            <Legend />
+            <Legend formatter={(value) => t(String(value))} />
             <Bar dataKey="knownCost" fill="var(--wr-action-primary)" isAnimationActive={!reduced} />
             <Bar dataKey="unknownAttempts" fill="var(--wr-status-warning)" isAnimationActive={!reduced} />
           </BarChart>
         </ResponsiveContainer>
         <p className="mt-2 text-xs text-text-secondary">
-          Known tokens (demo cases): {overview.stats.knownInputTokens.toLocaleString()} in /{' '}
-          {overview.stats.knownOutputTokens.toLocaleString()} out
+          {t('Known tokens (demo cases)')}: {overview.stats.knownInputTokens.toLocaleString()} {t('in')} /{' '}
+          {overview.stats.knownOutputTokens.toLocaleString()} {t('out')}
         </p>
       </ChartCard>
     </div>

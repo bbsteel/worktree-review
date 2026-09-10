@@ -9,6 +9,7 @@ import {
 } from 'lucide-react'
 import { NavLink } from 'react-router'
 import { useDataSource } from '../../app/data-source.ts'
+import { useI18n } from '../../i18n.tsx'
 import { PreviewControl } from '../ui/preview-control.tsx'
 import { cx } from '../ui/cx.ts'
 
@@ -31,31 +32,32 @@ function navLinkClass(isActive: boolean): string {
 
 export function SideNav({ onNavigate }: { onNavigate?: () => void }) {
   const { overview, source } = useDataSource()
+  const { t } = useI18n()
   const sessionState = overview?.sessionInsight.state ?? 'disconnected'
 
   return (
     <div className="flex h-full flex-col bg-surface text-text-primary">
       <div className="border-b border-border px-4 py-4">
-        <p className="text-sm font-semibold tracking-tight">Worktree Review</p>
-        <p className="mt-1 text-xs text-text-secondary">Evidence-first inspection</p>
+        <p className="text-sm font-semibold tracking-tight">{t('Worktree Review')}</p>
+        <p className="mt-1 text-xs text-text-secondary">{t('Evidence-first inspection')}</p>
       </div>
-      <nav aria-label="Primary" className="flex flex-1 flex-col gap-1 p-3">
+      <nav aria-label={t('Primary')} className="flex flex-1 flex-col gap-1 p-3">
         <NavLink
           to="/overview"
           onClick={onNavigate}
           className={({ isActive }) => navLinkClass(isActive)}
         >
           <LayoutDashboard aria-hidden="true" className="h-4 w-4" />
-          Overview
+          {t('Overview')}
         </NavLink>
-        <PreviewControl label="Reviews" reason={previewReason.reviews} icon={GitPullRequest} />
+        <PreviewControl label={t('Reviews')} reason={t(previewReason.reviews)} icon={GitPullRequest} />
         <NavLink
           to="/repositories"
           onClick={onNavigate}
           className={({ isActive }) => navLinkClass(isActive)}
         >
           <FolderGit2 aria-hidden="true" className="h-4 w-4" />
-          Repositories
+          {t('Repositories')}
         </NavLink>
         <NavLink
           to="/policies"
@@ -63,7 +65,7 @@ export function SideNav({ onNavigate }: { onNavigate?: () => void }) {
           className={({ isActive }) => navLinkClass(isActive)}
         >
           <Shield aria-hidden="true" className="h-4 w-4" />
-          Policies
+          {t('Policies')}
         </NavLink>
         <NavLink
           to="/providers"
@@ -71,23 +73,23 @@ export function SideNav({ onNavigate }: { onNavigate?: () => void }) {
           className={({ isActive }) => navLinkClass(isActive)}
         >
           <Unplug aria-hidden="true" className="h-4 w-4" />
-          Providers
+          {t('Providers')}
         </NavLink>
-        <p className="mt-3 px-2.5 text-[11px] uppercase tracking-wide text-text-secondary">Integrations</p>
+        <p className="mt-3 px-2.5 text-[11px] uppercase tracking-wide text-text-secondary">{t('Integrations')}</p>
         <PreviewControl
-          label="Session Insight"
-          reason={`${previewReason.sessionInsight} State: ${sessionState}.`}
+          label={t('Session Insight')}
+          reason={`${t(previewReason.sessionInsight)} ${t('State: {state}.', { state: t(sessionState) })}`}
           icon={Cable}
         />
-        <PreviewControl label="GitHub" reason={previewReason.github} icon={GitPullRequest} />
+        <PreviewControl label={t('GitHub')} reason={t(previewReason.github)} icon={GitPullRequest} />
         <div className="mt-auto">
-          <PreviewControl label="Settings" reason={previewReason.settings} icon={Settings} />
+          <PreviewControl label={t('Settings')} reason={t(previewReason.settings)} icon={Settings} />
         </div>
       </nav>
       <div className="border-t border-border px-4 py-3 text-xs text-text-secondary">
-        <p>Web service: {source.kind === 'mock' ? 'prototype mock' : 'live local API'}</p>
-        <p>Version 0.0.0 · Local</p>
-        <p>Session Insight: {sessionState}</p>
+        <p>{t('Web service: {service}', { service: t(source.kind === 'mock' ? 'prototype mock' : 'live local API') })}</p>
+        <p>{t('Version 0.0.0 · Local')}</p>
+        <p>{t('Session Insight: {state}', { state: t(sessionState) })}</p>
       </div>
     </div>
   )

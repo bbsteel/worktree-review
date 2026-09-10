@@ -1,6 +1,7 @@
 import { Circle, CircleCheck, CircleDot, CircleX, type LucideIcon } from 'lucide-react'
 import { cx } from '../../components/ui/cx.ts'
 import type { PipelineStageStatus, PipelineStageView } from '../../domain/review.ts'
+import { useI18n } from '../../i18n.tsx'
 import { formatDurationMs } from './formatting.ts'
 import { PIPELINE_STAGE_LABEL, STAGE_STATUS_PRESENTATION } from './presentation.ts'
 
@@ -25,6 +26,7 @@ const STATUS_CLASS: Record<PipelineStageStatus, string> = {
  * prefers-reduced-motion via the global token override.
  */
 export function PipelineStages({ stages }: { stages: PipelineStageView[] }) {
+  const { t } = useI18n()
   return (
     <ol className="flex flex-col gap-1">
       {stages.map((stage, index) => {
@@ -52,9 +54,9 @@ export function PipelineStages({ stages }: { stages: PipelineStageView[] }) {
                 )}
               />
               <span className="text-sm font-medium text-text-primary">
-                {PIPELINE_STAGE_LABEL[stage.stage]}
+                {t(PIPELINE_STAGE_LABEL[stage.stage])}
               </span>
-              <span className={cx('text-meta', STATUS_CLASS[stage.status])}>{statusLabel}</span>
+              <span className={cx('text-meta', STATUS_CLASS[stage.status])}>{t(statusLabel)}</span>
               <span className="ml-auto font-mono text-meta text-text-secondary tabular-nums">
                 {stage.elapsedMs !== null ? formatDurationMs(stage.elapsedMs) : ''}
               </span>
@@ -63,7 +65,7 @@ export function PipelineStages({ stages }: { stages: PipelineStageView[] }) {
             {stage.status === 'failed' && stage.safeError !== null ? (
               <details className="mt-1 rounded-md border border-status-error bg-surface px-3 py-2">
                 <summary className="cursor-pointer text-sm font-medium text-status-error focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring">
-                  Failure detail (safe summary)
+                  {t('Failure detail (safe summary)')}
                 </summary>
                 <p className="mt-2 whitespace-pre-wrap font-mono text-meta text-text-primary">
                   {stage.safeError}

@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useAdminClient } from '../app/admin-client.ts'
+import { useI18n } from '../i18n.tsx'
 import { Badge } from '../components/ui/badge.tsx'
 import { Button } from '../components/ui/button.tsx'
 import { Dialog } from '../components/ui/dialog.tsx'
@@ -27,15 +28,15 @@ const CREDENTIAL_STATE_LABEL: Record<ProviderProfileDto['credential_state'], str
   invalid_reference: 'Invalid reference',
 }
 
-function healthLabel(profile: ProviderProfileDto): string {
+function healthLabel(profile: ProviderProfileDto, translate: (key: string) => string): string {
   const observedAt = formatTimestamp(profile.health.observed_at)
   switch (profile.health.status) {
     case 'healthy':
-      return `Healthy at ${observedAt}`
+      return translate('Healthy at {timestamp}').replace('{timestamp}', observedAt)
     case 'last_call_failed':
-      return `Last call failed at ${observedAt}`
+      return translate('Last call failed at {timestamp}').replace('{timestamp}', observedAt)
     default:
-      return 'Not tested'
+      return translate('Not tested')
   }
 }
 
@@ -47,6 +48,7 @@ function healthLabel(profile: ProviderProfileDto): string {
  * provider or a local command.
  */
 export function ProvidersPage() {
+  const { t } = useI18n()
   const client = useAdminClient()
   const [profiles, setProfiles] = useState<ProviderProfileDto[] | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
@@ -72,14 +74,14 @@ export function ProvidersPage() {
       .catch((caught: unknown) => {
         if (!cancelled) {
           setLoadError(
-            caught instanceof Error ? caught.message : 'Provider profiles could not be loaded.',
+            caught instanceof Error ? caught.message : t('Provider profiles could not be loaded.'),
           )
         }
       })
     return () => {
       cancelled = true
     }
-  }, [client])
+  }, [client, t])
 
   function startEdit(profile: ProviderProfileDto) {
     setEditingId(profile.profile_id)
@@ -123,7 +125,7 @@ export function ProvidersPage() {
       setSaveError(
         caught instanceof ApiError
           ? `${caught.code}: ${caught.message}`
-          : 'The profile could not be saved. Nothing was changed.',
+          : t('The profile could not be saved. Nothing was changed.'),
       )
     } finally {
       setSaving(false)
@@ -147,7 +149,7 @@ export function ProvidersPage() {
           detail:
             caught instanceof ApiError
               ? `${caught.code}: ${caught.message}`
-              : 'The connection test failed before reaching the provider.',
+              : t('The connection test failed before reaching the provider.'),
           tested_at: new Date().toISOString(),
         },
       }))
@@ -172,7 +174,7 @@ export function ProvidersPage() {
       setDeleteErrorById((current) => ({
         ...current,
         [profile.profile_id]:
-          caught instanceof ApiError ? `${caught.code}: ${caught.message}` : 'Delete failed.',
+          caught instanceof ApiError ? `${caught.code}: ${caught.message}` : t('Delete failed.'),
       }))
     }
   }
@@ -181,8 +183,10 @@ export function ProvidersPage() {
     return (
       <main className="mx-auto w-full max-w-4xl px-6 py-6">
         <EmptyState
-          title="Provider profiles require the live review service"
-          description={`Profiles could not be loaded: ${loadError}. The prototype mock mode does not manage provider connections.`}
+          title={t('Provider profiles require the live review service')}
+          description={`${t('Profiles could not be loaded: {error}.', { error: loadError })} ${t(
+            'The prototype mock mode does not manage provider connections.',
+          )}`}
         />
       </main>
     )
@@ -191,25 +195,24 @@ export function ProvidersPage() {
   if (profiles === null) {
     return (
       <main className="mx-auto w-full max-w-4xl px-6 py-6" aria-busy="true">
-        <Skeleton className="h-8 w-48" label="Loading provider profiles" />
-        <Skeleton className="mt-4 h-48 w-full" label="Loading profiles" />
+        <Skeleton className="h-8 w-48" label={t('Loading provider profiles')} />
+        <Skeleton className="mt-4 h-48 w-full" label={t('Loading profiles')} />
       </main>
     )
   }
 
   return (
     <main className="mx-auto w-full max-w-4xl px-6 py-6">
-      <h1 className="text-xl font-semibold text-text-primary">Providers</h1>
+      <h1 className="text-xl font-semibold text-text-primary">{t('Providers')}</h1>
       <p className="mt-1 text-sm text-text-secondary">
-        Connection profiles only. Model, budget, pricing, data destination and retention are
-        configured in trusted Compute Policies — never duplicated here.
+        {t('Connection profiles only. Model, budget, pricing, data destination and retention are configured in trusted Compute Policies — never duplicated here.')}
       </p>
 
-      <section aria-label="Provider profiles" className="mt-4">
+      <section aria-label={t('Provider profiles')} className="mt-4">
         {profiles.length === 0 ? (
           <EmptyState
-            title="No provider profiles"
-            description="Create a connection profile below. Credentials are environment variable references; secret values never reach the browser."
+            title={t('No provider profiles')}
+            description={t('Create a connection profile below. Credentials are environment variable references; secret values never reach the browser.')}
           />
         ) : (
           <ul className="flex flex-col gap-2">
@@ -223,7 +226,7 @@ export function ProvidersPage() {
                 >
                   <div className="flex flex-wrap items-center gap-2">
                     <h2 className="text-sm font-semibold text-text-primary">{profile.name}</h2>
-                    {profile.is_default ? <Badge tone="neutral" label="Default connection" /> : null}
+                    {profile.is_default ? <Badge tone="neutral" label={t('Default connection')} /> : null}
                     <Badge
                       tone={
                         profile.credential_state === 'configured'
@@ -232,28 +235,28 @@ export function ProvidersPage() {
                             ? 'warning'
                             : 'error'
                       }
-                      label={`Credential: ${CREDENTIAL_STATE_LABEL[profile.credential_state]}`}
+                      label={t('Credential: {state}', { state: t(CREDENTIAL_STATE_LABEL[profile.credential_state]) })}
                     />
-                    <span className="text-meta text-text-secondary">{healthLabel(profile)}</span>
+                    <span className="text-meta text-text-secondary">{healthLabel(profile, t)}</span>
                   </div>
                   <dl className="mt-2 grid grid-cols-1 gap-1 text-meta sm:grid-cols-2">
                     <div className="flex gap-1.5">
-                      <dt className="text-text-secondary">Provider</dt>
+                      <dt className="text-text-secondary">{t('Provider')}</dt>
                       <dd className="font-mono text-text-primary">{profile.provider}</dd>
                     </div>
                     <div className="flex gap-1.5">
                       <dt className="text-text-secondary">
-                        {profile.local_cli_adapter !== null ? 'Local adapter' : 'Endpoint'}
+                        {profile.local_cli_adapter !== null ? t('Local adapter') : t('Endpoint')}
                       </dt>
                       <dd className="break-all font-mono text-text-primary">
                         {profile.local_cli_adapter !== null
                           ? `${profile.local_cli_adapter}${profile.adapter_label !== null ? ` (${profile.adapter_label})` : ''}`
-                          : (profile.endpoint ?? 'provider default')}
+                          : (profile.endpoint ?? t('provider default'))}
                       </dd>
                     </div>
                     {profile.local_cli_command !== null ? (
                       <div className="flex gap-1.5 sm:col-span-2">
-                        <dt className="shrink-0 text-text-secondary">Command argv (no shell)</dt>
+                        <dt className="shrink-0 text-text-secondary">{t('Command argv (no shell)')}</dt>
                         <dd className="break-all font-mono text-text-primary">
                           {profile.local_cli_command.join(' ')}
                         </dd>
@@ -261,7 +264,7 @@ export function ProvidersPage() {
                     ) : null}
                     {profile.credential_reference !== null ? (
                       <div className="flex gap-1.5">
-                        <dt className="text-text-secondary">Credential reference</dt>
+                        <dt className="text-text-secondary">{t('Credential reference')}</dt>
                         <dd className="font-mono text-text-primary">
                           {profile.credential_reference}
                         </dd>
@@ -269,7 +272,7 @@ export function ProvidersPage() {
                     ) : null}
                     {profile.last_used_at !== null ? (
                       <div className="flex gap-1.5">
-                        <dt className="text-text-secondary">Last used</dt>
+                        <dt className="text-text-secondary">{t('Last used')}</dt>
                         <dd className="text-text-primary">
                           {formatTimestamp(profile.last_used_at)}
                         </dd>
@@ -282,8 +285,11 @@ export function ProvidersPage() {
                       role="status"
                       className={`mt-2 text-meta ${testResult.ok ? 'text-status-passed' : 'text-status-error'}`}
                     >
-                      Test {testResult.ok ? 'succeeded' : 'failed'} at{' '}
-                      {formatTimestamp(testResult.tested_at)} — {testResult.detail}
+                      {t('Test {result} at {timestamp} — {detail}', {
+                        result: t(testResult.ok ? 'succeeded' : 'failed'),
+                        timestamp: formatTimestamp(testResult.tested_at),
+                        detail: testResult.detail,
+                      })}
                     </p>
                   ) : null}
                   {deleteError !== undefined ? (
@@ -300,7 +306,7 @@ export function ProvidersPage() {
                         startEdit(profile)
                       }}
                     >
-                      Edit
+                      {t('Edit')}
                     </Button>
                     <Button
                       variant="secondary"
@@ -309,11 +315,11 @@ export function ProvidersPage() {
                         setPendingTest(profile)
                       }}
                     >
-                      Test connection
+                      {t('Test connection')}
                     </Button>
                     {profile.referenced_by_history ? (
                       <span className="inline-flex min-h-9 items-center text-meta text-text-secondary">
-                        Referenced by history — historical snapshots are kept; delete unavailable.
+                        {t('Referenced by history — historical snapshots are kept; delete unavailable.')}
                       </span>
                     ) : (
                       <Button
@@ -323,7 +329,7 @@ export function ProvidersPage() {
                           void removeProfile(profile)
                         }}
                       >
-                        Delete
+                        {t('Delete')}
                       </Button>
                     )}
                   </div>
@@ -335,17 +341,17 @@ export function ProvidersPage() {
       </section>
 
       <section
-        aria-label={editingId === null ? 'Create provider profile' : 'Edit provider profile'}
+        aria-label={editingId === null ? t('Create provider profile') : t('Edit provider profile')}
         className="mt-4 rounded-lg border border-border bg-surface p-4"
       >
         <h2 className="text-sm font-semibold text-text-primary">
-          {editingId === null ? 'Create provider profile' : 'Edit provider profile'}
+          {editingId === null ? t('Create provider profile') : t('Edit provider profile')}
         </h2>
         <p className="mt-1 text-meta text-text-secondary">
-          Saving validates the schema, paths and executables only — it does not call the model.
+          {t('Saving validates the schema, paths and executables only — it does not call the model.')}
         </p>
 
-        <div role="radiogroup" aria-label="Profile kind" className="mt-3 flex gap-4">
+        <div role="radiogroup" aria-label={t('Profile kind')} className="mt-3 flex gap-4">
           {(['remote', 'local-cli'] as ProfileKind[]).map((kind) => (
             <label key={kind} className="flex min-h-9 items-center gap-2 text-sm text-text-primary">
               <input
@@ -359,14 +365,14 @@ export function ProvidersPage() {
                 }}
                 className="h-4 w-4 accent-[var(--wr-action-primary)]"
               />
-              {kind === 'remote' ? 'Remote provider' : 'Local CLI'}
+              {kind === 'remote' ? t('Remote provider') : t('Local CLI')}
             </label>
           ))}
         </div>
 
         <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
           <label className="flex flex-col gap-1 text-meta text-text-secondary">
-            Name
+            {t('Name')}
             <input
               type="text"
               value={form.name}
@@ -382,7 +388,7 @@ export function ProvidersPage() {
           {form.profileKind === 'remote' ? (
             <>
               <label className="flex flex-col gap-1 text-meta text-text-secondary">
-                Provider
+                {t('Provider')}
                 <select
                   value={form.provider}
                   onChange={(event) => {
@@ -395,7 +401,7 @@ export function ProvidersPage() {
                 </select>
               </label>
               <label className="flex flex-col gap-1 text-meta text-text-secondary">
-                Endpoint URL (optional)
+                {t('Endpoint URL (optional)')}
                 <input
                   type="text"
                   value={form.endpoint}
@@ -410,7 +416,7 @@ export function ProvidersPage() {
                 ) : null}
               </label>
               <label className="flex flex-col gap-1 text-meta text-text-secondary">
-                Credential reference (environment variable name, never the value)
+                {t('Credential reference (environment variable name, never the value)')}
                 <input
                   type="text"
                   value={form.credentialReference}
@@ -428,7 +434,7 @@ export function ProvidersPage() {
           ) : (
             <>
               <label className="flex flex-col gap-1 text-meta text-text-secondary">
-                Adapter
+                {t('Adapter')}
                 <input
                   type="text"
                   value={form.localCliAdapter}
@@ -443,7 +449,7 @@ export function ProvidersPage() {
                 ) : null}
               </label>
               <label className="flex flex-col gap-1 text-meta text-text-secondary">
-                Adapter label (optional)
+                {t('Adapter label (optional)')}
                 <input
                   type="text"
                   value={form.adapterLabel}
@@ -454,7 +460,7 @@ export function ProvidersPage() {
                 />
               </label>
               <label className="flex flex-col gap-1 text-meta text-text-secondary sm:col-span-2">
-                Command argv (one argument per line; executed without a shell)
+                {t('Command argv (one argument per line; executed without a shell)')}
                 <textarea
                   value={form.localCliCommandText}
                   onChange={(event) => {
@@ -468,8 +474,7 @@ export function ProvidersPage() {
                 ) : null}
               </label>
               <p className="text-meta text-text-secondary sm:col-span-2">
-                Local execution does not guarantee that inference, network access or retention stay
-                on this machine — check the adapter's own disclosures.
+                {t("Local execution does not guarantee that inference, network access or retention stay on this machine — check the adapter's own disclosures.")}
               </p>
             </>
           )}
@@ -490,7 +495,7 @@ export function ProvidersPage() {
               void save()
             }}
           >
-            {saving ? 'Saving…' : editingId === null ? 'Create profile' : 'Save changes'}
+            {saving ? t('Saving…') : editingId === null ? t('Create profile') : t('Save changes')}
           </Button>
           {editingId !== null ? (
             <Button
@@ -502,7 +507,7 @@ export function ProvidersPage() {
                 setErrors({})
               }}
             >
-              Cancel edit
+              {t('Cancel edit')}
             </Button>
           ) : null}
         </div>
@@ -510,8 +515,8 @@ export function ProvidersPage() {
 
       <Dialog
         open={pendingTest !== null}
-        title="Test provider connection"
-        description="This is an explicit action: it makes one real call to the provider endpoint or local command."
+        title={t('Test provider connection')}
+        description={t('This is an explicit action: it makes one real call to the provider endpoint or local command.')}
         onClose={() => {
           if (!testing) {
             setPendingTest(null)
@@ -521,7 +526,7 @@ export function ProvidersPage() {
         {pendingTest !== null ? (
           <div className="flex flex-col gap-3">
             <p className="text-sm text-text-primary">
-              Test <span className="font-mono">{pendingTest.name}</span> now?
+              {t('Test')} <span className="font-mono">{pendingTest.name}</span> {t('now?')}
             </p>
             <div className="flex justify-end gap-2">
               <Button
@@ -532,7 +537,7 @@ export function ProvidersPage() {
                   setPendingTest(null)
                 }}
               >
-                Cancel
+                {t('Cancel')}
               </Button>
               <Button
                 variant="primary"
@@ -542,7 +547,7 @@ export function ProvidersPage() {
                   void confirmTest()
                 }}
               >
-                {testing ? 'Testing…' : 'Run test'}
+                {testing ? t('Testing…') : t('Run test')}
               </Button>
             </div>
           </div>

@@ -1,5 +1,6 @@
 import type { LucideIcon } from 'lucide-react'
 import { useId } from 'react'
+import { useI18n } from '../../i18n.tsx'
 import { cx } from './cx.ts'
 import { Tooltip } from './tooltip.tsx'
 
@@ -12,6 +13,7 @@ interface PreviewControlProps {
 
 export function PreviewControl({ label, reason, icon: Icon, className }: PreviewControlProps) {
   const descriptionId = useId()
+  const { t } = useI18n()
 
   return (
     <Tooltip content={reason}>
@@ -29,7 +31,9 @@ export function PreviewControl({ label, reason, icon: Icon, className }: Preview
         >
           {Icon ? <Icon aria-hidden="true" className="h-4 w-4" /> : null}
           <span>{label}</span>
-          <span className="rounded-sm border border-border px-1 text-[11px] uppercase tracking-wide">Preview</span>
+          <span className="rounded-sm border border-border px-1 text-[11px] uppercase tracking-wide">
+            {t('Preview')}
+          </span>
         </span>
         <span id={descriptionId} className="sr-only">
           {reason}

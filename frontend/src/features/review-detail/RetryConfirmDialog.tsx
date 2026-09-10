@@ -2,6 +2,7 @@ import { RotateCcw } from 'lucide-react'
 import { Button } from '../../components/ui/button.tsx'
 import { Dialog } from '../../components/ui/dialog.tsx'
 import type { ReviewRunView } from '../../domain/review.ts'
+import { useI18n } from '../../i18n.tsx'
 
 interface RetryConfirmDialogProps {
   open: boolean
@@ -18,15 +19,18 @@ interface RetryConfirmDialogProps {
  */
 export function RetryConfirmDialog({ open, run, onClose, onConfirm }: RetryConfirmDialogProps) {
   const isGitHub = run.source.kind === 'github-pull-request'
+  const { t } = useI18n()
 
   return (
     <Dialog
       open={open}
-      title="Retry this review?"
+      title={t('Retry this review?')}
       description={
         isGitHub
-          ? 'Retry creates a new authoritative attempt and temporarily revokes the current standing decision until the new review completes.'
-          : 'Retry creates a new local attempt. The current result stays as immutable history.'
+          ? t(
+              'Retry creates a new authoritative attempt and temporarily revokes the current standing decision until the new review completes.',
+            )
+          : t('Retry creates a new local attempt. The current result stays as immutable history.')
       }
       onClose={onClose}
     >
@@ -34,26 +38,25 @@ export function RetryConfirmDialog({ open, run, onClose, onConfirm }: RetryConfi
         {isGitHub ? (
           <>
             <p>
-              The new attempt supersedes <span className="font-mono">{run.attemptId}</span>. The old
-              attempt is kept as superseded history and is never overwritten.
+              {t('The new attempt supersedes')} <span className="font-mono">{run.attemptId}</span>. {t(
+                'The old attempt is kept as superseded history and is never overwritten.',
+              )}
             </p>
             <p>
-              While the new review runs, the previous gate result no longer governs this pull
-              request.
+              {t('While the new review runs, the previous gate result no longer governs this pull request.')}
             </p>
           </>
         ) : (
           <p>
-            A new attempt re-runs the same inputs under a new attempt ID. Nothing about the current
-            result is modified.
+            {t('A new attempt re-runs the same inputs under a new attempt ID. Nothing about the current result is modified.')}
           </p>
         )}
         <p className="text-meta text-text-secondary">
-          Prototype: confirming simulates the interaction locally — no request is sent.
+          {t('Prototype: confirming simulates the interaction locally — no request is sent.')}
         </p>
         <div className="mt-1 flex justify-end gap-2">
           <Button variant="secondary" size="sm" onClick={onClose}>
-            Cancel
+            {t('Cancel')}
           </Button>
           <Button
             variant="primary"
@@ -64,7 +67,7 @@ export function RetryConfirmDialog({ open, run, onClose, onConfirm }: RetryConfi
             }}
           >
             <RotateCcw aria-hidden="true" className="h-4 w-4" />
-            Create new attempt
+            {t('Create new attempt')}
           </Button>
         </div>
       </div>

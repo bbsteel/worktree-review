@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useAdminClient } from '../app/admin-client.ts'
+import { useI18n } from '../i18n.tsx'
 import { Badge } from '../components/ui/badge.tsx'
 import { Button } from '../components/ui/button.tsx'
 import { Dialog } from '../components/ui/dialog.tsx'
@@ -19,6 +20,7 @@ const FIELD_CLASS =
  * Removing authorization never deletes repository content or review history.
  */
 export function RepositoriesPage() {
+  const { t } = useI18n()
   const client = useAdminClient()
   const [repositories, setRepositories] = useState<RepositoryDto[] | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
@@ -61,18 +63,18 @@ export function RepositoriesPage() {
       .catch((caught: unknown) => {
         if (!cancelled) {
           setLoadError(
-            caught instanceof Error ? caught.message : 'Repositories could not be loaded.',
+            caught instanceof Error ? caught.message : t('Repositories could not be loaded.'),
           )
         }
       })
     return () => {
       cancelled = true
     }
-  }, [client])
+  }, [client, t])
 
   async function register() {
     if (path.trim() === '') {
-      setRegisterError('A repository path is required.')
+      setRegisterError(t('A repository path is required.'))
       return
     }
     setRegistering(true)
@@ -95,7 +97,7 @@ export function RepositoriesPage() {
       setRegisterError(
         caught instanceof ApiError
           ? `${caught.code}: ${caught.message}`
-          : 'The repository could not be registered. Nothing was changed.',
+          : t('The repository could not be registered. Nothing was changed.'),
       )
     } finally {
       setRegistering(false)
@@ -120,7 +122,7 @@ export function RepositoriesPage() {
       setRemoveError(
         caught instanceof ApiError
           ? `${caught.code}: ${caught.message}`
-          : 'Authorization could not be removed.',
+          : t('Authorization could not be removed.'),
       )
     } finally {
       setRemoving(false)
@@ -131,8 +133,10 @@ export function RepositoriesPage() {
     return (
       <main className="mx-auto w-full max-w-4xl px-6 py-6">
         <EmptyState
-          title="Repositories require the live review service"
-          description={`The repository registry could not be loaded: ${loadError}. The prototype mock mode does not manage authorizations.`}
+          title={t('Repositories require the live review service')}
+          description={`${t('The repository registry could not be loaded: {error}.', { error: loadError })} ${t(
+            'The prototype mock mode does not manage authorizations.',
+          )}`}
         />
       </main>
     )
@@ -141,29 +145,27 @@ export function RepositoriesPage() {
   if (repositories === null) {
     return (
       <main className="mx-auto w-full max-w-4xl px-6 py-6" aria-busy="true">
-        <Skeleton className="h-8 w-48" label="Loading repositories" />
-        <Skeleton className="mt-4 h-48 w-full" label="Loading repository list" />
+        <Skeleton className="h-8 w-48" label={t('Loading repositories')} />
+        <Skeleton className="mt-4 h-48 w-full" label={t('Loading repository list')} />
       </main>
     )
   }
 
   return (
     <main className="mx-auto w-full max-w-4xl px-6 py-6">
-      <h1 className="text-xl font-semibold text-text-primary">Repositories</h1>
+      <h1 className="text-xl font-semibold text-text-primary">{t('Repositories')}</h1>
       <p className="mt-1 text-sm text-text-secondary">
-        Local repository authorization and visibility. This page never modifies repository
-        contents.
+        {t('Local repository authorization and visibility. This page never modifies repository contents.')}
       </p>
 
-      <section aria-label="Register repository" className="mt-4 rounded-lg border border-border bg-surface p-4">
-        <h2 className="text-sm font-semibold text-text-primary">Add a local repository</h2>
+      <section aria-label={t('Register repository')} className="mt-4 rounded-lg border border-border bg-surface p-4">
+        <h2 className="text-sm font-semibold text-text-primary">{t('Add a local repository')}</h2>
         <p className="mt-1 text-meta text-text-secondary">
-          The backend resolves and validates the real root. Only explicitly registered paths can be
-          reviewed; symlink drift is re-checked on every run.
+          {t('The backend resolves and validates the real root. Only explicitly registered paths can be reviewed; symlink drift is re-checked on every run.')}
         </p>
         <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
           <label className="flex flex-col gap-1 text-meta text-text-secondary">
-            Repository path
+            {t('Repository path')}
             <input
               type="text"
               value={path}
@@ -176,7 +178,7 @@ export function RepositoriesPage() {
             />
           </label>
           <label className="flex flex-col gap-1 text-meta text-text-secondary">
-            Display name (optional)
+            {t('Display name (optional)')}
             <input
               type="text"
               value={displayName}
@@ -202,16 +204,16 @@ export function RepositoriesPage() {
               void register()
             }}
           >
-            {registering ? 'Registering…' : 'Register repository'}
+            {registering ? t('Registering…') : t('Register repository')}
           </Button>
         </div>
       </section>
 
-      <section aria-label="Authorized repositories" className="mt-4">
+      <section aria-label={t('Authorized repositories')} className="mt-4">
         {repositories.length === 0 ? (
           <EmptyState
-            title="No authorized repositories"
-            description="Register a local repository above to enable web-started reviews."
+            title={t('No authorized repositories')}
+            description={t('Register a local repository above to enable web-started reviews.')}
           />
         ) : (
           <ul className="flex flex-col gap-2">
@@ -235,26 +237,26 @@ export function RepositoriesPage() {
                       {repository.display_name}
                     </h2>
                     {lastGate !== undefined ? (
-                      <Badge tone={lastGate.tone} label={`Last gate: ${lastGate.label}`} />
+                      <Badge tone={lastGate.tone} label={t('Last gate: {label}', { label: t(lastGate.label) })} />
                     ) : (
-                      <Badge tone="neutral" label="No reviews yet" />
+                      <Badge tone="neutral" label={t('No reviews yet')} />
                     )}
                     {statusRecord !== null && statusRecord.dirty ? (
-                      <Badge tone="warning" label="Worktree modified" />
+                      <Badge tone="warning" label={t('Worktree modified')} />
                     ) : null}
                     {statusRecord !== null && !statusRecord.accessible ? (
-                      <Badge tone="error" label="Not accessible" />
+                      <Badge tone="error" label={t('Not accessible')} />
                     ) : null}
                     {statusRecord !== null && statusRecord.identity_drift ? (
-                      <Badge tone="error" label="Identity drift detected" />
+                      <Badge tone="error" label={t('Identity drift detected')} />
                     ) : null}
                     {status === 'unavailable' ? (
-                      <Badge tone="warning" label="Status unavailable" />
+                      <Badge tone="warning" label={t('Status unavailable')} />
                     ) : null}
                   </div>
                   <dl className="mt-2 grid grid-cols-1 gap-1 text-meta sm:grid-cols-2">
                     <div className="flex gap-1.5">
-                      <dt className="shrink-0 text-text-secondary">Canonical root</dt>
+                      <dt className="shrink-0 text-text-secondary">{t('Canonical root')}</dt>
                       <dd className="break-all font-mono text-text-primary">
                         {repository.canonical_root}
                       </dd>
@@ -262,17 +264,17 @@ export function RepositoriesPage() {
                     {statusRecord !== null ? (
                       <>
                         <div className="flex gap-1.5">
-                          <dt className="text-text-secondary">Branch</dt>
+                          <dt className="text-text-secondary">{t('Branch')}</dt>
                           <dd className="font-mono text-text-primary">{statusRecord.branch}</dd>
                         </div>
                         <div className="flex items-center gap-1.5">
                           <dt className="text-text-secondary">HEAD</dt>
                           <dd>
-                            <CopyValue value={statusRecord.head_oid} label="HEAD OID" />
+                            <CopyValue value={statusRecord.head_oid} label={t('HEAD OID')} />
                           </dd>
                         </div>
                         <div className="flex gap-1.5">
-                          <dt className="text-text-secondary">Changes</dt>
+                          <dt className="text-text-secondary">{t('Changes')}</dt>
                           <dd className="text-text-primary">
                             {statusRecord.tracked_modifications} tracked ·{' '}
                             {statusRecord.untracked_files} untracked
@@ -282,7 +284,7 @@ export function RepositoriesPage() {
                     ) : null}
                     {repository.last_reviewed_at !== null ? (
                       <div className="flex gap-1.5">
-                        <dt className="text-text-secondary">Last reviewed</dt>
+                        <dt className="text-text-secondary">{t('Last reviewed')}</dt>
                         <dd className="text-text-primary">
                           {formatTimestamp(repository.last_reviewed_at)}
                         </dd>
@@ -298,7 +300,7 @@ export function RepositoriesPage() {
                         setRemoveError(null)
                       }}
                     >
-                      Remove authorization
+                      {t('Remove authorization')}
                     </Button>
                   </div>
                 </li>
@@ -310,8 +312,8 @@ export function RepositoriesPage() {
 
       <Dialog
         open={pendingRemoval !== null}
-        title="Remove repository authorization"
-        description="This only removes web authorization. It does not delete the repository on disk or any review history."
+        title={t('Remove repository authorization')}
+        description={t('This only removes web authorization. It does not delete the repository on disk or any review history.')}
         onClose={() => {
           if (!removing) {
             setPendingRemoval(null)
@@ -321,12 +323,12 @@ export function RepositoriesPage() {
         {pendingRemoval !== null ? (
           <div className="flex flex-col gap-3">
             <p className="text-sm text-text-primary">
-              Stop authorizing{' '}
+              {t('Stop authorizing')}{' '}
               <span className="font-mono">{pendingRemoval.display_name}</span> (
               <span className="break-all font-mono text-meta">
                 {pendingRemoval.canonical_root}
               </span>
-              ) for web-started reviews?
+              ) {t('for web-started reviews?')}
             </p>
             {removeError !== null ? (
               <p role="alert" className="text-sm text-status-error">
@@ -342,7 +344,7 @@ export function RepositoriesPage() {
                   setPendingRemoval(null)
                 }}
               >
-                Cancel
+                {t('Cancel')}
               </Button>
               <Button
                 variant="danger"
@@ -352,7 +354,7 @@ export function RepositoriesPage() {
                   void confirmRemoval()
                 }}
               >
-                {removing ? 'Removing…' : 'Remove authorization'}
+                {removing ? t('Removing…') : t('Remove authorization')}
               </Button>
             </div>
           </div>

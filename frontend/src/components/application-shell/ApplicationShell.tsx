@@ -1,6 +1,7 @@
 import { Menu, X } from 'lucide-react'
 import { useState } from 'react'
 import { Outlet } from 'react-router'
+import { useI18n } from '../../i18n.tsx'
 import { Button } from '../ui/button.tsx'
 import { PrototypeBanner } from './PrototypeBanner.tsx'
 import { SideNav } from './SideNav.tsx'
@@ -8,6 +9,7 @@ import { TopBar } from './TopBar.tsx'
 
 export function ApplicationShell() {
   const [navOpen, setNavOpen] = useState(false)
+  const { t } = useI18n()
 
   return (
     <div className="flex min-h-screen flex-col bg-background text-text-primary">
@@ -20,13 +22,18 @@ export function ApplicationShell() {
           <div className="fixed inset-0 z-40 lg:hidden">
             <button
               type="button"
-              aria-label="Close navigation overlay"
+              aria-label={t('Close navigation overlay')}
               className="absolute inset-0 bg-[rgb(8_14_22_/_0.48)]"
               onClick={() => setNavOpen(false)}
             />
             <div className="relative h-full w-60 border-r border-border bg-surface">
               <div className="flex justify-end p-2">
-                <Button variant="ghost" size="icon" aria-label="Close navigation" onClick={() => setNavOpen(false)}>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  aria-label={t('Close navigation')}
+                  onClick={() => setNavOpen(false)}
+                >
                   <X aria-hidden="true" className="h-4 w-4" />
                 </Button>
               </div>
@@ -40,7 +47,7 @@ export function ApplicationShell() {
               <Button
                 variant="ghost"
                 size="icon"
-                aria-label="Open navigation"
+                aria-label={t('Open navigation')}
                 aria-expanded={navOpen}
                 onClick={() => setNavOpen(true)}
               >

@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react'
 import type { ReviewRunView } from '../../domain/review.ts'
+import { useI18n } from '../../i18n.tsx'
 import { CopyValue } from './CopyValue.tsx'
 
 function IdentityRow({
@@ -30,6 +31,7 @@ function IdentityRow({
  * placeholder OIDs or a fabricated Review Identity.
  */
 export function IdentityTab({ run }: { run: ReviewRunView }) {
+  const { t } = useI18n()
   const identity = run.identity
   const identityAvailable = identity.reviewIdentity !== null
 
@@ -38,97 +40,93 @@ export function IdentityTab({ run }: { run: ReviewRunView }) {
       {!identityAvailable ? (
         <p role="alert" className="rounded-lg border border-status-error bg-surface p-4 text-sm text-status-error">
           {identity.identityUnavailableReason ??
-            'Review identity unavailable — merge candidate was not constructed.'}
+            t('Review identity unavailable — merge candidate was not constructed.')}
         </p>
       ) : null}
 
       <section
-        aria-label="Identity relationship"
+        aria-label={t('Identity relationship')}
         className="rounded-lg border border-border bg-surface p-4"
       >
-        <h2 className="text-sm font-semibold text-text-primary">How these identities relate</h2>
+        <h2 className="text-sm font-semibold text-text-primary">{t('How these identities relate')}</h2>
         <ul className="mt-2 flex flex-col gap-1 text-sm text-text-secondary">
           <li>
-            <span className="text-text-primary">Review Request Key</span> — what the system was
-            asked to review.
+            <span className="text-text-primary">{t('Review Request Key')}</span> — {t('what the system was asked to review.')}
           </li>
           <li className="pl-4">
-            └─ once the merge is constructed, the{' '}
-            <span className="text-text-primary">Review Identity</span> defines what the conclusion
-            applies to.
+              └─ {t('once the merge is constructed, the')} <span className="text-text-primary">{t('Review Identity')}</span>{' '}
+              {t('defines what the conclusion applies to.')}
           </li>
           <li>
-            <span className="text-text-primary">Attempt</span> — which execution produced this
-            result.
+            <span className="text-text-primary">{t('Attempt')}</span> — {t('which execution produced this result.')}
           </li>
           {run.source.kind === 'github-pull-request' ? (
             <li className="pl-4">
-              └─ the authoritative, current attempt governs the{' '}
-              <span className="text-text-primary">Standing Decision</span>.
+              └─ {t('the authoritative, current attempt governs the')} <span className="text-text-primary">{t('Standing Decision')}</span>.
             </li>
           ) : (
-            <li className="pl-4">└─ local one-shot results never change a standing decision.</li>
+            <li className="pl-4">└─ {t('local one-shot results never change a standing decision.')}</li>
           )}
         </ul>
       </section>
 
-      <section aria-label="Identity fields" className="rounded-lg border border-border bg-surface p-4">
-        <h2 className="mb-1 text-sm font-semibold text-text-primary">Identity fields</h2>
+      <section aria-label={t('Identity fields')} className="rounded-lg border border-border bg-surface p-4">
+        <h2 className="mb-1 text-sm font-semibold text-text-primary">{t('Identity fields')}</h2>
         <dl>
-          <IdentityRow term="Review Request Key" description="What the system was asked to review">
+          <IdentityRow term={t('Review Request Key')} description={t('What the system was asked to review')}>
             <span className="break-all font-mono text-meta">{identity.reviewRequestKey}</span>
           </IdentityRow>
-          <IdentityRow term="Source Repository">
+          <IdentityRow term={t('Source Repository')}>
             <span className="break-all">{identity.sourceRepository}</span>
           </IdentityRow>
-          <IdentityRow term="Target Ref">
+          <IdentityRow term={t('Target Ref')}>
             <span className="font-mono text-meta">{identity.targetRef}</span>
           </IdentityRow>
-          <IdentityRow term="Target Head OID">
+          <IdentityRow term={t('Target Head OID')}>
             {identity.targetHeadOid !== null ? (
-              <CopyValue value={identity.targetHeadOid} label="Target Head OID" />
+              <CopyValue value={identity.targetHeadOid} label={t('Target Head OID')} />
             ) : (
-              'Not resolved'
+              t('Not resolved')
             )}
           </IdentityRow>
-          <IdentityRow term="Proposed Source">
+          <IdentityRow term={t('Proposed Source')}>
             <span className="font-mono text-meta">{identity.proposedSource}</span>
           </IdentityRow>
-          <IdentityRow term="Proposed Head OID">
+          <IdentityRow term={t('Proposed Head OID')}>
             {identity.proposedHeadOid !== null ? (
-              <CopyValue value={identity.proposedHeadOid} label="Proposed Head OID" />
+              <CopyValue value={identity.proposedHeadOid} label={t('Proposed Head OID')} />
             ) : (
-              'Not resolved'
+              t('Not resolved')
             )}
           </IdentityRow>
-          <IdentityRow term="Merge Tree OID" description="Exact merge result that was reviewed">
+          <IdentityRow term={t('Merge Tree OID')} description={t('Exact merge result that was reviewed')}>
             {identity.mergeTreeOid !== null ? (
-              <CopyValue value={identity.mergeTreeOid} label="Merge Tree OID" />
+              <CopyValue value={identity.mergeTreeOid} label={t('Merge Tree OID')} />
             ) : (
-              'Not constructed'
+              t('Not constructed')
             )}
           </IdentityRow>
-          <IdentityRow term="Review Identity" description="What the gate conclusion applies to">
+          <IdentityRow term={t('Review Identity')} description={t('What the gate conclusion applies to')}>
             {identity.reviewIdentity !== null ? (
-              <CopyValue value={identity.reviewIdentity} label="Review Identity" />
+              <CopyValue value={identity.reviewIdentity} label={t('Review Identity')} />
             ) : (
-              'Unavailable — see the notice above'
+              t('Unavailable — see the notice above')
             )}
           </IdentityRow>
-          <IdentityRow term="Attempt ID" description="Which execution produced this result">
-            <CopyValue value={run.attemptId} label="Attempt ID" truncate={false} />
+          <IdentityRow term={t('Attempt ID')} description={t('Which execution produced this result')}>
+            <CopyValue value={run.attemptId} label={t('Attempt ID')} truncate={false} />
           </IdentityRow>
-          <IdentityRow term="Review Policy">
+          <IdentityRow term={t('Review Policy')}>
             <span className="font-mono text-meta">
               {run.policies.reviewPolicyName} {run.policies.reviewPolicyVersion}
             </span>{' '}
-            <CopyValue value={run.policies.reviewPolicySha256} label="Review Policy SHA-256" />
+            <CopyValue value={run.policies.reviewPolicySha256} label={t('Review Policy SHA-256')} />
           </IdentityRow>
-          <IdentityRow term="Compute Policy">
+          <IdentityRow term={t('Compute Policy')}>
             <span className="font-mono text-meta">
               {run.policies.computePolicyName} {run.policies.computePolicyVersion}
             </span>{' '}
-            <CopyValue value={run.policies.computePolicySha256} label="Compute Policy SHA-256" />
+            <CopyValue value={run.policies.computePolicySha256} label={t('Compute Policy SHA-256')} />
           </IdentityRow>
         </dl>
       </section>

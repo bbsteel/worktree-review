@@ -2,6 +2,7 @@ import { Highlight, themes } from 'prism-react-renderer'
 import { useContext } from 'react'
 import { ThemeContext } from '../../app/theme.ts'
 import type { EvidenceSpanView } from '../../domain/review.ts'
+import { useI18n } from '../../i18n.tsx'
 
 const LANGUAGE_BY_EXTENSION: Record<string, string> = {
   py: 'python',
@@ -33,6 +34,7 @@ interface EvidenceViewerProps {
  * context lines. Code renders as text; no HTML is executed.
  */
 export function EvidenceViewer({ span }: EvidenceViewerProps) {
+  const { t } = useI18n()
   const theme = useContext(ThemeContext)
   const resolved = theme?.resolved ?? 'dark'
   const prismTheme = resolved === 'light' ? themes.nightOwlLight : themes.nightOwl
@@ -43,13 +45,13 @@ export function EvidenceViewer({ span }: EvidenceViewerProps) {
         <span className="font-mono text-text-primary">
           {span.path}:{span.startLine}–{span.endLine}
         </span>
-        <span>verified quoted source</span>
+        <span>{t('verified quoted source')}</span>
         <span aria-hidden="true">·</span>
         <span>{span.changeKind}</span>
         <span aria-hidden="true">·</span>
-        <span>source: {span.source}</span>
+        <span>{t('source: {source}', { source: span.source })}</span>
         <span aria-hidden="true">·</span>
-        <span className="font-mono">snapshot {span.snapshotIdentity}</span>
+        <span className="font-mono">{t('snapshot {snapshot}', { snapshot: span.snapshotIdentity })}</span>
       </figcaption>
       <Highlight code={span.quotedText} language={languageForPath(span.path)} theme={prismTheme}>
         {({ tokens, getLineProps, getTokenProps }) => (
@@ -72,7 +74,7 @@ export function EvidenceViewer({ span }: EvidenceViewerProps) {
                   >
                     {lineNumber}
                   </span>
-                  <span className="sr-only">(quoted line)</span>
+                  <span className="sr-only">{t('(quoted line)')}</span>
                   <span className="min-w-0 whitespace-pre">
                     {line.map((token, tokenIndex) => (
                       <span key={tokenIndex} {...getTokenProps({ token })} />

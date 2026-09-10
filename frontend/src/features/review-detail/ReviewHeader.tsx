@@ -2,6 +2,7 @@ import { GitPullRequest, HardDrive } from 'lucide-react'
 import type { ReactNode } from 'react'
 import { Badge } from '../../components/ui/badge.tsx'
 import type { ReviewRunView } from '../../domain/review.ts'
+import { useI18n } from '../../i18n.tsx'
 import { CopyValue } from './CopyValue.tsx'
 import { formatCostUsd, formatDurationMs, formatTimestamp } from './formatting.ts'
 import {
@@ -33,6 +34,7 @@ function MetaItem({ term, children }: { term: string; children: ReactNode }) {
  * local worktree paths. Gate status always pairs icon, text and color.
  */
 export function ReviewHeader({ run }: ReviewHeaderProps) {
+  const { t } = useI18n()
   const gate = GATE_PRESENTATION[run.gateState]
   const authority = AUTHORITY_PRESENTATION[run.authority]
   const runStatus = RUN_STATUS_PRESENTATION[run.runStatus]
@@ -48,7 +50,7 @@ export function ReviewHeader({ run }: ReviewHeaderProps) {
             ) : (
               <HardDrive aria-hidden="true" className="h-4 w-4" />
             )}
-            <span>{SOURCE_KIND_LABEL[source.kind]}</span>
+            <span>{t(SOURCE_KIND_LABEL[source.kind])}</span>
           </div>
 
           {source.kind === 'github-pull-request' ? (
@@ -74,56 +76,59 @@ export function ReviewHeader({ run }: ReviewHeaderProps) {
         </div>
 
         <div className="flex flex-col items-end gap-2">
-          <Badge tone={gate.tone} label={gate.label} className="px-3 py-1.5 text-sm" />
+          <Badge tone={gate.tone} label={t(gate.label)} className="px-3 py-1.5 text-sm" />
           {run.runStatus !== 'completed' ? (
             <span className="text-meta text-text-secondary">
-              Run status: {runStatus.label} — {runStatus.description}
+              {t('Run status: {label} — {description}', {
+                label: t(runStatus.label),
+                description: t(runStatus.description),
+              })}
             </span>
           ) : null}
         </div>
       </div>
 
       <p className="mt-3 text-sm text-text-primary">{run.gate.summary}</p>
-      <p className="mt-1 text-meta text-text-secondary">{gate.description}</p>
+      <p className="mt-1 text-meta text-text-secondary">{t(gate.description)}</p>
 
       <div className="mt-3 flex flex-wrap items-center gap-2">
-        <Badge tone={authority.tone} label={authority.label} />
-        <span className="text-meta text-text-secondary">{authority.description}</span>
+        <Badge tone={authority.tone} label={t(authority.label)} />
+        <span className="text-meta text-text-secondary">{t(authority.description)}</span>
         {run.bypassState !== 'none' ? (
           <Badge
             tone={BYPASS_PRESENTATION[run.bypassState].tone}
-            label={BYPASS_PRESENTATION[run.bypassState].label}
+            label={t(BYPASS_PRESENTATION[run.bypassState].label)}
           />
         ) : null}
         {run.publicationStatus !== 'not_applicable' ? (
-          <Badge tone="neutral" label={PUBLICATION_PRESENTATION[run.publicationStatus].label} />
+          <Badge tone="neutral" label={t(PUBLICATION_PRESENTATION[run.publicationStatus].label)} />
         ) : null}
       </div>
 
       <dl className="mt-4 flex flex-wrap gap-x-6 gap-y-2 border-t border-border pt-3">
         {source.kind === 'github-pull-request' ? (
-          <MetaItem term="Author">{source.authorLogin}</MetaItem>
+          <MetaItem term={t('Author')}>{source.authorLogin}</MetaItem>
         ) : null}
-        <MetaItem term="Provider / Model">
+        <MetaItem term={t('Provider / Model')}>
           {run.summary.provider} / {run.summary.model}
         </MetaItem>
-        <MetaItem term="Review Policy">{run.policies.reviewPolicyVersion}</MetaItem>
-        <MetaItem term="Attempt">
+        <MetaItem term={t('Review Policy')}>{run.policies.reviewPolicyVersion}</MetaItem>
+        <MetaItem term={t('Attempt')}>
           <CopyValue value={run.attemptId} label="Attempt ID" truncate={false} />
         </MetaItem>
-        <MetaItem term="Duration">{formatDurationMs(run.summary.durationMs)}</MetaItem>
-        <MetaItem term="Cost">{formatCostUsd(run.summary.costUsd, run.summary.costUnknown)}</MetaItem>
+        <MetaItem term={t('Duration')}>{t(formatDurationMs(run.summary.durationMs))}</MetaItem>
+        <MetaItem term={t('Cost')}>{t(formatCostUsd(run.summary.costUsd, run.summary.costUnknown))}</MetaItem>
         {source.kind === 'github-pull-request' ? (
-          <MetaItem term="Commit">
-            <CopyValue value={source.commitSha} label="commit SHA" />
+          <MetaItem term={t('Commit')}>
+            <CopyValue value={source.commitSha} label={t('commit SHA')} />
           </MetaItem>
         ) : null}
         {source.kind !== 'github-pull-request' && source.snapshotSha !== null ? (
-          <MetaItem term="Snapshot">
-            <CopyValue value={source.snapshotSha} label="snapshot SHA" />
+          <MetaItem term={t('Snapshot')}>
+            <CopyValue value={source.snapshotSha} label={t('snapshot SHA')} />
           </MetaItem>
         ) : null}
-        <MetaItem term="Created">{formatTimestamp(run.summary.createdAt)}</MetaItem>
+        <MetaItem term={t('Created')}>{formatTimestamp(run.summary.createdAt)}</MetaItem>
       </dl>
 
       <div className="mt-4 border-t border-border pt-3">

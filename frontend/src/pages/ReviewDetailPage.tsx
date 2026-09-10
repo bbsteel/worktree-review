@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useParams, useSearchParams } from 'react-router'
+import { useI18n } from '../i18n.tsx'
 import { Button } from '../components/ui/button.tsx'
 import { EmptyState } from '../components/ui/empty-state.tsx'
 import { Skeleton } from '../components/ui/skeleton.tsx'
@@ -53,6 +54,7 @@ interface LoadResult {
 }
 
 export function ReviewDetailPage({ dataSource, openEventStream }: ReviewDetailPageProps) {
+  const { t } = useI18n()
   const { attemptId } = useParams()
   const source = useMemo(() => dataSource ?? createReviewDataSource(), [dataSource])
   const openStream = openEventStream ?? openReviewEventStream
@@ -172,8 +174,8 @@ export function ReviewDetailPage({ dataSource, openEventStream }: ReviewDetailPa
     return (
       <main className="mx-auto w-full max-w-6xl px-6 py-6">
         <EmptyState
-          title="Review attempt not found"
-          description="This link does not name a review attempt."
+          title={t('Review attempt not found')}
+          description={t('This link does not name a review attempt.')}
         />
       </main>
     )
@@ -182,9 +184,9 @@ export function ReviewDetailPage({ dataSource, openEventStream }: ReviewDetailPa
   if (result === null || result.attemptId !== attemptId) {
     return (
       <main className="mx-auto w-full max-w-6xl px-6 py-6" aria-busy="true">
-        <Skeleton className="h-40 w-full" label="Loading review header" />
-        <Skeleton className="mt-4 h-8 w-2/3" label="Loading review tabs" />
-        <Skeleton className="mt-4 h-64 w-full" label="Loading review content" />
+        <Skeleton className="h-40 w-full" label={t('Loading review header')} />
+        <Skeleton className="mt-4 h-8 w-2/3" label={t('Loading review tabs')} />
+        <Skeleton className="mt-4 h-64 w-full" label={t('Loading review content')} />
       </main>
     )
   }
@@ -193,8 +195,10 @@ export function ReviewDetailPage({ dataSource, openEventStream }: ReviewDetailPa
     return (
       <main className="mx-auto w-full max-w-6xl px-6 py-6">
         <EmptyState
-          title="Review attempt not found"
-          description={`No review attempt exists for "${attemptId}". The link may be stale or the attempt belongs to another environment.`}
+          title={t('Review attempt not found')}
+          description={`${t('No review attempt exists for "{attemptId}".', { attemptId })} ${t(
+            'The link may be stale or the attempt belongs to another environment.',
+          )}`}
         />
       </main>
     )
@@ -204,8 +208,10 @@ export function ReviewDetailPage({ dataSource, openEventStream }: ReviewDetailPa
     return (
       <main className="mx-auto w-full max-w-6xl px-6 py-6">
         <EmptyState
-          title="Could not load this review"
-          description={`Loading attempt "${attemptId}" failed. Retrying only reloads the same attempt — it never creates a new one.`}
+          title={t('Could not load this review')}
+          description={`${t('Loading attempt "{attemptId}" failed.', { attemptId })} ${t(
+            'Retrying only reloads the same attempt — it never creates a new one.',
+          )}`}
           action={
             <Button
               variant="secondary"
@@ -215,7 +221,7 @@ export function ReviewDetailPage({ dataSource, openEventStream }: ReviewDetailPa
                 setReloadIndex((index) => index + 1)
               }}
             >
-              Retry loading
+              {t('Retry loading')}
             </Button>
           }
         />
@@ -236,7 +242,7 @@ export function ReviewDetailPage({ dataSource, openEventStream }: ReviewDetailPa
       {showLiveIndicator ? (
         <p role="status" className="mt-3 flex items-center gap-2 text-meta text-status-running">
           <span aria-hidden="true" className="inline-block h-2 w-2 animate-pulse rounded-full bg-status-running" />
-          Live updates connected — events replay from sequence {lastSequence}.
+          {t('Live updates connected — events replay from sequence {sequence}.', { sequence: lastSequence })}
         </p>
       ) : null}
 
@@ -247,14 +253,17 @@ export function ReviewDetailPage({ dataSource, openEventStream }: ReviewDetailPa
         >
           {streamState === 'reconnecting' ? (
             <span>
-              Live connection lost — reconnecting from the last received event (sequence{' '}
-              {lastSequence}). The review keeps running on the server.
+              {t(
+                'Live connection lost — reconnecting from the last received event (sequence {sequence}). The review keeps running on the server.',
+                { sequence: lastSequence },
+              )}
             </span>
           ) : (
             <>
               <span>
-                Live updates disconnected. The review keeps running on the server; refresh or
-                reconnect to follow it again.
+                {t(
+                  'Live updates disconnected. The review keeps running on the server; refresh or reconnect to follow it again.',
+                )}
               </span>
               <Button
                 variant="secondary"
@@ -263,7 +272,7 @@ export function ReviewDetailPage({ dataSource, openEventStream }: ReviewDetailPa
                   setStreamEpoch((epoch) => epoch + 1)
                 }}
               >
-                Reconnect live updates
+                {t('Reconnect live updates')}
               </Button>
             </>
           )}
@@ -283,10 +292,10 @@ export function ReviewDetailPage({ dataSource, openEventStream }: ReviewDetailPa
         }}
         className="mt-4"
       >
-        <TabList aria-label="Review detail sections" className="overflow-x-auto">
+        <TabList aria-label={t('Review detail sections')} className="overflow-x-auto">
           {REVIEW_DETAIL_TABS.map((tab) => (
             <Tab key={tab} value={tab}>
-              {REVIEW_DETAIL_TAB_LABEL[tab]}
+              {t(REVIEW_DETAIL_TAB_LABEL[tab])}
             </Tab>
           ))}
         </TabList>
@@ -315,7 +324,7 @@ export function ReviewDetailPage({ dataSource, openEventStream }: ReviewDetailPa
       </Tabs>
 
       <footer className="mt-6 border-t border-border pt-3 text-meta text-text-secondary">
-        Attempt <CopyValue value={run.attemptId} label="Attempt ID" truncate={false} /> ·{' '}
+        {t('Attempt')} <CopyValue value={run.attemptId} label={t('Attempt ID')} truncate={false} /> ·{' '}
         {run.summary.repositoryDisplayName}
       </footer>
     </main>
