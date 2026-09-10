@@ -118,6 +118,9 @@ async def test_terminal_update_retries_same_check_and_does_not_rewrite_gate() ->
     assert retry.disposition is PublishDisposition.PUBLISHED
     assert checks.updates == [99]
     assert await store.publication_status(lease.attempt_id) is PublicationStatus.PUBLISHED
+    again = await publisher.retry_outbox(lease.attempt_id, report)
+    assert again.disposition is PublishDisposition.PUBLISHED
+    assert checks.updates == [99]
 
 
 @pytest.mark.asyncio

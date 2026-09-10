@@ -42,6 +42,8 @@ async def test_mirror_fetches_oids_into_installation_isolated_path(
     assert first.name == "octo__example.git"
     assert "octo/example" not in str(first).replace("octo__example", "")
     await manager.verify_oids(first, (oid,))
+    with pytest.raises(MirrorError, match=r"does not match required"):
+        await manager.verify_oids(first, (oid[:12],))
     with pytest.raises(MirrorError, match="not present"):
         await manager.verify_oids(first, ("0" * 40,))
     manager.cleanup(installation_id=7, repository_full_name="octo/example")

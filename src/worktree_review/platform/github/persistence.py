@@ -12,6 +12,36 @@ from worktree_review.application.review_events import ReviewEvent
 from worktree_review.platform.github.snapshot import AttemptExecutionSnapshot, PublicationIntent
 from worktree_review.server.state import AttemptLease, StateConflictError
 
+_CLAIMABLE_PUBLICATION = frozenset({PublicationStatus.QUEUED, PublicationStatus.FAILED})
+
+
+def assert_snapshot_is_writable(
+    existing: AttemptExecutionSnapshot | None, new: AttemptExecutionSnapshot
+) -> None:
+    if existing is not None and existing != new:
+        raise StateConflictError("execution snapshot is immutable")
+
+
+def publication_is_claimable(status: PublicationStatus | None) -> bool:
+    return status in _CLAIMABLE_PUBLICATION
+
+
+def _parse_snapshot(payload: Any) -> AttemptExecutionSnapshot:
+    if isinstance(payload, AttemptExecutionSnapshot):
+        return payload
+    if isinstance(payload, dict):
+        return AttemptExecutionSnapshot.model_validate(payload)
+    return AttemptExecutionSnapshot.model_validate_json(payload)
+
+
+def _parse_publication_intent(payload: Any) -> PublicationIntent:
+    if isinstance(payload, PublicationIntent):
+        return payload
+    if isinstance(payload, dict):
+        return PublicationIntent.model_validate(payload)
+    return PublicationIntent.model_validate_json(payload)
+
+
 GITHUB_PERSISTENCE_SQL = """
 ALTER TABLE review_attempts ADD COLUMN IF NOT EXISTS check_run_id BIGINT;
 ALTER TABLE review_attempts ADD COLUMN IF NOT EXISTS publication_status TEXT;
@@ -63,7 +93,11 @@ class GitHubReviewStore(Protocol):
 
     async def append_review_event(self, event: ReviewEvent) -> None: ...
 
+    async def append(self, event: ReviewEvent) -> None: ...
+
     async def list_review_events(self, attempt_id: str) -> tuple[ReviewEvent, ...]: ...
+
+    async def list_events(self, attempt_id: str) -> tuple[ReviewEvent, ...]: ...
 
     async def save_review_result(self, attempt_id: str, result_json: str) -> None: ...
 
@@ -113,8 +147,7 @@ class InMemoryGitHubReviewStore:
             raise StateConflictError("execution snapshot must not contain credentials")
         async with self._lock:
             extras = self._extras(snapshot.attempt_id)
-            if extras.snapshot is not None and extras.snapshot != snapshot:
-                raise StateConflictError("execution snapshot is immutable")
+            assert_snapshot_is_writable(extras.snapshot, snapshot)
             extras.snapshot = snapshot
 
     async def get_execution_snapshot(self, attempt_id: str) -> AttemptExecutionSnapshot | None:
@@ -139,12 +172,18 @@ class InMemoryGitHubReviewStore:
             extras = self._extras(event.attempt_id)
             extras.events.append(event)
 
+    async def append(self, event: ReviewEvent) -> None:
+        await self.append_review_event(event)
+
     async def list_review_events(self, attempt_id: str) -> tuple[ReviewEvent, ...]:
         async with self._lock:
             extras = self._attempts.get(attempt_id)
             if extras is None:
                 return ()
             return tuple(extras.events)
+
+    async def list_events(self, attempt_id: str) -> tuple[ReviewEvent, ...]:
+        return await self.list_review_events(attempt_id)
 
     async def save_review_result(self, attempt_id: str, result_json: str) -> None:
         async with self._lock:
@@ -187,8 +226,8 @@ class InMemoryGitHubReviewStore:
             extras = self._attempts.get(attempt_id)
             if extras is None or extras.outbox is None:
                 return None
-            if extras.outbox.status is PublicationStatus.PUBLISHED:
-                return extras.outbox
+            if not publication_is_claimable(extras.outbox.status):
+                return None
             extras.outbox = extras.outbox.model_copy(
                 update={
                     "status": PublicationStatus.IN_PROGRESS,
@@ -205,9 +244,7 @@ class InMemoryGitHubReviewStore:
             extras = self._extras(attempt_id)
             if extras.outbox is None:
                 raise StateConflictError(f"no publication intent for {attempt_id}")
-            extras.outbox = extras.outbox.model_copy(
-                update={"status": status, "last_error": error}
-            )
+            extras.outbox = extras.outbox.model_copy(update={"status": status, "last_error": error})
             extras.publication_status = status
 
     async def publication_status(self, attempt_id: str) -> PublicationStatus | None:
@@ -241,17 +278,33 @@ class PostgresGitHubReviewStore:
     async def save_execution_snapshot(self, snapshot: AttemptExecutionSnapshot) -> None:
         dumped = snapshot.model_dump_json()
         async with self._pool.acquire() as connection:
-            await connection.execute(
-                """
-                UPDATE review_attempts
-                SET execution_snapshot = $2::jsonb
-                WHERE attempt_id = $1::uuid AND (
-                    execution_snapshot IS NULL OR execution_snapshot = $2::jsonb
+            async with connection.transaction():
+                row = await connection.fetchrow(
+                    """
+                    SELECT execution_snapshot
+                    FROM review_attempts
+                    WHERE attempt_id = $1::uuid
+                    FOR UPDATE
+                    """,
+                    snapshot.attempt_id,
                 )
-                """,
-                snapshot.attempt_id,
-                dumped,
-            )
+                if row is None:
+                    raise StateConflictError(f"unknown Attempt: {snapshot.attempt_id}")
+                existing = (
+                    None
+                    if row["execution_snapshot"] is None
+                    else _parse_snapshot(row["execution_snapshot"])
+                )
+                assert_snapshot_is_writable(existing, snapshot)
+                await connection.execute(
+                    """
+                    UPDATE review_attempts
+                    SET execution_snapshot = $2::jsonb
+                    WHERE attempt_id = $1::uuid
+                    """,
+                    snapshot.attempt_id,
+                    dumped,
+                )
 
     async def get_execution_snapshot(self, attempt_id: str) -> AttemptExecutionSnapshot | None:
         async with self._pool.acquire() as connection:
@@ -261,10 +314,7 @@ class PostgresGitHubReviewStore:
             )
         if row is None or row["execution_snapshot"] is None:
             return None
-        payload = row["execution_snapshot"]
-        if not isinstance(payload, dict):
-            payload = AttemptExecutionSnapshot.model_validate_json(payload).model_dump()
-        return AttemptExecutionSnapshot.model_validate(payload)
+        return _parse_snapshot(row["execution_snapshot"])
 
     async def set_check_run_id(self, attempt_id: str, check_run_id: int) -> None:
         async with self._pool.acquire() as connection:
@@ -299,6 +349,9 @@ class PostgresGitHubReviewStore:
                 event.model_dump_json(by_alias=True),
             )
 
+    async def append(self, event: ReviewEvent) -> None:
+        await self.append_review_event(event)
+
     async def list_review_events(self, attempt_id: str) -> tuple[ReviewEvent, ...]:
         async with self._pool.acquire() as connection:
             rows = await connection.fetch(
@@ -309,6 +362,9 @@ class PostgresGitHubReviewStore:
                 attempt_id,
             )
         return tuple(ReviewEvent.model_validate(row["event_json"]) for row in rows)
+
+    async def list_events(self, attempt_id: str) -> tuple[ReviewEvent, ...]:
+        return await self.list_review_events(attempt_id)
 
     async def save_review_result(self, attempt_id: str, result_json: str) -> None:
         async with self._pool.acquire() as connection:
@@ -387,23 +443,31 @@ class PostgresGitHubReviewStore:
 
     async def claim_publication(self, attempt_id: str) -> PublicationIntent | None:
         async with self._pool.acquire() as connection:
-            row = await connection.fetchrow(
-                "SELECT * FROM publication_outbox WHERE attempt_id = $1::uuid FOR UPDATE",
-                attempt_id,
-            )
-            if row is None:
-                return None
-            await connection.execute(
-                """
-                UPDATE publication_outbox
-                SET status = $2, attempt_count = attempt_count + 1
-                WHERE attempt_id = $1::uuid AND status <> $3
-                """,
-                attempt_id,
-                PublicationStatus.IN_PROGRESS.value,
-                PublicationStatus.PUBLISHED.value,
-            )
-        return PublicationIntent.model_validate_json(row["payload"])
+            async with connection.transaction():
+                row = await connection.fetchrow(
+                    """
+                    SELECT payload, status FROM publication_outbox
+                    WHERE attempt_id = $1::uuid
+                    FOR UPDATE
+                    """,
+                    attempt_id,
+                )
+                if row is None:
+                    return None
+                status = PublicationStatus(row["status"])
+                if not publication_is_claimable(status):
+                    return None
+                await connection.execute(
+                    """
+                    UPDATE publication_outbox
+                    SET status = $2, attempt_count = attempt_count + 1
+                    WHERE attempt_id = $1::uuid AND status = $3
+                    """,
+                    attempt_id,
+                    PublicationStatus.IN_PROGRESS.value,
+                    status.value,
+                )
+                return _parse_publication_intent(row["payload"])
 
     async def mark_publication(
         self, attempt_id: str, *, status: PublicationStatus, error: str | None = None

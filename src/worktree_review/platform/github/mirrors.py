@@ -51,10 +51,6 @@ class RepositoryMirrorManager:
 
         ``clone_url`` must come from the trusted GitHub API, not pull-request content.
         """
-        if clone_url.startswith("/") and "github.com" not in clone_url:
-            # Local file remotes are allowed for tests; PR bodies still cannot pick the dir
-            # because callers never pass webhook-controlled paths.
-            pass
         path = self.mirror_path(
             installation_id=installation_id, repository_full_name=repository_full_name
         )
@@ -75,7 +71,7 @@ class RepositoryMirrorManager:
                 found = await resolve_commit(oid, resolved)
             except (GitCliError, InvalidInvocationError) as exc:
                 raise MirrorError(f"required object {oid} is not present in the mirror") from exc
-            if found != oid and not found.startswith(oid):
+            if found != oid:
                 raise MirrorError(f"mirror object {found} does not match required {oid}")
 
     def cleanup(self, *, installation_id: int, repository_full_name: str) -> None:

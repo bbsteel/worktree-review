@@ -2,15 +2,19 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Awaitable, Callable
 from pathlib import Path
+from typing import Any
 
+from worktree_review.application.event_recorder import ReviewEventRecorder
 from worktree_review.application.review_service import ReviewApplicationService
 from worktree_review.core.identity import ProposedSource, ResolvedCommitPair
 from worktree_review.core.pipeline import ReviewRequest
 from worktree_review.core.policy import load_compute_policy, load_review_policy
 from worktree_review.core.provider import ProviderClient
-from worktree_review.core.report import ReviewReport
+from worktree_review.core.report import ReviewProgressEvent, ReviewReport
+from worktree_review.platform.cli.result import cli_result_document
 from worktree_review.platform.github.checks import (
     CheckRunTransport,
     build_in_progress_check_run_payload,
@@ -51,6 +55,7 @@ class GitHubReviewWorker:
         self._resolve_clone_url = resolve_clone_url
         self._provider_factory = provider_factory
         self._details_url = details_url
+        self._recorder = ReviewEventRecorder(github_store)
         self.pipeline_invocations = 0
 
     async def execute_claimed_attempt(self, attempt_id: str) -> ReviewReport | None:
@@ -89,29 +94,84 @@ class GitHubReviewWorker:
             ),
         )
         self.pipeline_invocations += 1
-        report = await ReviewApplicationService().execute(
-            ReviewRequest(
-                resolved=ResolvedCommitPair(
-                    source_repository=snapshot.request_key.source_repository,
-                    target_ref=snapshot.request_key.target_ref,
-                    target_head_oid=snapshot.request_key.target_head_oid,
-                    proposed_ref=snapshot.proposed_ref,
-                    proposed_head_oid=snapshot.request_key.proposed_head_oid,
-                    proposed_source=ProposedSource.COMMITTED_REF,
-                ),
-                review_policy=review_policy,
-                review_policy_version=review_version,
-                compute_policy=compute_policy,
-                compute_policy_version=compute_version,
+        await self._recorder.hydrate(attempt_id)
+        if not await self._github_store.list_events(attempt_id):
+            await self._recorder.record(
+                attempt_id=attempt_id,
                 surface="github",
-            ),
-            repository_path=repository_path,
-            attempt_id=lease.attempt_id,
-            provider=self._provider_factory(snapshot),
-        )
+                event_type="attempt.created",
+                payload={
+                    "source": "github-pull-request",
+                    "repository": snapshot.change_request.repository,
+                    "pull_request_number": snapshot.change_request.pull_request_number,
+                },
+            )
+        progress_queue: asyncio.Queue[tuple[str, dict[str, Any]] | None] = asyncio.Queue()
+
+        def on_progress(progress: ReviewProgressEvent) -> None:
+            progress_queue.put_nowait(
+                self._recorder.map_progress(progress, attempt_id=attempt_id, surface="github")
+            )
+
+        async def _drain_progress() -> None:
+            while True:
+                item = await progress_queue.get()
+                if item is None:
+                    return
+                event_type, payload = item
+                await self._recorder.record(
+                    attempt_id=attempt_id,
+                    surface="github",
+                    event_type=event_type,
+                    payload=payload,
+                )
+
+        drainer = asyncio.create_task(_drain_progress())
+        try:
+            report = await ReviewApplicationService().execute(
+                ReviewRequest(
+                    resolved=ResolvedCommitPair(
+                        source_repository=snapshot.request_key.source_repository,
+                        target_ref=snapshot.request_key.target_ref,
+                        target_head_oid=snapshot.request_key.target_head_oid,
+                        proposed_ref=snapshot.proposed_ref,
+                        proposed_head_oid=snapshot.request_key.proposed_head_oid,
+                        proposed_source=ProposedSource.COMMITTED_REF,
+                    ),
+                    review_policy=review_policy,
+                    review_policy_version=review_version,
+                    compute_policy=compute_policy,
+                    compute_policy_version=compute_version,
+                    surface="github",
+                ),
+                repository_path=repository_path,
+                attempt_id=lease.attempt_id,
+                provider=self._provider_factory(snapshot),
+                on_progress=on_progress,
+            )
+        except Exception as exc:
+            await progress_queue.put(None)
+            await drainer
+            await self._recorder.record(
+                attempt_id=attempt_id,
+                surface="github",
+                event_type="attempt.failed",
+                payload={"safe_detail": str(exc)},
+            )
+            raise
+        await progress_queue.put(None)
+        await drainer
         if report.review_identity is not None:
             await self._state.record_review_identity(
                 attempt_id=lease.attempt_id, review_identity=report.review_identity
             )
-        await self._github_store.save_review_result(attempt_id, report.model_dump_json())
+        await self._github_store.save_review_result(
+            attempt_id, cli_result_document(report).model_dump_json(by_alias=True)
+        )
+        await self._recorder.record(
+            attempt_id=attempt_id,
+            surface="github",
+            event_type="attempt.completed",
+            payload={"gate_state": report.gate_state.value},
+        )
         return report

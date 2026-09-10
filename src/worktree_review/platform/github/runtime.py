@@ -23,6 +23,7 @@ from worktree_review.platform.github.authz import (
     GitHubRoleRetryAuthorizer,
 )
 from worktree_review.platform.github.checks import CheckRunPayload
+from worktree_review.platform.github.persistence import PostgresGitHubReviewStore
 from worktree_review.platform.github.retry import (
     GitHubRetryCoordinator,
     RetryResolution,
@@ -239,6 +240,7 @@ class ServerRuntime:
     retry_coordinator: GitHubRetryCoordinator
     database_pool: asyncpg.Pool
     http_client: httpx.AsyncClient
+    github_store: PostgresGitHubReviewStore | None = None
 
     async def aclose(self) -> None:
         await self.http_client.aclose()
@@ -274,6 +276,8 @@ async def build_server_runtime(
     try:
         state = PostgresAuthoritativeAttemptStore(database_pool)
         await state.initialise()
+        github_store = PostgresGitHubReviewStore(database_pool)
+        await github_store.initialise()
         queue = PgQueuer.from_asyncpg_pool(database_pool)
         if queue.queries is None:
             raise ServerConfigurationError("pgqueuer query repository is not initialized")
@@ -292,6 +296,7 @@ async def build_server_runtime(
             retry_coordinator=retry_coordinator,
             database_pool=database_pool,
             http_client=http_client,
+            github_store=github_store,
         )
     except Exception:
         await http_client.aclose()

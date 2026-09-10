@@ -89,6 +89,14 @@ class GitHubCheckPublisher:
     async def retry_outbox(self, attempt_id: str, report: ReviewReport) -> PublishResult:
         intent = await self._github_store.claim_publication(attempt_id)
         if intent is None:
+            status = await self._github_store.publication_status(attempt_id)
+            if status is PublicationStatus.PUBLISHED:
+                return PublishResult(
+                    disposition=PublishDisposition.PUBLISHED,
+                    attempt_id=attempt_id,
+                    gate_state=report.gate_state,
+                    detail="authoritative gate decision was already published",
+                )
             raise GitHubApiError(f"no publication intent for {attempt_id}")
         cas = await self._state.publish_if_authoritative(
             attempt_id=attempt_id,
@@ -112,6 +120,23 @@ class GitHubCheckPublisher:
             annotations=limited_annotations(report),
             details_url=self._details_url,
         )
+        if cas.disposition is not PublishDisposition.PUBLISHED:
+            # This Attempt's own Check may complete as audit-only. Never create a
+            # new Check, and never PATCH the successor Attempt's check_run_id.
+            try:
+                await self._checks.update_check_run(
+                    repository=report.resolved.source_repository,
+                    check_run_id=check_run_id,
+                    payload=payload,
+                )
+            except GitHubApiError:
+                pass
+            await self._github_store.mark_publication(
+                attempt_id,
+                status=PublicationStatus.FAILED,
+                error="superseded before publication",
+            )
+            return cas
         try:
             await self._checks.update_check_run(
                 repository=report.resolved.source_repository,
@@ -123,12 +148,5 @@ class GitHubCheckPublisher:
                 attempt_id, status=PublicationStatus.FAILED, error=str(exc)
             )
             return cas
-        if cas.disposition is PublishDisposition.PUBLISHED:
-            await self._github_store.mark_publication(
-                attempt_id, status=PublicationStatus.PUBLISHED
-            )
-        else:
-            await self._github_store.mark_publication(
-                attempt_id, status=PublicationStatus.FAILED, error="superseded before publication"
-            )
+        await self._github_store.mark_publication(attempt_id, status=PublicationStatus.PUBLISHED)
         return cas

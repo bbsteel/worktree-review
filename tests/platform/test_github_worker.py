@@ -57,9 +57,7 @@ async def test_worker_uses_snapshot_and_preallocated_attempt_id(
         installation_id=7, repository="octo/example", pull_request_number=42
     )
     request_key = _request_key(oid, review_version)
-    lease = await state.start_authoritative_attempt(
-        change_request=locator, request_key=request_key
-    )
+    lease = await state.start_authoritative_attempt(change_request=locator, request_key=request_key)
     await github_store.save_execution_snapshot(
         AttemptExecutionSnapshot(
             attempt_id=lease.attempt_id,
@@ -91,7 +89,14 @@ async def test_worker_uses_snapshot_and_preallocated_attempt_id(
     assert report.attempt_id == lease.attempt_id
     assert worker.pipeline_invocations == 1
     assert checks.updated == [CheckRunStatus.IN_PROGRESS]
-    assert await github_store.get_review_result(lease.attempt_id) is not None
+    result_json = await github_store.get_review_result(lease.attempt_id)
+    assert result_json is not None
+    assert "worktree-review.cli.result/v1" in result_json
+    events = await github_store.list_review_events(lease.attempt_id)
+    assert events[0].event_type == "attempt.created"
+    assert events[0].surface == "github"
+    assert any(event.event_type.startswith("stage.") for event in events)
+    assert events[-1].event_type == "attempt.completed"
 
     superseded = await state.start_authoritative_attempt(
         change_request=locator, request_key=request_key
@@ -115,9 +120,7 @@ async def test_worker_refuses_drifted_policy(
         installation_id=7, repository="octo/example", pull_request_number=42
     )
     request_key = _request_key(oid, review_version)
-    lease = await state.start_authoritative_attempt(
-        change_request=locator, request_key=request_key
-    )
+    lease = await state.start_authoritative_attempt(change_request=locator, request_key=request_key)
     drifted = AttemptExecutionSnapshot(
         attempt_id=lease.attempt_id,
         change_request=locator,
