@@ -47,7 +47,9 @@ test('demo package: blocked case overview frame', async ({ page }) => {
 test('demo package: blocked case findings and evidence frame', async ({ page }) => {
   await prepare(page)
   await page.goto(`/reviews/${BLOCKED_ATTEMPT}?tab=findings`)
-  await page.getByRole('checkbox', { name: 'Blocking only' }).check()
+  const blockingOnly = page.getByRole('checkbox', { name: 'Blocking only' })
+  await blockingOnly.click()
+  await expect(blockingOnly).toBeChecked()
   await expect(page.getByText('1 of 3 findings')).toBeVisible()
   await expect(
     page.getByRole('heading', { name: /fallback branch still accepts the webhook request/ }),

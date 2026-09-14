@@ -29,6 +29,14 @@ def default_journal_root() -> Path:
 class SessionJournalWriter:
     def __init__(self, root: Path | None = None) -> None:
         self.root = root or default_journal_root()
+        # Observation-only failure tracking: surfaced as a warning in the
+        # integration status, never a Gate input.
+        self.last_error: str | None = None
+        self.last_error_at: str | None = None
+
+    def _note_failure(self, exc: Exception) -> None:
+        self.last_error = f"{exc.__class__.__name__}: {exc}"[:512]
+        self.last_error_at = datetime.now(UTC).isoformat()
 
     def _attempt_dir(self, attempt_id: str) -> Path:
         return self.root / attempt_id
@@ -73,7 +81,8 @@ class SessionJournalWriter:
     def touch_heartbeat(self, attempt_id: str) -> None:
         try:
             self._write_metadata(attempt_id, self.last_sequence(attempt_id))
-        except Exception:
+        except Exception as exc:
+            self._note_failure(exc)
             logger.warning("session journal heartbeat failed", exc_info=True)
 
     def append_event(self, event: ReviewEvent) -> None:
@@ -86,7 +95,8 @@ class SessionJournalWriter:
     async def publish(self, event: ReviewEvent) -> None:
         try:
             await asyncio.to_thread(self.append_event, event)
-        except Exception:
+        except Exception as exc:
+            self._note_failure(exc)
             logger.warning("session journal write failed", exc_info=True)
 
     def write_result(self, attempt_id: str, result_json: str) -> None:
@@ -99,7 +109,8 @@ class SessionJournalWriter:
             tmp = directory / "result.json.tmp"
             tmp.write_text(result_json, encoding="utf-8")
             tmp.replace(target)
-        except Exception:
+        except Exception as exc:
+            self._note_failure(exc)
             logger.warning("session journal result write failed", exc_info=True)
 
     def backfill(self, events: tuple[ReviewEvent, ...]) -> None:
@@ -113,5 +124,6 @@ class SessionJournalWriter:
                     continue
                 self.append_event(event)
                 seen.add(event.sequence)
-        except Exception:
+        except Exception as exc:
+            self._note_failure(exc)
             logger.warning("session journal backfill failed", exc_info=True)

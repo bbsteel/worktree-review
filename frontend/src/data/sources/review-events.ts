@@ -15,6 +15,16 @@ import { DtoValidationError } from '../api/map-dto.ts'
 
 export const REVIEW_EVENT_SCHEMA = 'worktree-review.event/v1'
 
+/**
+ * Server-side terminal events (platform/web/sse.py _TERMINAL_EVENTS). The
+ * client closes on the same set: after attempt.failed the server ends the
+ * stream, and reconnecting would replay forever without ever closing.
+ */
+export const TERMINAL_REVIEW_EVENT_TYPES: ReadonlySet<string> = new Set([
+  'attempt.completed',
+  'attempt.failed',
+])
+
 export type ReviewEventStreamState =
   | 'connecting'
   | 'live'
@@ -136,7 +146,7 @@ export function openReviewEventStream(options: ReviewEventStreamOptions): Review
     }
     lastSequence = event.sequence
     onEvent(event)
-    if (event.event_type === 'attempt.completed') {
+    if (TERMINAL_REVIEW_EVENT_TYPES.has(event.event_type)) {
       const current = source
       source = null
       current?.close()

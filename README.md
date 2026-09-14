@@ -7,7 +7,7 @@ decision for local use or authoritative GitHub gating.
 | Entry point | Role |
 | --- | --- |
 | `worktree-review` | Local CLI. One-shot review of current worktree changes, recent commits, or an explicit committed head. |
-| `worktree-review-server` | GitHub App: webhook receiver and review workers in one process. |
+| `worktree-review-server` | Local Web UI (loopback, SQLite, live progress over SSE) plus the GitHub App: webhook receiver and review workers in one process. |
 
 Product semantics live in `worktree_review.core`. Platform adapters only map transport (terminal, GitHub checks/webhooks) onto core types. See `docs/PRD.md` and `docs/TECH-DESIGN.md`.
 
@@ -15,7 +15,9 @@ This repository currently contains the **stage-one core**: domain identities,
 policy validation, exact merge construction, verified read-only Review Worktree
 materialization, context gathering, provider-backed review dimensions, bounded
 provider calls and usage metering, finding verification, deterministic gate evaluation, CLI output, and
-fail-closed stage records. The GitHub server assembles the trigger coordinator,
+fail-closed stage records, and the local Web UI (repository registration,
+trusted policy and provider profile management, live Attempt progress, and
+Session Insight observation). The GitHub server assembles the trigger coordinator,
 App installation token provider, durable Attempt worker, shared Pipeline, and
 Check publication outbox: a ready pull request creates an authoritative Attempt,
 the worker restores the immutable snapshot, and the terminal Check plus Web
@@ -26,7 +28,8 @@ Review Detail are published without rewriting Core Gate on transport failure.
 - Python ≥ 3.12
 - Git ≥ 2.38 (`git merge-tree --write-tree`)
 - [uv](https://docs.astral.sh/uv/) for development
-- PostgreSQL 16 for the GitHub service (not required for the CLI)
+- PostgreSQL 16 for the GitHub service (not required for the CLI or local Web UI)
+- Node.js 22 for frontend development and for building the packaged Web UI bundle
 
 ## Development
 

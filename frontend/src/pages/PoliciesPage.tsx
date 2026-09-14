@@ -1,13 +1,18 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, type FormEvent } from 'react'
 import { useSearchParams } from 'react-router'
 import { useAdminClient } from '../app/admin-client.ts'
 import { useI18n } from '../i18n.tsx'
 import { Badge } from '../components/ui/badge.tsx'
+import { Button } from '../components/ui/button.tsx'
 import { EmptyState } from '../components/ui/empty-state.tsx'
 import { Skeleton } from '../components/ui/skeleton.tsx'
 import { Tab, TabList, TabPanel, Tabs } from '../components/ui/tabs.tsx'
-import type { ComputePolicyDto, ReviewPolicyDto } from '../data/api/dto.ts'
+import type { ComputePolicyDto, ProviderProfileDto, ReviewPolicyDto } from '../data/api/dto.ts'
+import { ApiError } from '../data/api/review-api-client.ts'
 import { CopyValue } from '../features/review-detail/CopyValue.tsx'
+
+const FIELD_CLASS =
+  'min-h-9 w-full rounded-md border border-border bg-surface px-2 text-sm text-text-primary focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring'
 
 function DefinitionRow({ term, children }: { term: string; children: React.ReactNode }) {
   return (
@@ -49,15 +54,28 @@ export function PoliciesPage() {
   const section = searchParams.get('section') === 'compute' ? 'compute' : 'review'
   const [reviewPolicies, setReviewPolicies] = useState<ReviewPolicyDto[] | null>(null)
   const [computePolicies, setComputePolicies] = useState<ComputePolicyDto[] | null>(null)
+  const [providerProfiles, setProviderProfiles] = useState<ProviderProfileDto[]>([])
   const [loadError, setLoadError] = useState<string | null>(null)
+  const [reloadCounter, setReloadCounter] = useState(0)
+  const [reviewPath, setReviewPath] = useState('')
+  const [computePath, setComputePath] = useState('')
+  const [computeProfileId, setComputeProfileId] = useState('')
+  const [registering, setRegistering] = useState(false)
+  const [registerError, setRegisterError] = useState<string | null>(null)
+  const [registerNotice, setRegisterNotice] = useState<string | null>(null)
 
   useEffect(() => {
     let cancelled = false
-    Promise.all([client.listReviewPolicies(), client.listComputePolicies()])
-      .then(([review, compute]) => {
+    Promise.all([
+      client.listReviewPolicies(),
+      client.listComputePolicies(),
+      client.listProviderProfiles(),
+    ])
+      .then(([review, compute, profiles]) => {
         if (!cancelled) {
           setReviewPolicies(review)
           setComputePolicies(compute)
+          setProviderProfiles(profiles)
         }
       })
       .catch((caught: unknown) => {
@@ -70,7 +88,52 @@ export function PoliciesPage() {
     return () => {
       cancelled = true
     }
-  }, [client, t])
+  }, [client, t, reloadCounter])
+
+  async function registerReviewPolicy(event: FormEvent) {
+    event.preventDefault()
+    setRegistering(true)
+    setRegisterError(null)
+    setRegisterNotice(null)
+    try {
+      const registered = await client.registerReviewPolicy({ path: reviewPath.trim() })
+      setReviewPath('')
+      setRegisterNotice(t('Registered trusted Review Policy {name}.', { name: registered.name }))
+      setReloadCounter((count) => count + 1)
+    } catch (caught) {
+      setRegisterError(
+        caught instanceof ApiError
+          ? `${caught.code}: ${caught.message}`
+          : t('The policy could not be registered. Nothing was changed.'),
+      )
+    } finally {
+      setRegistering(false)
+    }
+  }
+
+  async function registerComputePolicy(event: FormEvent) {
+    event.preventDefault()
+    setRegistering(true)
+    setRegisterError(null)
+    setRegisterNotice(null)
+    try {
+      const registered = await client.registerComputePolicy({
+        path: computePath.trim(),
+        provider_profile_id: computeProfileId === '' ? null : computeProfileId,
+      })
+      setComputePath('')
+      setRegisterNotice(t('Registered trusted Compute Policy {name}.', { name: registered.name }))
+      setReloadCounter((count) => count + 1)
+    } catch (caught) {
+      setRegisterError(
+        caught instanceof ApiError
+          ? `${caught.code}: ${caught.message}`
+          : t('The policy could not be registered. Nothing was changed.'),
+      )
+    } finally {
+      setRegistering(false)
+    }
+  }
 
   if (loadError !== null) {
     return (
@@ -120,6 +183,46 @@ export function PoliciesPage() {
         </TabList>
 
         <TabPanel value="review">
+          <form
+            aria-label={t('Register trusted Review Policy')}
+            className="mb-3 rounded-lg border border-border bg-surface p-4"
+            onSubmit={(event) => void registerReviewPolicy(event)}
+          >
+            <h2 className="text-sm font-semibold text-text-primary">
+              {t('Register trusted Review Policy')}
+            </h2>
+            <p className="mt-1 text-meta text-text-secondary">
+              {t('The policy file must live on this server, outside every registered repository. The browser submits a path; it never uploads policy content.')}
+            </p>
+            <label className="mt-2 flex flex-col gap-1 text-meta text-text-secondary">
+              {t('Trusted policy file path')}
+              <input
+                type="text"
+                value={reviewPath}
+                onChange={(event) => {
+                  setReviewPath(event.target.value)
+                }}
+                className={`${FIELD_CLASS} font-mono`}
+                placeholder="/home/you/trusted/review-policy.yaml"
+                required
+              />
+            </label>
+            <div className="mt-3 flex items-center gap-3">
+              <Button variant="primary" size="sm" type="submit" disabled={registering || reviewPath.trim() === ''}>
+                {registering ? t('Registering…') : t('Register Review Policy')}
+              </Button>
+              {registerNotice !== null ? (
+                <span role="status" className="text-meta text-status-passed">
+                  {registerNotice}
+                </span>
+              ) : null}
+              {registerError !== null ? (
+                <span role="alert" className="text-meta text-status-error">
+                  {registerError}
+                </span>
+              ) : null}
+            </div>
+          </form>
           {reviewPolicies.length === 0 ? (
             <EmptyState
               title={t('No registered Review Policies')}
@@ -174,6 +277,65 @@ export function PoliciesPage() {
         </TabPanel>
 
         <TabPanel value="compute">
+          <form
+            aria-label={t('Register trusted Compute Policy')}
+            className="mb-3 rounded-lg border border-border bg-surface p-4"
+            onSubmit={(event) => void registerComputePolicy(event)}
+          >
+            <h2 className="text-sm font-semibold text-text-primary">
+              {t('Register trusted Compute Policy')}
+            </h2>
+            <p className="mt-1 text-meta text-text-secondary">
+              {t('Bind the Compute Policy to a Provider Profile so reviews have a real compute connection. The binding is validated against the policy provider and, for local-cli, the command fingerprint.')}
+            </p>
+            <div className="mt-2 grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <label className="flex flex-col gap-1 text-meta text-text-secondary">
+                {t('Trusted policy file path')}
+                <input
+                  type="text"
+                  value={computePath}
+                  onChange={(event) => {
+                    setComputePath(event.target.value)
+                  }}
+                  className={`${FIELD_CLASS} font-mono`}
+                  placeholder="/home/you/trusted/compute-policy.yaml"
+                  required
+                />
+              </label>
+              <label className="flex flex-col gap-1 text-meta text-text-secondary">
+                {t('Bound Provider Profile')}
+                <select
+                  value={computeProfileId}
+                  onChange={(event) => {
+                    setComputeProfileId(event.target.value)
+                  }}
+                  className={FIELD_CLASS}
+                >
+                  <option value="">{t('Not bound (reviews cannot start)')}</option>
+                  {providerProfiles.map((profile) => (
+                    <option key={profile.profile_id} value={profile.profile_id}>
+                      {profile.name} ({profile.provider})
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+            <div className="mt-3 flex items-center gap-3">
+              <Button variant="primary" size="sm" type="submit" disabled={registering || computePath.trim() === ''}>
+                {registering ? t('Registering…') : t('Register Compute Policy')}
+              </Button>
+              {registerNotice !== null ? (
+                <span role="status" className="text-meta text-status-passed">
+                  {registerNotice}
+                </span>
+              ) : null}
+              {registerError !== null ? (
+                <span role="alert" className="text-meta text-status-error">
+                  {registerError}
+                </span>
+              ) : null}
+            </div>
+          </form>
           {computePolicies.length === 0 ? (
             <EmptyState
               title={t('No registered Compute Policies')}
@@ -199,7 +361,13 @@ export function PoliciesPage() {
                       </span>
                     </DefinitionRow>
                     <DefinitionRow term={t('Provider Profile reference')}>
-                      {policy.provider_profile_name}
+                      {policy.provider_profile_id === '' ? (
+                        <span className="text-status-error">
+                          {t('Not bound — reviews using this policy cannot start')}
+                        </span>
+                      ) : (
+                        policy.provider_profile_name
+                      )}
                     </DefinitionRow>
                     <DefinitionRow term={t('Max output tokens per call')}>
                       <span className="tabular-nums">

@@ -81,7 +81,23 @@ def _empty_pipeline() -> list[dict[str, Any]]:
     ]
 
 
-def _local_actions(*, terminal: bool) -> dict[str, Any]:
+def _session_insight_action(state: str) -> dict[str, Any]:
+    if state == "connected":
+        return {"visible": True, "enabled": True, "disabled_reason": None}
+    reasons = {
+        "disabled": "Session Insight observation is disabled by configuration.",
+        "incompatible": "Session Insight is reachable but lacks the worktree-review reader.",
+    }
+    return {
+        "visible": True,
+        "enabled": False,
+        "disabled_reason": reasons.get(state, "Session Insight is not connected."),
+    }
+
+
+def _local_actions(
+    *, terminal: bool, session_insight_state: str = "disconnected"
+) -> dict[str, Any]:
     retry_reason = (
         None
         if terminal
@@ -103,11 +119,7 @@ def _local_actions(*, terminal: bool) -> dict[str, Any]:
             "enabled": False,
             "disabled_reason": "GitHub Checks do not apply to local reviews.",
         },
-        "open_session_insight": {
-            "visible": True,
-            "enabled": False,
-            "disabled_reason": "Session Insight is not connected.",
-        },
+        "open_session_insight": _session_insight_action(session_insight_state),
     }
 
 
@@ -232,7 +244,7 @@ def present_review_summary(
 ) -> dict[str, Any]:
     request = _parse_request(run)
     source = _source_from_request(request, display_name)
-    report = ReviewReport.model_validate_json(run.result_json) if run.result_json else None
+    report = load_review_report_from_cli_result(run.result_json) if run.result_json else None
     if report is not None:
         source = local_source_from_report(report).model_dump()
         provider = report.compute_policy_disclosure.provider
@@ -279,12 +291,14 @@ def present_review_run(
     display_name: str,
     review_policy: ReviewPolicy | None = None,
     compute_policy: ComputePolicy | None = None,
+    session_insight_state: str = "disconnected",
+    session_insight_deep_link: str | None = None,
 ) -> dict[str, Any]:
     request = _parse_request(run)
     source = _source_from_request(request, display_name)
     summary = present_review_summary(run, display_name=display_name)
     if run.result_json:
-        report = ReviewReport.model_validate_json(run.result_json)
+        report = load_review_report_from_cli_result(run.result_json)
         source_view = local_source_from_report(report)
         surface = SurfaceProjection(
             source=source_view,
@@ -292,6 +306,7 @@ def present_review_run(
             authority=Authority.LOCAL_NON_AUTHORITATIVE,
             publication_status=PublicationStatus.NOT_APPLICABLE,
             bypass_state=BypassState.NONE,
+            session_insight_connected=session_insight_state == "connected",
         )
         actions = project_available_actions(
             gate_state=project_gate_state(report.gate_state),
@@ -426,6 +441,7 @@ def present_review_run(
                 "observed_at": None,
             },
             "available_actions": actions.model_dump(),
+            "session_insight_deep_link": session_insight_deep_link,
         }
 
     dimensions = [
@@ -535,7 +551,10 @@ def present_review_run(
             "status": "not_tested",
             "observed_at": None,
         },
-        "available_actions": _local_actions(terminal=False),
+        "available_actions": _local_actions(
+            terminal=False, session_insight_state=session_insight_state
+        ),
+        "session_insight_deep_link": session_insight_deep_link,
     }
 
 
@@ -580,6 +599,10 @@ def present_github_review_run(
     check_run_id: int | None,
     result_json: str | None,
     created_at: datetime,
+    session_insight_state: str = "disconnected",
+    session_insight_deep_link: str | None = None,
+    job_status: str | None = None,
+    job_failure_detail: str | None = None,
 ) -> dict[str, Any]:
     """Map a PostgreSQL GitHub Attempt onto the frozen Review Detail DTO."""
 
@@ -601,6 +624,7 @@ def present_github_review_run(
             authority=authority,
             publication_status=publication,
             bypass_state=BypassState.NONE,
+            session_insight_connected=session_insight_state == "connected",
         )
         actions = project_available_actions(
             gate_state=project_gate_state(report.gate_state),
@@ -748,14 +772,17 @@ def present_github_review_run(
                 "observed_at": None,
             },
             "available_actions": actions.model_dump(),
+            "session_insight_deep_link": session_insight_deep_link,
         }
 
-    gate_state = ViewGateState.IN_PROGRESS.value
+    job_failed = job_status == "failed"
+    gate_state = ViewGateState.ERROR.value if job_failed else ViewGateState.IN_PROGRESS.value
+    run_status = RunStatus.FAILED if job_failed else RunStatus.QUEUED
     summary = _summary_dto(
         attempt_id=attempt_id,
         display_name=display_name,
         source=source_payload,
-        run_status=RunStatus.QUEUED.value,
+        run_status=run_status.value,
         gate_state=gate_state,
         created_at=created_at,
         authority=authority.value,
@@ -763,18 +790,27 @@ def present_github_review_run(
     )
     surface = SurfaceProjection(
         source=source,
-        run_status=RunStatus.QUEUED,
+        run_status=run_status,
         authority=authority,
         publication_status=publication,
         bypass_state=BypassState.NONE,
+        session_insight_connected=session_insight_state == "connected",
     )
     actions = project_available_actions(
         gate_state=ViewGateState.IN_PROGRESS,
         surface=surface,
     )
+    failure = None
+    if job_failed:
+        failure = {
+            "stage": "worker",
+            "category": "retry-exhausted",
+            "safe_detail": job_failure_detail
+            or "Attempt exhausted its retry budget before producing a terminal result.",
+        }
     return {
         "attempt_id": attempt_id,
-        "run_status": RunStatus.QUEUED.value,
+        "run_status": run_status.value,
         "gate_state": gate_state,
         "authority": authority.value,
         "publication_status": publication.value,
@@ -784,7 +820,11 @@ def present_github_review_run(
         "gate": {
             "gate_state": gate_state,
             "blocking_fingerprints": [],
-            "summary": "Attempt queued",
+            "summary": (
+                "Attempt failed after exhausting its retry budget"
+                if job_failed
+                else "Attempt queued"
+            ),
             "required_coverage_complete": False,
         },
         "findings": [],
@@ -797,7 +837,7 @@ def present_github_review_run(
         },
         "dimensions": [],
         "pipeline": _empty_pipeline(),
-        "failure": None,
+        "failure": failure,
         "attempts": [
             {
                 "attempt_id": attempt_id,
@@ -859,6 +899,7 @@ def present_github_review_run(
             "observed_at": None,
         },
         "available_actions": actions.model_dump(),
+        "session_insight_deep_link": session_insight_deep_link,
     }
 
 
@@ -870,7 +911,10 @@ def _highest_severity(report: ReviewReport) -> str | None:
 
 
 def present_overview(
-    aggregate: OverviewAggregate, summaries: list[dict[str, Any]]
+    aggregate: OverviewAggregate,
+    summaries: list[dict[str, Any]],
+    *,
+    session_insight: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     attempt_count = aggregate.attempt_count
     gate_pass_rate = aggregate.passed_count / attempt_count if attempt_count else None
@@ -903,7 +947,8 @@ def present_overview(
         "dimension_health": [],
         "policy_usage": [],
         "provider_health": [],
-        "session_insight": {
+        "session_insight": session_insight
+        or {
             "state": "disconnected",
             "current_attempt_id": None,
             "child_session_count": 0,
@@ -922,24 +967,37 @@ def present_repository(row: dict[str, str]) -> dict[str, Any]:
     }
 
 
-def present_provider_profile(row: dict[str, str | None]) -> dict[str, Any]:
+def present_provider_profile(
+    row: dict[str, str | None], *, referenced_by_history: bool = False
+) -> dict[str, Any]:
     reference = row.get("credential_reference")
     if not reference:
-        credential_state = "missing"
+        credential_state = "missing" if row.get("provider") != "local-cli" else "not_applicable"
     else:
         try:
             name = parse_credential_reference(reference)
             credential_state = "configured" if os.environ.get(name) else "missing"
         except Exception:
             credential_state = "invalid_reference"
+    command_raw = row.get("local_cli_command")
+    command: list[str] | None = None
+    if isinstance(command_raw, str) and command_raw:
+        try:
+            parsed = json.loads(command_raw)
+        except ValueError:
+            parsed = None
+        if isinstance(parsed, list):
+            command = [str(argument) for argument in parsed]
+    elif isinstance(command_raw, list):
+        command = [str(argument) for argument in command_raw]
     return {
         "profile_id": row["id"],
         "name": row["name"],
         "provider": row["provider"],
         "endpoint": row.get("endpoint"),
-        "local_cli_adapter": None,
-        "local_cli_command": None,
-        "adapter_label": None,
+        "local_cli_adapter": row.get("local_cli_adapter"),
+        "local_cli_command": command,
+        "adapter_label": row.get("adapter_label"),
         "credential_reference": reference,
         "credential_state": credential_state,
         "last_used_at": None,
@@ -948,14 +1006,17 @@ def present_provider_profile(row: dict[str, str | None]) -> dict[str, Any]:
             "status": "not_tested",
             "observed_at": None,
         },
-        "referenced_by_history": False,
+        "referenced_by_history": referenced_by_history,
         "is_default": False,
     }
 
 
-def present_review_policy(row: dict[str, str], policy: ReviewPolicy | None) -> dict[str, Any]:
+def present_review_policy(
+    row: dict[str, str], policy: ReviewPolicy | None, *, drifted: bool = False
+) -> dict[str, Any]:
     return {
         "policy_id": row["id"],
+        "drifted": drifted,
         "name": row["path"].rsplit("/", 1)[-1],
         "version": row["version_semver"],
         "sha256": row["version_sha256"],
@@ -975,14 +1036,22 @@ def present_review_policy(row: dict[str, str], policy: ReviewPolicy | None) -> d
     }
 
 
-def present_compute_policy(row: dict[str, str], policy: ComputePolicy | None) -> dict[str, Any]:
+def present_compute_policy(
+    row: dict[str, str],
+    policy: ComputePolicy | None,
+    *,
+    provider_profile_name: str | None = None,
+    drifted: bool = False,
+) -> dict[str, Any]:
     return {
         "policy_id": row["id"],
+        "drifted": drifted,
         "name": row["path"].rsplit("/", 1)[-1],
         "version": row["version_semver"],
         "sha256": row["version_sha256"],
-        "provider_profile_id": "",
-        "provider_profile_name": policy.provider if policy is not None else "",
+        "provider_profile_id": row.get("provider_profile_id") or "",
+        "provider_profile_name": provider_profile_name
+        or (policy.provider if policy is not None else ""),
         "provider": policy.provider if policy is not None else "",
         "model": policy.model if policy is not None else "",
         "max_output_tokens_per_call": (

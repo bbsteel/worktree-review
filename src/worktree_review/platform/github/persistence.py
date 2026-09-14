@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any, Protocol
 
 from worktree_review.application.lifecycle import PublicationStatus
@@ -14,6 +15,25 @@ from worktree_review.platform.github.snapshot import AttemptExecutionSnapshot, P
 from worktree_review.server.state import AttemptLease, StateConflictError
 
 _CLAIMABLE_PUBLICATION = frozenset({PublicationStatus.QUEUED, PublicationStatus.FAILED})
+
+# Bounded retry: at most this many delivery attempts per publication intent,
+# with exponential backoff (5s * 2^n, capped at 5 minutes). When the budget is
+# exhausted the intent stays FAILED with its last error — a queryable terminal
+# state, never a silent stall.
+MAX_PUBLICATION_ATTEMPTS = 8
+PUBLICATION_BACKOFF_BASE_SECONDS = 5.0
+PUBLICATION_BACKOFF_CAP_SECONDS = 300.0
+# A claimed-but-never-finished delivery (process crash) becomes claimable again.
+PUBLICATION_IN_PROGRESS_LEASE_SECONDS = 120.0
+
+
+def publication_backoff_seconds(attempt_count: int) -> float:
+    return float(
+        min(
+            PUBLICATION_BACKOFF_CAP_SECONDS,
+            PUBLICATION_BACKOFF_BASE_SECONDS * (2 ** max(0, attempt_count)),
+        )
+    )
 
 
 def assert_snapshot_is_writable(
@@ -33,6 +53,15 @@ def _parse_snapshot(payload: Any) -> AttemptExecutionSnapshot:
     if isinstance(payload, dict):
         return AttemptExecutionSnapshot.model_validate(payload)
     return AttemptExecutionSnapshot.model_validate_json(payload)
+
+
+def _parse_review_event(payload: Any) -> ReviewEvent:
+    """asyncpg returns JSONB as str or dict depending on codec configuration."""
+    if isinstance(payload, ReviewEvent):
+        return payload
+    if isinstance(payload, dict):
+        return ReviewEvent.model_validate(payload)
+    return ReviewEvent.model_validate_json(payload)
 
 
 def _parse_publication_intent(payload: Any) -> PublicationIntent:
@@ -80,6 +109,10 @@ CREATE TABLE IF NOT EXISTS publication_outbox (
     attempt_count INTEGER NOT NULL DEFAULT 0,
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+
+ALTER TABLE publication_outbox ADD COLUMN IF NOT EXISTS next_retry_at TIMESTAMPTZ;
+ALTER TABLE publication_outbox ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ
+    NOT NULL DEFAULT CURRENT_TIMESTAMP;
 """
 
 
@@ -110,7 +143,9 @@ class GitHubReviewStore(Protocol):
 
     async def enqueue_publication(self, intent: PublicationIntent) -> None: ...
 
-    async def claim_publication(self, attempt_id: str) -> PublicationIntent | None: ...
+    async def claim_publication(
+        self, attempt_id: str, *, respect_backoff: bool = True
+    ) -> PublicationIntent | None: ...
 
     async def mark_publication(
         self, attempt_id: str, *, status: PublicationStatus, error: str | None = None
@@ -118,9 +153,30 @@ class GitHubReviewStore(Protocol):
 
     async def publication_status(self, attempt_id: str) -> PublicationStatus | None: ...
 
+    async def list_pending_publications(self, now: datetime) -> tuple[str, ...]:
+        """Attempts with a saved result whose publication is not durably published.
+
+        Covers: result saved but intent never enqueued (crash window), queued
+        intents, failed intents whose backoff has elapsed, and claimed intents
+        whose lease expired. Bounded by MAX_PUBLICATION_ATTEMPTS.
+        """
+        ...
+
     async def list_recoverable_queued(self) -> tuple[AttemptExecutionSnapshot, ...]: ...
 
+    async def list_exhausted_publications(self) -> tuple[str, ...]:
+        """Attempts whose publication spent the whole retry budget (terminal FAILED)."""
+        ...
+
     async def get_attempt_created_at(self, attempt_id: str) -> datetime | None: ...
+
+    async def list_recent_attempt_ids(self, limit: int = 50) -> tuple[str, ...]:
+        """Most recent GitHub Attempt ids for Web list/overview projections."""
+        ...
+
+    async def overview_gate_counts(self) -> dict[str, int]:
+        """Terminal gate counts across ALL GitHub Attempts with saved results."""
+        ...
 
 
 @dataclass
@@ -131,14 +187,16 @@ class _AttemptExtras:
     events: list[ReviewEvent] = field(default_factory=list)
     result_json: str | None = None
     outbox: PublicationIntent | None = None
+    outbox_updated_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
 
 class InMemoryGitHubReviewStore:
     """Local persistence for GitHub events/results/snapshots/outbox."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, clock: Callable[[], datetime] | None = None) -> None:
         self._lock = asyncio.Lock()
+        self._clock = clock or (lambda: datetime.now(UTC))
         self._attempts: dict[str, _AttemptExtras] = {}
         self._deliveries: dict[tuple[int, str], tuple[str, str]] = {}
 
@@ -223,21 +281,37 @@ class InMemoryGitHubReviewStore:
             if extras.outbox is not None and extras.outbox.status is PublicationStatus.PUBLISHED:
                 raise StateConflictError("standing publication already completed")
             extras.outbox = intent
+            extras.outbox_updated_at = self._clock()
             extras.publication_status = intent.status
 
-    async def claim_publication(self, attempt_id: str) -> PublicationIntent | None:
+    async def claim_publication(
+        self, attempt_id: str, *, respect_backoff: bool = True
+    ) -> PublicationIntent | None:
         async with self._lock:
             extras = self._attempts.get(attempt_id)
             if extras is None or extras.outbox is None:
                 return None
-            if not publication_is_claimable(extras.outbox.status):
+            now = self._clock()
+            outbox = extras.outbox
+            if outbox.status is PublicationStatus.IN_PROGRESS:
+                stale = (now - extras.outbox_updated_at).total_seconds() > (
+                    PUBLICATION_IN_PROGRESS_LEASE_SECONDS
+                )
+                if not stale:
+                    return None
+            elif not publication_is_claimable(outbox.status):
                 return None
-            extras.outbox = extras.outbox.model_copy(
+            if outbox.attempt_count >= MAX_PUBLICATION_ATTEMPTS:
+                return None
+            if respect_backoff and outbox.next_retry_at is not None and outbox.next_retry_at > now:
+                return None
+            extras.outbox = outbox.model_copy(
                 update={
                     "status": PublicationStatus.IN_PROGRESS,
-                    "attempt_count": extras.outbox.attempt_count + 1,
+                    "attempt_count": outbox.attempt_count + 1,
                 }
             )
+            extras.outbox_updated_at = now
             extras.publication_status = PublicationStatus.IN_PROGRESS
             return extras.outbox
 
@@ -246,15 +320,65 @@ class InMemoryGitHubReviewStore:
     ) -> None:
         async with self._lock:
             extras = self._extras(attempt_id)
-            if extras.outbox is None:
-                raise StateConflictError(f"no publication intent for {attempt_id}")
-            extras.outbox = extras.outbox.model_copy(update={"status": status, "last_error": error})
+            now = self._clock()
+            if extras.outbox is not None:
+                next_retry_at = None
+                if status is PublicationStatus.FAILED:
+                    next_retry_at = now + timedelta(
+                        seconds=publication_backoff_seconds(extras.outbox.attempt_count)
+                    )
+                extras.outbox = extras.outbox.model_copy(
+                    update={
+                        "status": status,
+                        "last_error": error,
+                        "next_retry_at": next_retry_at,
+                    }
+                )
+                extras.outbox_updated_at = now
             extras.publication_status = status
 
     async def publication_status(self, attempt_id: str) -> PublicationStatus | None:
         async with self._lock:
             extras = self._attempts.get(attempt_id)
             return None if extras is None else extras.publication_status
+
+    async def list_pending_publications(self, now: datetime) -> tuple[str, ...]:
+        async with self._lock:
+            pending: list[str] = []
+            for attempt_id, extras in self._attempts.items():
+                if extras.result_json is None:
+                    continue
+                if extras.outbox is None:
+                    # Crash window: result saved before the intent was enqueued.
+                    if extras.publication_status is not PublicationStatus.PUBLISHED:
+                        pending.append(attempt_id)
+                    continue
+                outbox = extras.outbox
+                if outbox.attempt_count >= MAX_PUBLICATION_ATTEMPTS:
+                    continue
+                if outbox.status is PublicationStatus.IN_PROGRESS:
+                    stale = (now - extras.outbox_updated_at).total_seconds() > (
+                        PUBLICATION_IN_PROGRESS_LEASE_SECONDS
+                    )
+                    if stale:
+                        pending.append(attempt_id)
+                    continue
+                if publication_is_claimable(outbox.status) and (
+                    outbox.next_retry_at is None or outbox.next_retry_at <= now
+                ):
+                    pending.append(attempt_id)
+            return tuple(pending)
+
+    async def list_exhausted_publications(self) -> tuple[str, ...]:
+        async with self._lock:
+            return tuple(
+                attempt_id
+                for attempt_id, extras in self._attempts.items()
+                if extras.result_json is not None
+                and extras.outbox is not None
+                and extras.outbox.status is PublicationStatus.FAILED
+                and extras.outbox.attempt_count >= MAX_PUBLICATION_ATTEMPTS
+            )
 
     async def list_recoverable_queued(self) -> tuple[AttemptExecutionSnapshot, ...]:
         async with self._lock:
@@ -272,6 +396,26 @@ class InMemoryGitHubReviewStore:
         async with self._lock:
             extras = self._attempts.get(attempt_id)
             return None if extras is None else extras.created_at
+
+    async def list_recent_attempt_ids(self, limit: int = 50) -> tuple[str, ...]:
+        async with self._lock:
+            ordered = sorted(
+                self._attempts.items(), key=lambda item: item[1].created_at, reverse=True
+            )
+            return tuple(attempt_id for attempt_id, _ in ordered[:limit])
+
+    async def overview_gate_counts(self) -> dict[str, int]:
+        async with self._lock:
+            counts = {"Passed": 0, "Blocked": 0, "Error": 0, "other": 0}
+            for extras in self._attempts.values():
+                if extras.result_json is None:
+                    continue
+                try:
+                    gate = json.loads(extras.result_json).get("gate_state")
+                except ValueError:
+                    gate = None
+                counts[gate if gate in counts else "other"] += 1
+            return counts
 
 
 class PostgresGitHubReviewStore:
@@ -370,7 +514,7 @@ class PostgresGitHubReviewStore:
                 """,
                 attempt_id,
             )
-        return tuple(ReviewEvent.model_validate(row["event_json"]) for row in rows)
+        return tuple(_parse_review_event(row["event_json"]) for row in rows)
 
     async def list_events(self, attempt_id: str) -> tuple[ReviewEvent, ...]:
         return await self.list_review_events(attempt_id)
@@ -452,12 +596,15 @@ class PostgresGitHubReviewStore:
                 PublicationStatus.PUBLISHED.value,
             )
 
-    async def claim_publication(self, attempt_id: str) -> PublicationIntent | None:
+    async def claim_publication(
+        self, attempt_id: str, *, respect_backoff: bool = True
+    ) -> PublicationIntent | None:
         async with self._pool.acquire() as connection:
             async with connection.transaction():
                 row = await connection.fetchrow(
                     """
-                    SELECT payload, status FROM publication_outbox
+                    SELECT payload, status, attempt_count, next_retry_at, updated_at
+                    FROM publication_outbox
                     WHERE attempt_id = $1::uuid
                     FOR UPDATE
                     """,
@@ -466,12 +613,27 @@ class PostgresGitHubReviewStore:
                 if row is None:
                     return None
                 status = PublicationStatus(row["status"])
-                if not publication_is_claimable(status):
+                if status is PublicationStatus.IN_PROGRESS:
+                    updated_at = row["updated_at"]
+                    stale = (datetime.now(UTC) - updated_at).total_seconds() > (
+                        PUBLICATION_IN_PROGRESS_LEASE_SECONDS
+                    )
+                    if not stale:
+                        return None
+                elif not publication_is_claimable(status):
                     return None
+                if row["attempt_count"] >= MAX_PUBLICATION_ATTEMPTS:
+                    return None
+                if respect_backoff:
+                    next_retry_at = row["next_retry_at"]
+                    if next_retry_at is not None and next_retry_at > datetime.now(UTC):
+                        return None
+                # The FOR UPDATE row lock above makes this transition atomic.
                 await connection.execute(
                     """
                     UPDATE publication_outbox
-                    SET status = $2, attempt_count = attempt_count + 1
+                    SET status = $2, attempt_count = attempt_count + 1,
+                        updated_at = CURRENT_TIMESTAMP
                     WHERE attempt_id = $1::uuid AND status = $3
                     """,
                     attempt_id,
@@ -484,16 +646,34 @@ class PostgresGitHubReviewStore:
         self, attempt_id: str, *, status: PublicationStatus, error: str | None = None
     ) -> None:
         async with self._pool.acquire() as connection:
-            await connection.execute(
-                """
-                UPDATE publication_outbox
-                SET status = $2, last_error = $3
-                WHERE attempt_id = $1::uuid
-                """,
-                attempt_id,
-                status.value,
-                error,
-            )
+            if status is PublicationStatus.FAILED:
+                await connection.execute(
+                    """
+                    UPDATE publication_outbox
+                    SET status = $2, last_error = $3, updated_at = CURRENT_TIMESTAMP,
+                        next_retry_at = CURRENT_TIMESTAMP + make_interval(
+                            secs => LEAST($4, $5 * power(2, attempt_count))
+                        )
+                    WHERE attempt_id = $1::uuid
+                    """,
+                    attempt_id,
+                    status.value,
+                    error,
+                    PUBLICATION_BACKOFF_CAP_SECONDS,
+                    PUBLICATION_BACKOFF_BASE_SECONDS,
+                )
+            else:
+                await connection.execute(
+                    """
+                    UPDATE publication_outbox
+                    SET status = $2, last_error = $3, updated_at = CURRENT_TIMESTAMP,
+                        next_retry_at = NULL
+                    WHERE attempt_id = $1::uuid
+                    """,
+                    attempt_id,
+                    status.value,
+                    error,
+                )
             await connection.execute(
                 """
                 UPDATE review_attempts SET publication_status = $2
@@ -511,14 +691,54 @@ class PostgresGitHubReviewStore:
             )
         return None if value is None else PublicationStatus(value)
 
+    async def list_pending_publications(self, now: datetime) -> tuple[str, ...]:
+        async with self._pool.acquire() as connection:
+            rows = await connection.fetch(
+                """
+                SELECT a.attempt_id
+                FROM review_attempts AS a
+                JOIN github_review_results AS r ON r.attempt_id = a.attempt_id
+                LEFT JOIN publication_outbox AS o ON o.attempt_id = a.attempt_id
+                WHERE (o.attempt_id IS NULL
+                       AND a.publication_status IS DISTINCT FROM $1)
+                   OR (o.status IN ('queued', 'failed')
+                       AND o.attempt_count < $2
+                       AND (o.next_retry_at IS NULL OR o.next_retry_at <= $3))
+                   OR (o.status = 'in_progress'
+                       AND o.attempt_count < $2
+                       AND o.updated_at < $3 - make_interval(secs => $4))
+                """,
+                PublicationStatus.PUBLISHED.value,
+                MAX_PUBLICATION_ATTEMPTS,
+                now,
+                PUBLICATION_IN_PROGRESS_LEASE_SECONDS,
+            )
+        return tuple(str(row["attempt_id"]) for row in rows)
+
+    async def list_exhausted_publications(self) -> tuple[str, ...]:
+        async with self._pool.acquire() as connection:
+            rows = await connection.fetch(
+                """
+                SELECT o.attempt_id
+                FROM publication_outbox AS o
+                JOIN github_review_results AS r ON r.attempt_id = o.attempt_id
+                WHERE o.status = $1 AND o.attempt_count >= $2
+                """,
+                PublicationStatus.FAILED.value,
+                MAX_PUBLICATION_ATTEMPTS,
+            )
+        return tuple(str(row["attempt_id"]) for row in rows)
+
     async def list_recoverable_queued(self) -> tuple[AttemptExecutionSnapshot, ...]:
         async with self._pool.acquire() as connection:
             rows = await connection.fetch(
                 """
-                SELECT execution_snapshot FROM review_attempts
-                WHERE execution_snapshot IS NOT NULL
-                  AND check_run_id IS NOT NULL
-                  AND attempt_id NOT IN (SELECT attempt_id FROM github_review_results)
+                SELECT a.execution_snapshot FROM review_attempts AS a
+                JOIN review_jobs AS j ON j.attempt_id = a.attempt_id
+                WHERE a.execution_snapshot IS NOT NULL
+                  AND a.check_run_id IS NOT NULL
+                  AND a.attempt_id NOT IN (SELECT attempt_id FROM github_review_results)
+                  AND j.status IN ('queued', 'retryable', 'running')
                 """
             )
         snapshots: list[AttemptExecutionSnapshot] = []
@@ -537,6 +757,32 @@ class PostgresGitHubReviewStore:
         if isinstance(value, datetime):
             return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
         return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+
+    async def list_recent_attempt_ids(self, limit: int = 50) -> tuple[str, ...]:
+        async with self._pool.acquire() as connection:
+            rows = await connection.fetch(
+                """
+                SELECT attempt_id FROM review_attempts
+                ORDER BY created_at DESC, attempt_id DESC LIMIT $1
+                """,
+                limit,
+            )
+        return tuple(str(row["attempt_id"]) for row in rows)
+
+    async def overview_gate_counts(self) -> dict[str, int]:
+        async with self._pool.acquire() as connection:
+            rows = await connection.fetch(
+                """
+                SELECT result_json->>'gate_state' AS gate_state, COUNT(*) AS count
+                FROM github_review_results
+                GROUP BY result_json->>'gate_state'
+                """
+            )
+        counts = {"Passed": 0, "Blocked": 0, "Error": 0, "other": 0}
+        for row in rows:
+            gate = row["gate_state"]
+            counts[gate if gate in counts else "other"] += int(row["count"])
+        return counts
 
 
 def recoverable_from_snapshot(

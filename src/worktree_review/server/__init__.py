@@ -21,6 +21,6 @@ def main() -> None:
     uvicorn.run(
         "worktree_review.server.app:app",
         host=os.environ.get("WORKTREE_REVIEW_BIND_HOST", DEFAULT_BIND_HOST),
-        port=8000,
+        port=int(os.environ.get("WORKTREE_REVIEW_BIND_PORT", "8000")),
         factory=False,
     )

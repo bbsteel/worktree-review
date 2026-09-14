@@ -41,7 +41,12 @@ interface ReviewDetailPageProps {
 }
 
 /** Event types whose payloads change gate or terminal state; they trigger an authoritative refetch. */
-const REFETCH_EVENT_TYPES = new Set(['stage.failed', 'gate.evaluated', 'attempt.completed'])
+const REFETCH_EVENT_TYPES = new Set([
+  'stage.failed',
+  'gate.evaluated',
+  'attempt.completed',
+  'attempt.failed',
+])
 
 type LoadOutcome =
   | { status: 'not-found' }

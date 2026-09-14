@@ -132,6 +132,7 @@ const PUBLICATION_STATUSES: readonly PublicationStatus[] = [
   'in_progress',
   'published',
   'failed',
+  'superseded',
 ]
 const BYPASS_STATES: readonly BypassState[] = ['none', 'active', 'invalidated']
 const SEVERITIES: readonly FindingSeverity[] = ['critical', 'major', 'minor', 'suggestion']
@@ -430,6 +431,10 @@ export function mapReviewRunDto(raw: unknown): ReviewRunView {
         'available_actions.open_session_insight',
       ),
     },
+    // Absent on fixture/mock runs; present when the live API provides it.
+    ...(typeof dto.session_insight_deep_link === 'string'
+      ? { sessionInsightDeepLink: dto.session_insight_deep_link }
+      : {}),
   }
 }
 

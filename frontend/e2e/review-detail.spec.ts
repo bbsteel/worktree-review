@@ -41,7 +41,12 @@ test.describe('review detail', () => {
   test('finding filter leads to evidence', async ({ page }) => {
     await gotoDetail(page, `${BLOCKED_ATTEMPT}?tab=findings`)
 
-    await page.getByRole('checkbox', { name: 'Blocking only' }).check()
+    // click + auto-retrying assertion: React Router commits the URL update
+    // asynchronously, so a bare .check() post-click state read is racy
+    // under parallel load.
+    const blockingOnly = page.getByRole('checkbox', { name: 'Blocking only' })
+    await blockingOnly.click()
+    await expect(blockingOnly).toBeChecked()
     await expect(page.getByText('1 of 3 findings')).toBeVisible()
     await expect(
       page.getByRole('heading', { name: /fallback branch still accepts the webhook request/ }),

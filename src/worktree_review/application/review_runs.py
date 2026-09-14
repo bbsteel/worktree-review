@@ -23,6 +23,7 @@ class ReviewRunRecord:
         interrupted: bool = False,
         request_json: str | None = None,
         gate_state: str | None = None,
+        frozen_provider_json: str | None = None,
     ) -> None:
         self.attempt_id = attempt_id
         self.run_status = run_status
@@ -33,6 +34,7 @@ class ReviewRunRecord:
         self.interrupted = interrupted
         self.request_json = request_json
         self.gate_state = gate_state
+        self.frozen_provider_json = frozen_provider_json
 
 
 class OverviewAggregate:

@@ -95,7 +95,7 @@ describe('ReviewApiClient mutations', () => {
         error: { code: 'idempotency_conflict', message: 'Same key, different request.' },
       }),
     )
-    const client = new ReviewApiClient({ fetchFn })
+    const client = new ReviewApiClient({ fetchFn, csrfToken: 'csrf-token-value' })
 
     await expect(
       client.createReview(
@@ -285,6 +285,22 @@ describe('openReviewEventStream', () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+
+  it('closes the stream on attempt.failed instead of reconnecting forever', () => {
+    const stream = openReviewEventStream({
+      attemptId: 'attempt_1',
+      onEvent: () => undefined,
+      eventSourceFactory: (url) => new FakeEventSource(url),
+    })
+
+    const source = FakeEventSource.instances[0]
+    source?.emit(eventPayload(1, 'attempt.created'))
+    source?.emit(eventPayload(2, 'attempt.failed'))
+
+    expect(stream.state).toBe('closed')
+    expect(source?.closed).toBe(true)
+    expect(FakeEventSource.instances).toHaveLength(1)
   })
 
   it('closes the stream on attempt.completed', () => {

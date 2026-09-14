@@ -93,3 +93,61 @@ def test_progress_mapping_does_not_invent_provider_calls() -> None:
     assert event_type == "stage.started"
     assert payload["stage"] == StageName.CONSTRUCT_MERGE.value
     assert "provider_call" not in event_type
+
+
+def test_scrub_secret_content_redacts_credentials() -> None:
+    from worktree_review.application.review_events import scrub_secret_content
+
+    assert "sk-live-secret-value" not in scrub_secret_content(
+        "401 Unauthorized: key sk-live-secret-value was rejected"
+    )
+    assert "Bearer" not in scrub_secret_content("Bearer abcdef123456789")
+    assert "supersecret" not in scrub_secret_content("api_key=supersecret123")
+    monkeypatched = scrub_secret_content("plain error without secrets")
+    assert monkeypatched == "plain error without secrets"
+
+
+def test_redact_payload_scrubs_string_values() -> None:
+    from worktree_review.application.review_events import redact_payload
+
+    payload = redact_payload({"safe_detail": "HTTP 401 for sk-ant-secret12345678"})
+    assert "sk-ant-secret12345678" not in str(payload)
+
+
+def test_scrub_secret_content_covers_arbitrary_credential_env_references(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from worktree_review.application.review_events import scrub_secret_content
+
+    monkeypatch.setenv("MY_VENDOR_PROVIDER_TOKEN", "vendor-token-value-123")
+    assert "vendor-token-value-123" not in scrub_secret_content(
+        "handshake failed with vendor-token-value-123"
+    )
+    # Short values (under the minimum length) are left alone.
+    monkeypatch.setenv("MY_OTHER_KEY", "tiny")
+    assert "tiny" in scrub_secret_content("value was tiny")
+
+
+def test_redact_payload_recurses_into_lists() -> None:
+    from worktree_review.application.review_events import redact_payload
+
+    payload = redact_payload(
+        {"safe_detail": "ok", "items": ["call failed for sk-nested-secret-999", {"token": "abc"}]}
+    )
+    rendered = str(payload)
+    assert "sk-nested-secret-999" not in rendered
+    assert "abc" not in rendered
+
+
+def test_internal_errors_use_fixed_text_not_arbitrary_exception_messages() -> None:
+    from worktree_review.application.review_events import SafeErrorCategory, safe_error_payload
+
+    payload = safe_error_payload(RuntimeError("db password hunter2 leaked"))
+    assert payload["category"] == SafeErrorCategory.INTERNAL.value
+    assert "hunter2" not in payload["safe_detail"]
+
+    from worktree_review.core.errors import ProviderError
+
+    provider_payload = safe_error_payload(ProviderError("HTTP 401 from provider"))
+    assert provider_payload["category"] == SafeErrorCategory.PROVIDER.value
+    assert "401" in provider_payload["safe_detail"]

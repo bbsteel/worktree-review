@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import sqlite3
 from contextlib import closing
 from datetime import UTC, datetime
@@ -22,6 +23,32 @@ class IdempotencyConflictError(InvalidInvocationError):
 
 class ResultImmutableError(InvalidInvocationError):
     pass
+
+
+def _table_columns(connection: sqlite3.Connection, table: str) -> set[str]:
+    return {row[1] for row in connection.execute(f"PRAGMA table_info({table})").fetchall()}
+
+
+def _migrate_v3(connection: sqlite3.Connection) -> None:
+    """v3: full Provider Profile fields, Compute Policy profile binding, frozen Attempt provider."""
+
+    profile_columns = _table_columns(connection, "provider_profiles")
+    if "local_cli_adapter" not in profile_columns:
+        connection.execute("ALTER TABLE provider_profiles ADD COLUMN local_cli_adapter TEXT")
+    if "local_cli_command" not in profile_columns:
+        connection.execute("ALTER TABLE provider_profiles ADD COLUMN local_cli_command TEXT")
+    if "adapter_label" not in profile_columns:
+        connection.execute("ALTER TABLE provider_profiles ADD COLUMN adapter_label TEXT")
+    compute_columns = _table_columns(connection, "trusted_compute_policies")
+    if "provider_profile_id" not in compute_columns:
+        connection.execute(
+            "ALTER TABLE trusted_compute_policies ADD COLUMN provider_profile_id TEXT"
+        )
+    if "source_format" not in compute_columns:
+        connection.execute("ALTER TABLE trusted_compute_policies ADD COLUMN source_format TEXT")
+    run_columns = _table_columns(connection, "review_runs")
+    if "frozen_provider_json" not in run_columns:
+        connection.execute("ALTER TABLE review_runs ADD COLUMN frozen_provider_json TEXT")
 
 
 class SqliteReviewRunStore:
@@ -49,6 +76,11 @@ class SqliteReviewRunStore:
                     "INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (2, ?)",
                     (datetime.now(UTC).isoformat(),),
                 )
+                _migrate_v3(connection)
+                connection.execute(
+                    "INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (3, ?)",
+                    (datetime.now(UTC).isoformat(),),
+                )
                 connection.commit()
 
         await asyncio.to_thread(_migrate)
@@ -68,6 +100,7 @@ class SqliteReviewRunStore:
         initial_event: ReviewEvent,
         run_status: RunStatus = RunStatus.QUEUED,
         request_json: str | None = None,
+        frozen_provider_json: str | None = None,
     ) -> str:
         def _create() -> str:
             now = datetime.now(UTC).isoformat()
@@ -86,8 +119,8 @@ class SqliteReviewRunStore:
                 connection.execute(
                     "INSERT INTO review_runs("
                     "attempt_id, run_status, created_at, cost_unknown, interrupted, "
-                    "request_json) VALUES (?, ?, ?, 0, 0, ?)",
-                    (attempt_id, run_status.value, now, request_json),
+                    "request_json, frozen_provider_json) VALUES (?, ?, ?, 0, 0, ?, ?)",
+                    (attempt_id, run_status.value, now, request_json, frozen_provider_json),
                 )
                 connection.execute(
                     "INSERT INTO review_events(attempt_id, sequence, event_json) VALUES (?, ?, ?)",
@@ -272,23 +305,42 @@ class SqliteReviewRunStore:
         path: str,
         version_semver: str,
         version_sha256: str,
+        provider_profile_id: str | None = None,
+        source_format: str | None = None,
     ) -> None:
         if table not in {"trusted_review_policies", "trusted_compute_policies"}:
             raise InvalidInvocationError("unknown policy table")
 
         def _insert() -> None:
             with closing(self._connect()) as connection:
-                connection.execute(
-                    f"INSERT INTO {table}(id, path, version_semver, version_sha256, registered_at) "
-                    "VALUES (?, ?, ?, ?, ?)",
-                    (
-                        policy_id,
-                        path,
-                        version_semver,
-                        version_sha256,
-                        datetime.now(UTC).isoformat(),
-                    ),
-                )
+                if table == "trusted_compute_policies":
+                    connection.execute(
+                        "INSERT INTO trusted_compute_policies("
+                        "id, path, version_semver, version_sha256, provider_profile_id, "
+                        "source_format, registered_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                        (
+                            policy_id,
+                            path,
+                            version_semver,
+                            version_sha256,
+                            provider_profile_id,
+                            source_format,
+                            datetime.now(UTC).isoformat(),
+                        ),
+                    )
+                else:
+                    connection.execute(
+                        "INSERT INTO trusted_review_policies("
+                        "id, path, version_semver, version_sha256, registered_at) "
+                        "VALUES (?, ?, ?, ?, ?)",
+                        (
+                            policy_id,
+                            path,
+                            version_semver,
+                            version_sha256,
+                            datetime.now(UTC).isoformat(),
+                        ),
+                    )
                 connection.commit()
 
         async with self._lock:
@@ -302,19 +354,26 @@ class SqliteReviewRunStore:
         provider: str,
         credential_reference: str | None,
         endpoint: str | None = None,
+        local_cli_adapter: str | None = None,
+        local_cli_command: list[str] | None = None,
+        adapter_label: str | None = None,
     ) -> None:
         def _insert() -> None:
             with closing(self._connect()) as connection:
                 connection.execute(
                     "INSERT INTO provider_profiles("
-                    "id, name, provider, endpoint, credential_reference, created_at) "
-                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    "id, name, provider, endpoint, credential_reference, "
+                    "local_cli_adapter, local_cli_command, adapter_label, created_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
                         profile_id,
                         name,
                         provider,
                         endpoint,
                         credential_reference,
+                        local_cli_adapter,
+                        (None if local_cli_command is None else json.dumps(local_cli_command)),
+                        adapter_label,
                         datetime.now(UTC).isoformat(),
                     ),
                 )
@@ -429,18 +488,44 @@ class SqliteReviewRunStore:
         provider: str,
         credential_reference: str | None,
         endpoint: str | None = None,
+        local_cli_adapter: str | None = None,
+        local_cli_command: list[str] | None = None,
+        adapter_label: str | None = None,
     ) -> None:
         def _update() -> None:
             with closing(self._connect()) as connection:
                 connection.execute(
                     "UPDATE provider_profiles SET name = ?, provider = ?, endpoint = ?, "
-                    "credential_reference = ? WHERE id = ?",
-                    (name, provider, endpoint, credential_reference, profile_id),
+                    "credential_reference = ?, local_cli_adapter = ?, "
+                    "local_cli_command = ?, adapter_label = ? WHERE id = ?",
+                    (
+                        name,
+                        provider,
+                        endpoint,
+                        credential_reference,
+                        local_cli_adapter,
+                        (None if local_cli_command is None else json.dumps(local_cli_command)),
+                        adapter_label,
+                        profile_id,
+                    ),
                 )
                 connection.commit()
 
         async with self._lock:
             await asyncio.to_thread(_update)
+
+    async def provider_profile_in_use(self, profile_id: str) -> bool:
+        """True when any Attempt froze a reference to this profile."""
+
+        def _check() -> bool:
+            with closing(self._connect()) as connection:
+                row = connection.execute(
+                    "SELECT 1 FROM review_runs WHERE frozen_provider_json LIKE ? LIMIT 1",
+                    (f'%"profile_id":"{profile_id}"%',),
+                ).fetchone()
+                return row is not None
+
+        return await asyncio.to_thread(_check)
 
     async def delete_provider_profile(self, profile_id: str) -> bool:
         def _delete() -> bool:
@@ -466,4 +551,7 @@ class SqliteReviewRunStore:
             interrupted=bool(row["interrupted"]),
             request_json=row["request_json"] if "request_json" in keys else None,
             gate_state=row["gate_state"],
+            frozen_provider_json=(
+                row["frozen_provider_json"] if "frozen_provider_json" in keys else None
+            ),
         )

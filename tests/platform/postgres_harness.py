@@ -1,8 +1,8 @@
 """Explicit local PostgreSQL for GitHub Gate integration tests.
 
 Prefers ``WORKTREE_REVIEW_TEST_DATABASE_URL``, then testcontainers, then a
-bundled PostgreSQL 16 binary extracted under ``/tmp``. Data directories are
-always created with ``mktemp`` beneath ``/tmp`` and only that path is deleted.
+bundled PostgreSQL 16 binary extracted under ``~/tmp``. Data directories are
+always created beneath ``~/tmp`` and only those paths are deleted.
 """
 
 from __future__ import annotations
@@ -25,7 +25,7 @@ ZONKY_JAR = (
     f"embedded-postgres-binaries-linux-amd64/{ZONKY_VERSION}/"
     f"embedded-postgres-binaries-linux-amd64-{ZONKY_VERSION}.jar"
 )
-ZONKY_ROOT = Path("/tmp/worktree-review-zonky-pg16")
+ZONKY_ROOT = Path.home() / "tmp" / "worktree-review-zonky-pg16"
 
 
 def _free_port() -> int:
@@ -39,7 +39,7 @@ def _ensure_zonky_postgres() -> Path:
     if postgres.is_file():
         return ZONKY_ROOT
     ZONKY_ROOT.mkdir(parents=True, exist_ok=True)
-    jar_path = Path(f"/tmp/embedded-postgres-binaries-linux-amd64-{ZONKY_VERSION}.jar")
+    jar_path = Path.home() / "tmp" / f"embedded-postgres-binaries-linux-amd64-{ZONKY_VERSION}.jar"
     if not jar_path.is_file():
         subprocess.run(
             ["curl", "-fsSL", "-o", str(jar_path), ZONKY_JAR],
@@ -69,8 +69,10 @@ def _postgres_env(root: Path) -> dict[str, str]:
 def start_embedded_postgres() -> tuple[str, subprocess.Popen[bytes], Path]:
     root = _ensure_zonky_postgres()
     env = _postgres_env(root)
-    data_dir = Path(tempfile.mkdtemp(prefix="wr-pg-data-", dir="/tmp"))
-    if not str(data_dir).startswith("/tmp/"):
+    scratch_root = Path.home() / "tmp"
+    scratch_root.mkdir(parents=True, exist_ok=True)
+    data_dir = Path(tempfile.mkdtemp(prefix="wr-pg-data-", dir=scratch_root))
+    if not str(data_dir).startswith(str(scratch_root)):
         raise RuntimeError(f"refusing to use non-tmp postgres data dir {data_dir}")
     initdb = root / "bin" / "initdb"
     postgres = root / "bin" / "postgres"
@@ -135,14 +137,27 @@ def stop_embedded_postgres(process: subprocess.Popen[bytes], data_dir: Path) -> 
     except subprocess.TimeoutExpired:
         process.kill()
         process.wait(timeout=5)
-    if str(data_dir).startswith("/tmp/") and data_dir.name.startswith("wr-pg-data-"):
-        subprocess.run(["rm", "-rf", "--", str(data_dir)], check=False)
+    # Delete only a verified scratch postgres data dir under ~/tmp, never
+    # anything else: the parent, name prefix, and PG_VERSION must all match.
+    scratch_root = (Path.home() / "tmp").resolve()
+    resolved_dir = data_dir.resolve()
+    if (
+        resolved_dir.parent == scratch_root
+        and resolved_dir.name.startswith("wr-pg-data-")
+        and (resolved_dir / "PG_VERSION").is_file()
+    ):
+        subprocess.run(["rm", "-rf", "--", str(resolved_dir)], check=False)
 
 
 def _try_testcontainers() -> tuple[str, object] | None:
     try:
         from testcontainers.postgres import PostgresContainer
     except ImportError:
+        return None
+    # No Docker daemon: skip before constructing a container — start() would
+    # leak the Docker client's unix socket and explode later as an
+    # unraisable ResourceWarning under strict warnings.
+    if not os.environ.get("DOCKER_HOST") and not Path("/var/run/docker.sock").exists():
         return None
     try:
         container = PostgresContainer("postgres:16-alpine")

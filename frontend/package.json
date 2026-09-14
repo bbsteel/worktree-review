@@ -11,7 +11,10 @@
     "test": "vitest run",
     "test:i18n": "vitest run src/i18n.test.tsx",
     "test:e2e": "playwright test",
-    "preview": "vite preview --host 127.0.0.1"
+    "preview": "vite preview --host 127.0.0.1",
+    "build:demo": "tsc -b && vite build --mode demo",
+    "preview:demo": "vite preview --host 127.0.0.1 --mode demo",
+    "test:e2e:live": "npm run build && playwright test --config playwright.live.config.ts"
   },
   "dependencies": {
     "framer-motion": "^12.23.12",

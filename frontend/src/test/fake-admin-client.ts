@@ -41,6 +41,12 @@ export function createFakeAdminClient(overrides: Partial<AdminClient> = {}): Adm
     getComputePolicy: async () => {
       throw new Error('not stubbed')
     },
+    registerReviewPolicy: async () => {
+      throw new Error('not stubbed')
+    },
+    registerComputePolicy: async () => {
+      throw new Error('not stubbed')
+    },
     ...overrides,
   }
 }

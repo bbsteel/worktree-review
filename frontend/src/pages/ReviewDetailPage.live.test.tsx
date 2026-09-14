@@ -113,6 +113,13 @@ function harness(initialRun: ReviewRunView, afterRefetchRun?: ReviewRunView): Ha
   return { source, streams, getReviewRun }
 }
 
+async function firstStream(h: Harness): Promise<FakeStream> {
+  // The stream opens in an effect that runs one commit after the data load;
+  // assert it only once it exists (the old direct assertion raced that commit).
+  await waitFor(() => expect(h.streams.length).toBeGreaterThan(0))
+  return h.streams[0] as FakeStream
+}
+
 function renderDetail(h: Harness) {
   const openEventStream = (options: ReviewEventStreamOptions): ReviewEventStream => {
     const stream = new FakeStream(options)
@@ -138,8 +145,8 @@ describe('ReviewDetailPage live wiring', () => {
     renderDetail(h)
 
     await screen.findByRole('heading', { name: 'acme/payment-service · PR #184' })
-    expect(h.streams).toHaveLength(1)
-    expect(h.streams[0]?.options.sinceSequence).toBe(0)
+    const stream = await firstStream(h)
+    expect(stream.options.sinceSequence).toBe(0)
     expect(await screen.findByText(/Live updates connected/)).toBeInTheDocument()
 
     const pipelineSection = screen.getByRole('heading', { name: 'Review Pipeline' })
@@ -147,13 +154,13 @@ describe('ReviewDetailPage live wiring', () => {
     expect(within(pipelineSection).getAllByText('Not started').length).toBeGreaterThan(0)
 
     act(() => {
-      h.streams[0]?.emit({ sequence: 1, event_type: 'stage.started', payload: { stage: 'gather-context' } })
+      stream.emit({ sequence: 1, event_type: 'stage.started', payload: { stage: 'gather-context' } })
     })
     expect(within(pipelineSection).getByText('Gather Context')).toBeInTheDocument()
     expect(within(pipelineSection).getByText('Running')).toBeInTheDocument()
 
     act(() => {
-      h.streams[0]?.emit({
+      stream.emit({
         sequence: 2,
         event_type: 'stage.completed',
         payload: { stage: 'gather-context', elapsed_ms: 2_400 },
@@ -167,9 +174,10 @@ describe('ReviewDetailPage live wiring', () => {
     const h = harness(runningRun())
     const router = renderDetail(h)
     await screen.findByRole('heading', { name: 'acme/payment-service · PR #184' })
+    const stream = await firstStream(h)
 
     act(() => {
-      h.streams[0]?.emit({
+      stream.emit({
         sequence: 1,
         event_type: 'dimension.started',
         payload: { dimension_id: 'security' },
@@ -188,9 +196,10 @@ describe('ReviewDetailPage live wiring', () => {
     renderDetail(h)
     await screen.findByRole('heading', { name: 'acme/payment-service · PR #184' })
     expect(h.getReviewRun).toHaveBeenCalledTimes(1)
+    const stream = await firstStream(h)
 
     act(() => {
-      h.streams[0]?.emit({ sequence: 9, event_type: 'attempt.completed' })
+      stream.emit({ sequence: 9, event_type: 'attempt.completed' })
     })
 
     // After the refetch the terminal gate is rendered and no new stream opens.
@@ -222,9 +231,10 @@ describe('ReviewDetailPage live wiring', () => {
     )
     render(<RouterProvider router={router} />)
     await screen.findByRole('heading', { name: 'acme/payment-service · PR #184' })
+    const stream = await firstStream(h)
 
     act(() => {
-      h.streams[0]?.emit({ sequence: 5, event_type: 'stage.started', payload: { stage: 'run-dimensions' } })
+      stream.emit({ sequence: 5, event_type: 'stage.started', payload: { stage: 'run-dimensions' } })
     })
     act(() => {
       stateListener?.('reconnecting')
@@ -259,9 +269,10 @@ describe('ReviewDetailPage live wiring', () => {
       />,
     )
     await screen.findByRole('heading', { name: 'acme/payment-service · PR #184' })
+    const stream = await firstStream(h)
 
     act(() => {
-      h.streams[0]?.emit({ sequence: 3, event_type: 'stage.started', payload: { stage: 'gather-context' } })
+      stream.emit({ sequence: 3, event_type: 'stage.started', payload: { stage: 'gather-context' } })
       stateListener?.('failed')
     })
     expect(await screen.findByRole('alert')).toHaveTextContent(/Live updates disconnected/)

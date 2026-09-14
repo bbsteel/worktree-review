@@ -1,6 +1,6 @@
 import { cleanup, render, screen, waitFor } from '@testing-library/react'
 import { createMemoryRouter, RouterProvider } from 'react-router'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { OverviewPage } from '../pages/OverviewPage.tsx'
 import { ApplicationShell } from '../components/application-shell/ApplicationShell.tsx'
 import { DataSourceProvider } from './DataSourceProvider.tsx'
@@ -8,8 +8,14 @@ import { ReviewDetailRoute } from './ReviewDetailRoute.tsx'
 import { ThemeProvider } from './ThemeProvider.tsx'
 import { stubMatchMedia } from '../test/match-media.ts'
 
+beforeEach(() => {
+  // These route tests exercise the offline demo fixture routes.
+  vi.stubEnv('VITE_REVIEW_DATA_SOURCE', 'mock')
+})
+
 afterEach(() => {
   cleanup()
+  vi.unstubAllEnvs()
 })
 
 function renderPath(path: string) {

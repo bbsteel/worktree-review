@@ -440,6 +440,8 @@ export const messages: Record<Locale, Record<string, string>> = {
     'Check publication in progress': 'Check publication in progress',
     'Check published': 'Check published',
     'Check publication failed': 'Check publication failed',
+    'Check publication superseded by a newer attempt':
+      'Check publication superseded by a newer attempt',
     'Critical': 'Critical',
     'Major': 'Major',
     'Minor': 'Minor',
@@ -749,6 +751,30 @@ export const messages: Record<Locale, Record<string, string>> = {
     'source: {source}': 'source: {source}',
     'snapshot {snapshot}': 'snapshot {snapshot}',
     '(quoted line)': '(quoted line)',
+    'Scope: {kind}': 'Scope: {kind}',
+    'local CLI executable check (command not executed)': 'local CLI executable check (command not executed)',
+    'credential reference validation (no provider call)': 'credential reference validation (no provider call)',
+    'This validates what can be checked without spending money: credential reference resolution for remote providers (no API call is made), or argv and executable resolution for local CLI (the command is not run).':
+      'This validates what can be checked without spending money: credential reference resolution for remote providers (no API call is made), or argv and executable resolution for local CLI (the command is not run).',
+    'Register trusted Review Policy': 'Register trusted Review Policy',
+    'The policy file must live on this server, outside every registered repository. The browser submits a path; it never uploads policy content.':
+      'The policy file must live on this server, outside every registered repository. The browser submits a path; it never uploads policy content.',
+    'Trusted policy file path': 'Trusted policy file path',
+    'Register Review Policy': 'Register Review Policy',
+    'Register Compute Policy': 'Register Compute Policy',
+    'Registered trusted Review Policy {name}.': 'Registered trusted Review Policy {name}.',
+    'Registered trusted Compute Policy {name}.': 'Registered trusted Compute Policy {name}.',
+    'The policy could not be registered. Nothing was changed.':
+      'The policy could not be registered. Nothing was changed.',
+    'Register trusted Compute Policy': 'Register trusted Compute Policy',
+    'Bind the Compute Policy to a Provider Profile so reviews have a real compute connection. The binding is validated against the policy provider and, for local-cli, the command fingerprint.':
+      'Bind the Compute Policy to a Provider Profile so reviews have a real compute connection. The binding is validated against the policy provider and, for local-cli, the command fingerprint.',
+    'Bound Provider Profile': 'Bound Provider Profile',
+    'Not bound (reviews cannot start)': 'Not bound (reviews cannot start)',
+    'Not bound — reviews using this policy cannot start':
+      'Not bound — reviews using this policy cannot start',
+    'Session Insight observation is advisory and never affects the Gate.':
+      'Session Insight observation is advisory and never affects the Gate.',
   },
   'zh-CN': {
     'Worktree Review': 'Worktree Review',
@@ -1166,6 +1192,7 @@ export const messages: Record<Locale, Record<string, string>> = {
     'Check publication in progress': '检查发布中',
     'Check published': '检查已发布',
     'Check publication failed': '检查发布失败',
+    'Check publication superseded by a newer attempt': 'Check 发布已被更新的 Attempt 取代',
     Critical: '严重',
     Major: '重要',
     Minor: '一般',
@@ -1456,6 +1483,28 @@ export const messages: Record<Locale, Record<string, string>> = {
     'source: {source}': '来源：{source}',
     'snapshot {snapshot}': '快照 {snapshot}',
     '(quoted line)': '（引用行）',
+    'Scope: {kind}': '范围：{kind}',
+    'local CLI executable check (command not executed)': '本地 CLI 可执行文件检查（未执行命令）',
+    'credential reference validation (no provider call)': '凭据引用校验（未调用 Provider）',
+    'This validates what can be checked without spending money: credential reference resolution for remote providers (no API call is made), or argv and executable resolution for local CLI (the command is not run).':
+      '仅验证无需产生费用的部分：远程 Provider 的凭据引用解析（不发起 API 调用），或本地 CLI 的 argv 与可执行文件解析（不运行命令）。',
+    'Register trusted Review Policy': '登记可信 Review Policy',
+    'The policy file must live on this server, outside every registered repository. The browser submits a path; it never uploads policy content.':
+      '策略文件必须位于本服务器上、且在所有已登记仓库之外。浏览器只提交路径，从不上传策略内容。',
+    'Trusted policy file path': '可信策略文件路径',
+    'Register Review Policy': '登记 Review Policy',
+    'Register Compute Policy': '登记 Compute Policy',
+    'Registered trusted Review Policy {name}.': '已登记可信 Review Policy {name}。',
+    'Registered trusted Compute Policy {name}.': '已登记可信 Compute Policy {name}。',
+    'The policy could not be registered. Nothing was changed.': '策略登记失败，未做任何更改。',
+    'Register trusted Compute Policy': '登记可信 Compute Policy',
+    'Bind the Compute Policy to a Provider Profile so reviews have a real compute connection. The binding is validated against the policy provider and, for local-cli, the command fingerprint.':
+      '将 Compute Policy 绑定到 Provider Profile，使检视拥有真实的算力连接。绑定会按策略 provider 校验；local-cli 还会校验命令指纹。',
+    'Bound Provider Profile': '绑定的 Provider Profile',
+    'Not bound (reviews cannot start)': '未绑定（无法发起检视）',
+    'Not bound — reviews using this policy cannot start': '未绑定 — 使用此策略的检视无法启动',
+    'Session Insight observation is advisory and never affects the Gate.':
+      'Session Insight 观测仅为建议性，绝不影响 Gate。',
   },
 }
 

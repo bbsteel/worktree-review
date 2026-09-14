@@ -116,6 +116,7 @@ export const PUBLICATION_PRESENTATION: Record<PublicationStatus, { label: string
   in_progress: { label: 'Check publication in progress' },
   published: { label: 'Check published' },
   failed: { label: 'Check publication failed' },
+  superseded: { label: 'Check publication superseded by a newer attempt' },
 }
 
 export const BYPASS_PRESENTATION: Record<Exclude<BypassState, 'none'>, StatusPresentation> = {

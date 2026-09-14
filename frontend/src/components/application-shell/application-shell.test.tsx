@@ -1,7 +1,7 @@
 import { cleanup, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { createMemoryRouter, RouterProvider } from 'react-router'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { MOCK_DATA_BADGE } from '../../data/index.ts'
 import { OverviewPage } from '../../pages/OverviewPage.tsx'
 import { DataSourceProvider } from '../../app/DataSourceProvider.tsx'
@@ -10,8 +10,14 @@ import { ThemeProvider } from '../../app/ThemeProvider.tsx'
 import { stubMatchMedia } from '../../test/match-media.ts'
 import { ApplicationShell } from './ApplicationShell.tsx'
 
+beforeEach(() => {
+  // The shell tests exercise the offline demo presentation.
+  vi.stubEnv('VITE_REVIEW_DATA_SOURCE', 'mock')
+})
+
 afterEach(() => {
   cleanup()
+  vi.unstubAllEnvs()
 })
 
 function renderShell(path = '/overview') {
@@ -70,7 +76,7 @@ describe('ApplicationShell', () => {
       /Reviews list is Preview/,
     )
     expect(screen.getByRole('button', { name: /Session Insight/ })).toHaveAccessibleDescription(
-      /Session Insight is disconnected/,
+      /advisory and never affects the Gate/,
     )
   })
 

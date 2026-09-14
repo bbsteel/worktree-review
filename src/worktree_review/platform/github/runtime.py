@@ -473,6 +473,7 @@ async def build_server_runtime(
             github_store=github_store,
             review_worker=review_worker,
             publisher=publisher,
+            state=state,
         )
         return ServerRuntime(
             retry_coordinator=retry_coordinator,
@@ -508,8 +509,15 @@ def _github_clone_url_resolver(factory: GitHubClientFactory) -> CloneUrlResolver
 
 
 def _trusted_provider_factory(compute_policy_path: Path) -> ProviderFactory:
-    def factory(_snapshot: AttemptExecutionSnapshot) -> ProviderClient:
-        compute_policy, _version = load_compute_policy(compute_policy_path)
+    def factory(snapshot: AttemptExecutionSnapshot) -> ProviderClient:
+        # Prefer the frozen snapshot document; older snapshots fall back to
+        # the trusted file.
+        if snapshot.compute_policy_document is not None:
+            from worktree_review.core.policy import ComputePolicy
+
+            compute_policy = ComputePolicy.model_validate(snapshot.compute_policy_document)
+        else:
+            compute_policy, _version = load_compute_policy(compute_policy_path)
         return build_provider(compute_policy)
 
     return factory

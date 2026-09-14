@@ -123,6 +123,8 @@ function fakeClient(options: FakeClientOptions = {}): AdminClient {
     testProviderProfile: async () => ({ ok: true, detail: 'ok', tested_at: '2026-09-09T16:00:00Z' }),
     getReviewPolicy: async () => reviewPolicy,
     getComputePolicy: async () => computePolicy,
+    registerReviewPolicy: async () => reviewPolicy,
+    registerComputePolicy: async () => computePolicy,
   }
 }
 

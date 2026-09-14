@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -8,6 +8,7 @@ from worktree_review.application.lifecycle import PublicationStatus
 from worktree_review.application.review_events import ReviewEvent
 from worktree_review.core.identity import PolicyVersionIdentity, ReviewRequestKey
 from worktree_review.platform.github.persistence import (
+    PUBLICATION_BACKOFF_CAP_SECONDS,
     InMemoryGitHubReviewStore,
     PostgresGitHubReviewStore,
     assert_snapshot_is_writable,
@@ -67,7 +68,12 @@ async def test_snapshot_and_queued_check_are_recoverable_before_result() -> None
 
 @pytest.mark.asyncio
 async def test_publication_failure_can_retry_same_check_without_republishing() -> None:
-    store = InMemoryGitHubReviewStore()
+    now = datetime.now(UTC)
+
+    def _clock() -> datetime:
+        return now
+
+    store = InMemoryGitHubReviewStore(clock=_clock)
     await store.save_execution_snapshot(_snapshot())
     await store.set_check_run_id("a1", 99)
     intent = PublicationIntent(
@@ -80,6 +86,9 @@ async def test_publication_failure_can_retry_same_check_without_republishing() -
     claimed = await store.claim_publication("a1")
     assert claimed is not None
     await store.mark_publication("a1", status=PublicationStatus.FAILED, error="GitHub 502")
+    # Bounded backoff: an immediate re-claim is not due yet.
+    assert await store.claim_publication("a1") is None
+    now += timedelta(seconds=PUBLICATION_BACKOFF_CAP_SECONDS + 1)
     retry = await store.claim_publication("a1")
     assert retry is not None
     assert retry.check_run_id == 99
@@ -215,6 +224,9 @@ async def test_postgres_claim_does_not_return_published_intents() -> None:
             "attempt_count": 1,
         },
         "status": PublicationStatus.PUBLISHED.value,
+        "attempt_count": 1,
+        "next_retry_at": None,
+        "updated_at": datetime.now(UTC),
     }
     store = PostgresGitHubReviewStore(_FakePool(connection))
     claimed = await store.claim_publication("a1")
@@ -237,6 +249,9 @@ async def test_postgres_claim_updates_queued_intent_atomically() -> None:
             "attempt_count": 0,
         },
         "status": PublicationStatus.QUEUED.value,
+        "attempt_count": 0,
+        "next_retry_at": None,
+        "updated_at": datetime.now(UTC),
     }
     store = PostgresGitHubReviewStore(_FakePool(connection))
     claimed = await store.claim_publication("a1")

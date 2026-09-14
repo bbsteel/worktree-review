@@ -154,3 +154,112 @@ def _clone_url(repository: Path):
         return str(repository)
 
     return _resolve
+
+
+@pytest.mark.asyncio
+async def test_worker_executes_from_frozen_policy_documents_after_file_changes(
+    tmp_path: Path, git_repository: Path, policy_dir: Path
+) -> None:
+    """Frozen documents let an old Attempt resume even after policy files change."""
+    import yaml
+
+    from worktree_review.core.policy import policy_version_identity
+
+    oid = head_oid(git_repository)
+    _, review_version = load_review_policy(policy_dir / "review-policy.yaml")
+    _, compute_version = load_compute_policy(policy_dir / "compute-policy.yaml")
+    review_document = yaml.safe_load((policy_dir / "review-policy.yaml").read_text())
+    compute_document = yaml.safe_load((policy_dir / "compute-policy.yaml").read_text())
+    state = InMemoryAuthoritativeAttemptStore()
+    github_store = InMemoryGitHubReviewStore()
+    locator = GitHubChangeRequestLocator(
+        installation_id=7, repository="octo/example", pull_request_number=42
+    )
+    request_key = _request_key(oid, review_version)
+    lease = await state.start_authoritative_attempt(change_request=locator, request_key=request_key)
+    await github_store.save_execution_snapshot(
+        AttemptExecutionSnapshot(
+            attempt_id=lease.attempt_id,
+            change_request=locator,
+            request_key=request_key,
+            proposed_ref="HEAD",
+            review_policy_semver=review_version.semver,
+            review_policy_sha256=review_version.sha256,
+            compute_policy_semver=compute_version.semver,
+            compute_policy_sha256=compute_version.sha256,
+            review_policy_document=review_document,
+            compute_policy_document=compute_document,
+        )
+    )
+    # Newer Attempts legitimately adopt new policy content; the old Attempt
+    # must not see it.
+    (policy_dir / "review-policy.yaml").write_text(
+        (policy_dir / "review-policy.yaml").read_text().replace("  - major\n", ""),
+        encoding="utf-8",
+    )
+    worker = GitHubReviewWorker(
+        state=state,
+        github_store=github_store,
+        mirrors=RepositoryMirrorManager(tmp_path / "mirrors"),
+        checks=_FakeChecks(),
+        review_policy_path=policy_dir / "review-policy.yaml",
+        compute_policy_path=policy_dir / "compute-policy.yaml",
+        resolve_clone_url=_clone_url(git_repository),
+        provider_factory=lambda _snapshot: ScriptedProvider(
+            payloads={"correctness": {"findings": []}}
+        ),
+    )
+    report = await worker.execute_claimed_attempt(lease.attempt_id)
+    assert report is not None
+    assert report.review_policy_version.sha256 == review_version.sha256
+    del policy_version_identity
+
+
+@pytest.mark.asyncio
+async def test_worker_rejects_tampered_frozen_documents(
+    tmp_path: Path, git_repository: Path, policy_dir: Path
+) -> None:
+    import yaml
+
+    oid = head_oid(git_repository)
+    _, review_version = load_review_policy(policy_dir / "review-policy.yaml")
+    _, compute_version = load_compute_policy(policy_dir / "compute-policy.yaml")
+    review_document = yaml.safe_load((policy_dir / "review-policy.yaml").read_text())
+    compute_document = yaml.safe_load((policy_dir / "compute-policy.yaml").read_text())
+    state = InMemoryAuthoritativeAttemptStore()
+    github_store = InMemoryGitHubReviewStore()
+    locator = GitHubChangeRequestLocator(
+        installation_id=7, repository="octo/example", pull_request_number=42
+    )
+    request_key = _request_key(oid, review_version)
+    lease = await state.start_authoritative_attempt(change_request=locator, request_key=request_key)
+    review_document["blocking_severities"] = ["critical"]  # tampered: weakens the gate
+    await github_store.save_execution_snapshot(
+        AttemptExecutionSnapshot(
+            attempt_id=lease.attempt_id,
+            change_request=locator,
+            request_key=request_key,
+            proposed_ref="HEAD",
+            review_policy_semver=review_version.semver,
+            review_policy_sha256=review_version.sha256,
+            compute_policy_semver=compute_version.semver,
+            compute_policy_sha256=compute_version.sha256,
+            review_policy_document=review_document,
+            compute_policy_document=compute_document,
+        )
+    )
+    worker = GitHubReviewWorker(
+        state=state,
+        github_store=github_store,
+        mirrors=RepositoryMirrorManager(tmp_path / "mirrors"),
+        checks=_FakeChecks(),
+        review_policy_path=policy_dir / "review-policy.yaml",
+        compute_policy_path=policy_dir / "compute-policy.yaml",
+        resolve_clone_url=_clone_url(git_repository),
+        provider_factory=lambda _snapshot: ScriptedProvider(
+            payloads={"correctness": {"findings": []}}
+        ),
+    )
+    with pytest.raises(PolicyDriftError, match="snapshot identity"):
+        await worker.execute_claimed_attempt(lease.attempt_id)
+    assert worker.pipeline_invocations == 0

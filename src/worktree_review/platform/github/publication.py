@@ -88,15 +88,33 @@ class GitHubCheckPublisher:
                 payload=payload.as_github_payload(),
             )
         )
-        cas = await self._state.publish_if_authoritative(
-            attempt_id=attempt_id,
-            request_key=report.request_key,
-            review_identity=report.review_identity,
-            gate_state=report.gate_state,
-        )
-        return await self._deliver(attempt_id, report, cas)
+        # The first delivery counts against the bounded retry budget too.
+        await self._github_store.claim_publication(attempt_id, respect_backoff=False)
+        try:
+            publication_decision = await self._state.publish_if_authoritative(
+                attempt_id=attempt_id,
+                request_key=report.request_key,
+                review_identity=report.review_identity,
+                gate_state=report.gate_state,
+            )
+            return await self._deliver(attempt_id, report, publication_decision)
+        except GitHubApiError:
+            raise
+        except Exception as exc:
+            # Same rule as retry_outbox: a claimed intent must never squat
+            # IN_PROGRESS — release it into the bounded backoff immediately.
+            await self._github_store.mark_publication(
+                attempt_id, status=PublicationStatus.FAILED, error=str(exc)[:512]
+            )
+            raise
 
-    async def retry_outbox(self, attempt_id: str, report: ReviewReport) -> PublishResult:
+    async def retry_outbox(self, attempt_id: str, report: ReviewReport) -> PublishResult | None:
+        """Recover one pending publication.
+
+        Returns None when there is nothing to do right now (backoff not
+        elapsed, retry budget exhausted, or already in flight). Re-runs the
+        authoritative CAS before every remote delivery.
+        """
         intent = await self._github_store.claim_publication(attempt_id)
         if intent is None:
             status = await self._github_store.publication_status(attempt_id)
@@ -107,30 +125,69 @@ class GitHubCheckPublisher:
                     gate_state=report.gate_state,
                     detail="authoritative gate decision was already published",
                 )
-            raise GitHubApiError(f"no publication intent for {attempt_id}")
-        cas = await self._state.publish_if_authoritative(
-            attempt_id=attempt_id,
-            request_key=report.request_key,
-            review_identity=report.review_identity,
-            gate_state=report.gate_state,
-        )
-        return await self._deliver(attempt_id, report, cas)
+            if status in (PublicationStatus.QUEUED, PublicationStatus.FAILED):
+                # Backoff not elapsed, retry budget exhausted, or another
+                # worker holds the claim lease — nothing to do this pass.
+                return None
+            # Crash window: the result was saved but no intent was ever
+            # enqueued. Enqueue now, then run the normal CAS + delivery.
+            check_run_id = await self._github_store.get_check_run_id(attempt_id)
+            if check_run_id is None:
+                await self._github_store.mark_publication(
+                    attempt_id,
+                    status=PublicationStatus.FAILED,
+                    error="missing check_run_id; cannot publish",
+                )
+                return None
+            payload = build_check_run_payload(
+                report,
+                annotations=limited_annotations(report),
+                details_url=self._details_url_for(attempt_id),
+            )
+            await self._github_store.enqueue_publication(
+                PublicationIntent(
+                    attempt_id=attempt_id,
+                    check_run_id=check_run_id,
+                    intent="terminal-check",
+                    payload=payload.as_github_payload(),
+                )
+            )
+            if await self._github_store.claim_publication(attempt_id) is None:
+                return None
+        try:
+            publication_decision = await self._state.publish_if_authoritative(
+                attempt_id=attempt_id,
+                request_key=report.request_key,
+                review_identity=report.review_identity,
+                gate_state=report.gate_state,
+            )
+            return await self._deliver(attempt_id, report, publication_decision)
+        except GitHubApiError:
+            raise
+        except Exception as exc:
+            # A claimed intent must never squat IN_PROGRESS: release it into
+            # the bounded backoff so a later pass (or the terminal FAILED
+            # state) owns it.
+            await self._github_store.mark_publication(
+                attempt_id, status=PublicationStatus.FAILED, error=str(exc)[:512]
+            )
+            raise
 
     async def _deliver(
-        self, attempt_id: str, report: ReviewReport, cas: PublishResult
+        self, attempt_id: str, report: ReviewReport, publication_decision: PublishResult
     ) -> PublishResult:
         check_run_id = await self._github_store.get_check_run_id(attempt_id)
         if check_run_id is None:
             await self._github_store.mark_publication(
                 attempt_id, status=PublicationStatus.FAILED, error="missing check_run_id"
             )
-            return cas
+            return publication_decision
         payload = build_check_run_payload(
             report,
             annotations=limited_annotations(report),
             details_url=self._details_url_for(attempt_id),
         )
-        if cas.disposition is not PublishDisposition.PUBLISHED:
+        if publication_decision.disposition is not PublishDisposition.PUBLISHED:
             # This Attempt's own Check may complete as audit-only. Never create a
             # new Check, and never PATCH the successor Attempt's check_run_id.
             try:
@@ -141,12 +198,14 @@ class GitHubCheckPublisher:
                 )
             except GitHubApiError:
                 pass
+            # Terminal, not FAILED: superseded publications never enter the
+            # retry backoff — re-delivering them is never useful.
             await self._github_store.mark_publication(
                 attempt_id,
-                status=PublicationStatus.FAILED,
+                status=PublicationStatus.SUPERSEDED,
                 error="superseded before publication",
             )
-            return cas
+            return publication_decision
         try:
             await self._checks.update_check_run(
                 repository=report.resolved.source_repository,
@@ -157,6 +216,6 @@ class GitHubCheckPublisher:
             await self._github_store.mark_publication(
                 attempt_id, status=PublicationStatus.FAILED, error=str(exc)
             )
-            return cas
+            return publication_decision
         await self._github_store.mark_publication(attempt_id, status=PublicationStatus.PUBLISHED)
-        return cas
+        return publication_decision

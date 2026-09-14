@@ -225,6 +225,8 @@ export interface ReviewRunDto {
   usage: UsageDto
   provider_health: ProviderHealthDto
   available_actions: AvailableActionsDto
+  /** Server-computed Session Insight deep link from trusted deployment config. */
+  session_insight_deep_link?: string | null
 }
 
 export interface OverviewStatsDto {
@@ -341,7 +343,7 @@ export interface RegisterRepositoryRequestDto {
   display_name?: string
 }
 
-export type CredentialReferenceState = 'configured' | 'missing' | 'invalid_reference'
+export type CredentialReferenceState = 'configured' | 'missing' | 'invalid_reference' | 'not_applicable'
 
 export interface ProviderProfileDto {
   profile_id: string
@@ -369,10 +371,25 @@ export interface SaveProviderProfileRequestDto {
   adapter_label?: string | null
 }
 
+export type ProviderTestKind =
+  | 'credential_reference_validation'
+  | 'local_cli_executable_check'
+
 export interface ProviderTestResultDto {
   ok: boolean
+  /** What was actually verified — never implied to be a live provider call. */
+  test_kind?: ProviderTestKind
   detail: string
   tested_at: string
+}
+
+export interface RegisterReviewPolicyRequestDto {
+  path: string
+}
+
+export interface RegisterComputePolicyRequestDto {
+  path: string
+  provider_profile_id?: string | null
 }
 
 export interface ReviewPolicyDto {

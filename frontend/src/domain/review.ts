@@ -32,6 +32,8 @@ export type PublicationStatus =
   | 'in_progress'
   | 'published'
   | 'failed'
+  /** Terminal, never retried: a newer attempt took authority. */
+  | 'superseded'
 
 export type BypassState = 'none' | 'active' | 'invalidated'
 
@@ -286,4 +288,10 @@ export interface ReviewRunView {
   usage: ReviewUsageView
   providerHealth: ProviderHealthView
   availableActions: AvailableReviewActionsView
+  /**
+   * Server-computed deep link from trusted deployment configuration:
+   * <base>#/session/worktree-review/<attempt-id>. Present only when the
+   * Session Insight integration is connected.
+   */
+  sessionInsightDeepLink?: string | null
 }

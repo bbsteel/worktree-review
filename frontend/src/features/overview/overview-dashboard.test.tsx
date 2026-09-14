@@ -1,7 +1,7 @@
 import { cleanup, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { createMemoryRouter, RouterProvider } from 'react-router'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApplicationShell } from '../../components/application-shell/ApplicationShell.tsx'
 import { BLOCKED_DEMO_ATTEMPT_ID } from '../../data/index.ts'
 import { DataSourceProvider } from '../../app/DataSourceProvider.tsx'
@@ -9,8 +9,14 @@ import { ThemeProvider } from '../../app/ThemeProvider.tsx'
 import { OverviewPage } from '../../pages/OverviewPage.tsx'
 import { stubMatchMedia } from '../../test/match-media.ts'
 
+beforeEach(() => {
+  // Dashboard tests render the offline demo fixtures.
+  vi.stubEnv('VITE_REVIEW_DATA_SOURCE', 'mock')
+})
+
 afterEach(() => {
   cleanup()
+  vi.unstubAllEnvs()
 })
 
 function renderOverview(path = '/overview') {

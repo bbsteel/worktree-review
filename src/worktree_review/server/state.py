@@ -11,7 +11,9 @@ from __future__ import annotations
 
 import asyncio
 import json
-from dataclasses import dataclass
+from collections.abc import Callable
+from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from enum import StrEnum
 from typing import TYPE_CHECKING, Protocol
 from uuid import uuid4
@@ -44,10 +46,31 @@ class AttemptStatus(StrEnum):
 
 
 class JobStatus(StrEnum):
+    """Durable job lifecycle: queued → running → completed | retryable → queued → failed.
+
+    - QUEUED: claimable by a worker.
+    - RUNNING: claimed; carries a lease (updated_at). A stale lease is recoverable.
+    - RETRYABLE: execution raised; will be requeued while attempts remain.
+    - COMPLETED: terminal; pipeline reached a terminal report and CAS finished.
+    - FAILED: terminal; retry budget exhausted. Queryable, never silently stuck.
+    - SUPERSEDED: terminal; a newer Attempt took authority.
+    """
+
     QUEUED = "queued"
     RUNNING = "running"
     SUPERSEDED = "superseded"
     COMPLETED = "completed"
+    RETRYABLE = "retryable"
+    FAILED = "failed"
+
+
+@dataclass(frozen=True)
+class JobRecoveryReport:
+    """Outcome of one recovery pass over retryable and stale-leased jobs."""
+
+    requeued: tuple[str, ...] = ()
+    lease_recovered: tuple[str, ...] = ()
+    exhausted: tuple[str, ...] = ()
 
 
 class PublishDisposition(StrEnum):
@@ -65,6 +88,7 @@ class AttemptLease(BaseModel):
     request_key: ReviewRequestKey
     prior_authoritative_attempt_id: str | None = None
     delivery_replayed: bool = False
+    lease_recovered: bool = False
 
 
 class PublishResult(BaseModel):
@@ -130,6 +154,41 @@ class AuthoritativeAttemptStore(Protocol):
         """Claim an attempt-keyed job, discarding queued jobs already superseded."""
         ...
 
+    async def mark_job_retryable(self, *, attempt_id: str, error: str) -> None:
+        """Move a RUNNING job to RETRYABLE after an execution exception."""
+        ...
+
+    async def recover_interrupted_jobs(
+        self,
+        *,
+        max_attempts: int,
+        lease_seconds: float,
+    ) -> JobRecoveryReport:
+        """Requeue RETRYABLE jobs and stale RUNNING leases; exhaust to FAILED."""
+        ...
+
+    async def finalize_attempt_job(
+        self, attempt_id: str, *, status: JobStatus, reason: str
+    ) -> None:
+        """Force a non-terminal job into a terminal state (e.g. publication exhausted)."""
+        ...
+
+    async def job_status(self, attempt_id: str) -> JobStatus | None:
+        """Current durable job state for one Attempt (diagnostics/recovery)."""
+        ...
+
+    async def job_last_error(self, attempt_id: str) -> str | None:
+        """Last recorded job error detail (already bounded at write time)."""
+        ...
+
+    async def job_status_counts(self) -> dict[str, int]:
+        """Count of durable jobs per status, across all attempts."""
+        ...
+
+    async def job_ids_with_status(self, status: JobStatus) -> tuple[str, ...]:
+        """Attempt ids whose durable job currently holds the given status."""
+        ...
+
     async def publish_if_authoritative(
         self,
         *,
@@ -167,6 +226,13 @@ class AuthoritativeAttemptStore(Protocol):
     ) -> int: ...
 
 
+def _scrub_job_error(error: str) -> str:
+    """job.last_error is served to the browser: scrub credentials, bound length."""
+    from worktree_review.application.review_events import scrub_secret_content
+
+    return scrub_secret_content(error)[:1024]
+
+
 def _review_identity_matches_request_key(
     review_identity: ReviewIdentity,
     request_key: ReviewRequestKey,
@@ -194,6 +260,9 @@ class _MutableAttempt:
 class _MutableJob:
     attempt_id: str
     status: JobStatus
+    retry_count: int = 0
+    updated_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+    last_error: str | None = None
 
 
 @dataclass
@@ -214,8 +283,15 @@ def _delivery_key(installation_id: int, delivery_id: str) -> tuple[int, str]:
 class InMemoryAuthoritativeAttemptStore:
     """Small transactional model for race tests and local server development."""
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        clock: Callable[[], datetime] | None = None,
+        lease_seconds: float = 1800.0,
+    ) -> None:
         self._lock = asyncio.Lock()
+        self._clock = clock or (lambda: datetime.now(UTC))
+        self._lease_seconds = lease_seconds
         self._change_requests: dict[GitHubChangeRequestLocator, _MutableChangeRequest] = {}
         self._attempts: dict[str, _MutableAttempt] = {}
         self._jobs: dict[str, _MutableJob] = {}
@@ -334,19 +410,123 @@ class InMemoryAuthoritativeAttemptStore:
         async with self._lock:
             attempt = self._attempts.get(attempt_id)
             job = self._jobs.get(attempt_id)
-            if attempt is None or job is None or job.status is not JobStatus.QUEUED:
+            if attempt is None or job is None:
+                return None
+            lease_recovered = False
+            if job.status is JobStatus.RUNNING:
+                # A worker died mid-flight: reclaim only after the lease expires.
+                stale = (self._clock() - job.updated_at).total_seconds() > self._lease_seconds
+                if not stale:
+                    return None
+                job.retry_count += 1
+                job.status = JobStatus.QUEUED
+                lease_recovered = True
+                self._audit_events.append(
+                    {
+                        "event_type": "job_lease_recovered",
+                        "attempt_id": attempt_id,
+                        "payload": {"retry_count": job.retry_count},
+                    }
+                )
+            if job.status is not JobStatus.QUEUED:
                 return None
             change_request = self._change_requests[attempt.change_request]
             if change_request.authoritative_attempt_id != attempt_id:
                 job.status = JobStatus.SUPERSEDED
+                job.updated_at = self._clock()
                 attempt.status = AttemptStatus.SUPERSEDED
                 return None
             job.status = JobStatus.RUNNING
+            job.updated_at = self._clock()
             attempt.status = AttemptStatus.RUNNING
             return AttemptLease(
                 attempt_id=attempt.attempt_id,
                 change_request=attempt.change_request,
                 request_key=attempt.request_key,
+                lease_recovered=lease_recovered,
+            )
+
+    async def mark_job_retryable(self, *, attempt_id: str, error: str) -> None:
+        async with self._lock:
+            job = self._jobs.get(attempt_id)
+            if job is None or job.status is not JobStatus.RUNNING:
+                return
+            job.status = JobStatus.RETRYABLE
+            job.retry_count += 1
+            job.last_error = _scrub_job_error(error)
+            job.updated_at = self._clock()
+            self._audit_events.append(
+                {
+                    "event_type": "job_retryable",
+                    "attempt_id": attempt_id,
+                    "payload": {"retry_count": job.retry_count, "error": job.last_error},
+                }
+            )
+
+    async def recover_interrupted_jobs(
+        self,
+        *,
+        max_attempts: int,
+        lease_seconds: float,
+    ) -> JobRecoveryReport:
+        async with self._lock:
+            requeued: list[str] = []
+            lease_recovered: list[str] = []
+            exhausted: list[str] = []
+            now = self._clock()
+            for job in self._jobs.values():
+                if job.status is JobStatus.RETRYABLE:
+                    if job.retry_count >= max_attempts:
+                        job.status = JobStatus.FAILED
+                        job.updated_at = now
+                        exhausted.append(job.attempt_id)
+                        self._audit_events.append(
+                            {
+                                "event_type": "job_failed",
+                                "attempt_id": job.attempt_id,
+                                "payload": {
+                                    "retry_count": job.retry_count,
+                                    "last_error": job.last_error,
+                                },
+                            }
+                        )
+                    else:
+                        job.status = JobStatus.QUEUED
+                        job.updated_at = now
+                        requeued.append(job.attempt_id)
+                elif job.status is JobStatus.RUNNING:
+                    stale = (now - job.updated_at).total_seconds() > lease_seconds
+                    if not stale:
+                        continue
+                    job.retry_count += 1
+                    job.updated_at = now
+                    if job.retry_count >= max_attempts:
+                        job.status = JobStatus.FAILED
+                        exhausted.append(job.attempt_id)
+                        self._audit_events.append(
+                            {
+                                "event_type": "job_failed",
+                                "attempt_id": job.attempt_id,
+                                "payload": {
+                                    "retry_count": job.retry_count,
+                                    "reason": "lease expired without recovery",
+                                },
+                            }
+                        )
+                    else:
+                        job.status = JobStatus.QUEUED
+                        lease_recovered.append(job.attempt_id)
+                        self._audit_events.append(
+                            {
+                                "event_type": "job_lease_recovered",
+                                "attempt_id": job.attempt_id,
+                                "payload": {"retry_count": job.retry_count},
+                            }
+                        )
+            return JobRecoveryReport(
+                requeued=tuple(requeued),
+                lease_recovered=tuple(lease_recovered),
+                exhausted=tuple(exhausted),
             )
 
     async def publish_if_authoritative(
@@ -412,8 +592,13 @@ class InMemoryAuthoritativeAttemptStore:
             if not publication_inputs_match:
                 attempt.status = AttemptStatus.AUDIT_ONLY
                 job = self._jobs.get(attempt_id)
-                if job is not None and job.status is JobStatus.RUNNING:
+                if job is not None and job.status in (
+                    JobStatus.QUEUED,
+                    JobStatus.RUNNING,
+                    JobStatus.RETRYABLE,
+                ):
                     job.status = JobStatus.COMPLETED
+                    job.updated_at = self._clock()
                 detail = "Attempt was superseded before publication"
                 self._audit_events.append(
                     {
@@ -430,8 +615,13 @@ class InMemoryAuthoritativeAttemptStore:
 
             attempt.status = AttemptStatus.PUBLISHED
             job = self._jobs.get(attempt_id)
-            if job is not None:
+            if job is not None and job.status in (
+                JobStatus.QUEUED,
+                JobStatus.RUNNING,
+                JobStatus.RETRYABLE,
+            ):
                 job.status = JobStatus.COMPLETED
+                job.updated_at = self._clock()
             current_state.standing_attempt_id = attempt_id
             current_state.standing_gate_state = gate_state
             self._audit_events.append(
@@ -446,6 +636,30 @@ class InMemoryAuthoritativeAttemptStore:
                 attempt_id=attempt_id,
                 gate_state=gate_state,
                 detail="authoritative gate decision published",
+            )
+
+    async def finalize_attempt_job(
+        self, attempt_id: str, *, status: JobStatus, reason: str
+    ) -> None:
+        if status not in (JobStatus.COMPLETED, JobStatus.FAILED):
+            raise StateConflictError("finalize_attempt_job requires a terminal status")
+        async with self._lock:
+            job = self._jobs.get(attempt_id)
+            if job is None or job.status in (
+                JobStatus.COMPLETED,
+                JobStatus.FAILED,
+                JobStatus.SUPERSEDED,
+            ):
+                return
+            job.status = status
+            job.last_error = _scrub_job_error(reason)
+            job.updated_at = self._clock()
+            self._audit_events.append(
+                {
+                    "event_type": "job_finalized",
+                    "attempt_id": attempt_id,
+                    "payload": {"status": status.value, "reason": _scrub_job_error(reason)},
+                }
             )
 
     async def get_change_request_state(
@@ -490,6 +704,22 @@ class InMemoryAuthoritativeAttemptStore:
         async with self._lock:
             job = self._jobs.get(attempt_id)
             return None if job is None else job.status
+
+    async def job_last_error(self, attempt_id: str) -> str | None:
+        async with self._lock:
+            job = self._jobs.get(attempt_id)
+            return None if job is None else job.last_error
+
+    async def job_status_counts(self) -> dict[str, int]:
+        async with self._lock:
+            counts: dict[str, int] = {}
+            for job in self._jobs.values():
+                counts[job.status.value] = counts.get(job.status.value, 0) + 1
+            return counts
+
+    async def job_ids_with_status(self, status: JobStatus) -> tuple[str, ...]:
+        async with self._lock:
+            return tuple(job.attempt_id for job in self._jobs.values() if job.status is status)
 
     async def invalidate_standing_decision(
         self,
@@ -559,6 +789,11 @@ CREATE TABLE IF NOT EXISTS review_jobs (
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+ALTER TABLE review_jobs ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ
+    NOT NULL DEFAULT CURRENT_TIMESTAMP;
+ALTER TABLE review_jobs ADD COLUMN IF NOT EXISTS retry_count INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE review_jobs ADD COLUMN IF NOT EXISTS last_error TEXT;
+
 CREATE TABLE IF NOT EXISTS gate_decisions (
     decision_id BIGSERIAL PRIMARY KEY,
     installation_id BIGINT NOT NULL,
@@ -610,8 +845,9 @@ def _json_object(value: object) -> dict[str, object]:
 class PostgresAuthoritativeAttemptStore:
     """PostgreSQL implementation of the D8 state transitions."""
 
-    def __init__(self, pool: asyncpg.Pool) -> None:
+    def __init__(self, pool: asyncpg.Pool, *, lease_seconds: float = 1800.0) -> None:
         self._pool = pool
+        self._lease_seconds = lease_seconds
 
     async def initialise(self) -> None:
         async with self._pool.acquire() as connection:
@@ -899,24 +1135,55 @@ class PostgresAuthoritativeAttemptStore:
                     SELECT
                         a.attempt_id, a.installation_id, a.repository,
                         a.pull_request_number, a.request_key,
-                        c.authoritative_attempt_id
+                        c.authoritative_attempt_id,
+                        j.status AS job_status, j.updated_at AS job_updated_at,
+                        j.retry_count AS job_retry_count
                     FROM review_attempts AS a
                     JOIN change_requests AS c
                       ON c.installation_id = a.installation_id
                      AND c.repository = a.repository
                      AND c.pull_request_number = a.pull_request_number
                     JOIN review_jobs AS j ON j.attempt_id = a.attempt_id
-                    WHERE a.attempt_id = $1::uuid AND j.status = $2
+                    WHERE a.attempt_id = $1::uuid
+                      AND (j.status = $2
+                           OR (j.status = $3 AND j.updated_at
+                               < CURRENT_TIMESTAMP - make_interval(secs => $4)))
                     FOR UPDATE OF a, j, c
                     """,
                     attempt_id,
                     JobStatus.QUEUED.value,
+                    JobStatus.RUNNING.value,
+                    self._lease_seconds,
                 )
                 if row is None:
                     return None
+                lease_recovered = row["job_status"] == JobStatus.RUNNING.value
+                if lease_recovered:
+                    await connection.execute(
+                        """
+                        UPDATE review_jobs
+                        SET status = $2, retry_count = $3, updated_at = CURRENT_TIMESTAMP
+                        WHERE attempt_id = $1::uuid
+                        """,
+                        attempt_id,
+                        JobStatus.QUEUED.value,
+                        row["job_retry_count"] + 1,
+                    )
+                    await self._append_audit_event_on_connection(
+                        connection,
+                        event_type="job_lease_recovered",
+                        change_request=GitHubChangeRequestLocator(
+                            installation_id=row["installation_id"],
+                            repository=row["repository"],
+                            pull_request_number=row["pull_request_number"],
+                        ),
+                        attempt_id=attempt_id,
+                        payload={"retry_count": row["job_retry_count"] + 1},
+                    )
                 if str(row["authoritative_attempt_id"]) != attempt_id:
                     await connection.execute(
-                        "UPDATE review_jobs SET status = $1 WHERE attempt_id = $2::uuid",
+                        "UPDATE review_jobs SET status = $1, updated_at = CURRENT_TIMESTAMP "
+                        "WHERE attempt_id = $2::uuid",
                         JobStatus.SUPERSEDED.value,
                         attempt_id,
                     )
@@ -927,7 +1194,8 @@ class PostgresAuthoritativeAttemptStore:
                     )
                     return None
                 await connection.execute(
-                    "UPDATE review_jobs SET status = $1 WHERE attempt_id = $2::uuid",
+                    "UPDATE review_jobs SET status = $1, updated_at = CURRENT_TIMESTAMP "
+                    "WHERE attempt_id = $2::uuid",
                     JobStatus.RUNNING.value,
                     attempt_id,
                 )
@@ -944,7 +1212,127 @@ class PostgresAuthoritativeAttemptStore:
                         pull_request_number=row["pull_request_number"],
                     ),
                     request_key=ReviewRequestKey.model_validate(_json_object(row["request_key"])),
+                    lease_recovered=lease_recovered,
                 )
+
+    async def mark_job_retryable(self, *, attempt_id: str, error: str) -> None:
+        bounded_error = _scrub_job_error(error)
+        async with self._pool.acquire() as connection:
+            async with connection.transaction():
+                row = await connection.fetchrow(
+                    """
+                    UPDATE review_jobs
+                    SET status = $2, retry_count = retry_count + 1, last_error = $3,
+                        updated_at = CURRENT_TIMESTAMP
+                    WHERE attempt_id = $1::uuid AND status = $4
+                    RETURNING retry_count
+                    """,
+                    attempt_id,
+                    JobStatus.RETRYABLE.value,
+                    bounded_error,
+                    JobStatus.RUNNING.value,
+                )
+                if row is None:
+                    return
+                attempt_row = await connection.fetchrow(
+                    """
+                    SELECT installation_id, repository, pull_request_number
+                    FROM review_attempts WHERE attempt_id = $1::uuid
+                    """,
+                    attempt_id,
+                )
+                if attempt_row is not None:
+                    await self._append_audit_event_on_connection(
+                        connection,
+                        event_type="job_retryable",
+                        change_request=GitHubChangeRequestLocator(
+                            installation_id=attempt_row["installation_id"],
+                            repository=attempt_row["repository"],
+                            pull_request_number=attempt_row["pull_request_number"],
+                        ),
+                        attempt_id=attempt_id,
+                        payload={"retry_count": row["retry_count"], "error": bounded_error},
+                    )
+
+    async def recover_interrupted_jobs(
+        self,
+        *,
+        max_attempts: int,
+        lease_seconds: float,
+    ) -> JobRecoveryReport:
+        requeued: list[str] = []
+        lease_recovered: list[str] = []
+        exhausted: list[str] = []
+        async with self._pool.acquire() as connection:
+            async with connection.transaction():
+                rows = await connection.fetch(
+                    """
+                    SELECT j.attempt_id, j.status, j.retry_count,
+                           a.installation_id, a.repository, a.pull_request_number
+                    FROM review_jobs AS j
+                    JOIN review_attempts AS a ON a.attempt_id = j.attempt_id
+                    WHERE j.status = $1
+                       OR (j.status = $2 AND j.updated_at
+                           < CURRENT_TIMESTAMP - make_interval(secs => $3))
+                    FOR UPDATE OF j
+                    """,
+                    JobStatus.RETRYABLE.value,
+                    JobStatus.RUNNING.value,
+                    lease_seconds,
+                )
+                for row in rows:
+                    attempt_id = str(row["attempt_id"])
+                    retry_count = row["retry_count"]
+                    from_stale_lease = row["status"] == JobStatus.RUNNING.value
+                    if from_stale_lease:
+                        retry_count += 1
+                    locator = GitHubChangeRequestLocator(
+                        installation_id=row["installation_id"],
+                        repository=row["repository"],
+                        pull_request_number=row["pull_request_number"],
+                    )
+                    if retry_count >= max_attempts:
+                        await connection.execute(
+                            "UPDATE review_jobs SET status = $2, retry_count = $3, "
+                            "updated_at = CURRENT_TIMESTAMP WHERE attempt_id = $1::uuid",
+                            attempt_id,
+                            JobStatus.FAILED.value,
+                            retry_count,
+                        )
+                        exhausted.append(attempt_id)
+                        await self._append_audit_event_on_connection(
+                            connection,
+                            event_type="job_failed",
+                            change_request=locator,
+                            attempt_id=attempt_id,
+                            payload={"retry_count": retry_count},
+                        )
+                    else:
+                        await connection.execute(
+                            "UPDATE review_jobs SET status = $2, retry_count = $3, "
+                            "updated_at = CURRENT_TIMESTAMP WHERE attempt_id = $1::uuid",
+                            attempt_id,
+                            JobStatus.QUEUED.value,
+                            retry_count,
+                        )
+                        if from_stale_lease:
+                            lease_recovered.append(attempt_id)
+                            event_type = "job_lease_recovered"
+                        else:
+                            requeued.append(attempt_id)
+                            event_type = "job_requeued"
+                        await self._append_audit_event_on_connection(
+                            connection,
+                            event_type=event_type,
+                            change_request=locator,
+                            attempt_id=attempt_id,
+                            payload={"retry_count": retry_count},
+                        )
+        return JobRecoveryReport(
+            requeued=tuple(requeued),
+            lease_recovered=tuple(lease_recovered),
+            exhausted=tuple(exhausted),
+        )
 
     async def publish_if_authoritative(
         self,
@@ -1059,7 +1447,9 @@ class PostgresAuthoritativeAttemptStore:
                         attempt_id,
                     )
                     await connection.execute(
-                        "UPDATE review_jobs SET status = $1 WHERE attempt_id = $2::uuid",
+                        "UPDATE review_jobs SET status = $1, updated_at = CURRENT_TIMESTAMP "
+                        "WHERE attempt_id = $2::uuid "
+                        "AND status IN ('queued', 'running', 'retryable')",
                         JobStatus.COMPLETED.value,
                         attempt_id,
                     )
@@ -1124,7 +1514,8 @@ class PostgresAuthoritativeAttemptStore:
                     attempt_id,
                 )
                 await connection.execute(
-                    "UPDATE review_jobs SET status = $1 WHERE attempt_id = $2::uuid",
+                    "UPDATE review_jobs SET status = $1, updated_at = CURRENT_TIMESTAMP "
+                    "WHERE attempt_id = $2::uuid AND status IN ('queued', 'running', 'retryable')",
                     JobStatus.COMPLETED.value,
                     attempt_id,
                 )
@@ -1141,6 +1532,77 @@ class PostgresAuthoritativeAttemptStore:
                     gate_state=gate_state,
                     detail="authoritative gate decision published",
                 )
+
+    async def finalize_attempt_job(
+        self, attempt_id: str, *, status: JobStatus, reason: str
+    ) -> None:
+        if status not in (JobStatus.COMPLETED, JobStatus.FAILED):
+            raise StateConflictError("finalize_attempt_job requires a terminal status")
+        async with self._pool.acquire() as connection:
+            async with connection.transaction():
+                updated = await connection.execute(
+                    """
+                    UPDATE review_jobs
+                    SET status = $2, last_error = $3, updated_at = CURRENT_TIMESTAMP
+                    WHERE attempt_id = $1::uuid
+                      AND status NOT IN ('completed', 'failed', 'superseded')
+                    """,
+                    attempt_id,
+                    status.value,
+                    _scrub_job_error(reason),
+                )
+                if updated.endswith(" 0"):
+                    return
+                attempt_row = await connection.fetchrow(
+                    """
+                    SELECT installation_id, repository, pull_request_number
+                    FROM review_attempts WHERE attempt_id = $1::uuid
+                    """,
+                    attempt_id,
+                )
+                if attempt_row is not None:
+                    await self._append_audit_event_on_connection(
+                        connection,
+                        event_type="job_finalized",
+                        change_request=GitHubChangeRequestLocator(
+                            installation_id=attempt_row["installation_id"],
+                            repository=attempt_row["repository"],
+                            pull_request_number=attempt_row["pull_request_number"],
+                        ),
+                        attempt_id=attempt_id,
+                        payload={"status": status.value, "reason": _scrub_job_error(reason)},
+                    )
+
+    async def job_status(self, attempt_id: str) -> JobStatus | None:
+        async with self._pool.acquire() as connection:
+            value = await connection.fetchval(
+                "SELECT status FROM review_jobs WHERE attempt_id = $1::uuid",
+                attempt_id,
+            )
+        return None if value is None else JobStatus(value)
+
+    async def job_last_error(self, attempt_id: str) -> str | None:
+        async with self._pool.acquire() as connection:
+            value = await connection.fetchval(
+                "SELECT last_error FROM review_jobs WHERE attempt_id = $1::uuid",
+                attempt_id,
+            )
+        return None if value is None else str(value)
+
+    async def job_status_counts(self) -> dict[str, int]:
+        async with self._pool.acquire() as connection:
+            rows = await connection.fetch(
+                "SELECT status, COUNT(*) AS count FROM review_jobs GROUP BY status"
+            )
+        return {str(row["status"]): int(row["count"]) for row in rows}
+
+    async def job_ids_with_status(self, status: JobStatus) -> tuple[str, ...]:
+        async with self._pool.acquire() as connection:
+            rows = await connection.fetch(
+                "SELECT attempt_id FROM review_jobs WHERE status = $1",
+                status.value,
+            )
+        return tuple(str(row["attempt_id"]) for row in rows)
 
     async def get_change_request_state(
         self,

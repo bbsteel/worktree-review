@@ -1,11 +1,12 @@
 # Worktree Review 使用说明
 
-本说明介绍当前可用的 Worktree Review 使用界面：本地
-`worktree-review` CLI。内容包括安装、最小 Provider 配置、内置 Review Policy 与提示词
-层级、检视来源、输出格式和退出码。
+本说明介绍当前可用的 Worktree Review 使用界面：本地 `worktree-review` CLI 与由
+`worktree-review-server` 提供的本地 Web UI。内容包括安装、最小 Provider 配置、内置
+Review Policy 与提示词层级、检视来源、输出格式和退出码。
 
-GitHub server 目前已经有部分状态、webhook、retry 和 Checks adapter，但检视 worker
-尚未接入共享 pipeline，因此本阶段还不是端到端的面向用户的 GitHub 检视服务。
+GitHub App 链路（webhook → 权威 Attempt → durable worker → CAS 与有界 outbox 的 Check
+发布）已端到端接通，并在 Web UI 中提供同一个 Review Detail。该链路需要 PostgreSQL
+以及"Server 状态"一节列出的部署变量。
 
 ## 要求
 
@@ -524,7 +525,33 @@ uv sync --extra server
 
 `GET /healthz` 可作为 liveness endpoint。已签名的 `ready_for_review` webhook 会创建权威
 Attempt；durable worker 从不可变 snapshot 恢复并运行 shared Pipeline；终态 Check 与 Web
-Review Detail 发布到同一个 `check_run_id`。
+Review Detail 发布到同一个 `check_run_id`。重启后过期的 worker lease 会被恢复；发布失败
+通过有界退避的 outbox 重试，并且始终更新同一个 `check_run_id`。
+
+## 本地 Web UI
+
+`worktree-review-server` 同时从打包的前端 bundle（wheel）或 `frontend/dist`（源码
+checkout）提供本地 Web UI，默认仅监听 loopback（`WORKTREE_REVIEW_BIND_HOST`、
+`WORKTREE_REVIEW_BIND_PORT`）。本地状态保存在 SQLite
+（`WORKTREE_REVIEW_WEB_DATABASE`，默认 `$XDG_STATE_HOME/worktree-review/web.sqlite`）。
+
+- 浏览器写操作需要每进程的 CSRF token；前端会自动从 `GET /api/v1/csrf-bootstrap`
+  获取。Origin 通过 URL 解析后精确校验，写操作仅接受 loopback。
+- Repository 在 Repositories 页面登记；可信 Review/Compute Policy 在 Policies 页面从
+  服务器端路径登记，且必须位于所有被审查仓库之外；Compute Policy 绑定在 Providers
+  页面创建的 Provider Profile。
+- Provider Profile 只保存连接信息：远程 endpoint 加 `${ENV_VAR}` 凭据引用，或
+  local-cli adapter 与命令 argv（不通过 shell 执行）。凭据值在执行时于服务端解析，
+  从不进入浏览器。"Test connection" 诚实限定范围：远程 Provider 为凭据引用校验（不
+  发起 API 调用），本地 CLI 为可执行文件解析（不运行命令）。
+- 每个 Attempt 在创建时冻结其 Provider Profile 引用；之后的 Profile 修改不会改变
+  历史 Attempt。
+- Session Insight 观测通过 `WORKTREE_REVIEW_SESSION_INSIGHT_URL` 配置，可用
+  `WORKTREE_REVIEW_SESSION_INSIGHT_DISABLED=1` 关闭；集成状态在
+  `/api/v1/integrations/session-insight` 探测，绝不影响 Gate。
+- 离线演示（三个固定 Case）只能通过显式 demo 构建启用：
+  `npm --prefix frontend run build:demo` 后 `npm --prefix frontend run preview`。
+  正式构建默认使用 live 本地 API。
 
 ## 进一步阅读
 

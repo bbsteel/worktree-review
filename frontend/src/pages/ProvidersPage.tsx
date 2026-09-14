@@ -26,6 +26,7 @@ const CREDENTIAL_STATE_LABEL: Record<ProviderProfileDto['credential_state'], str
   configured: 'Configured',
   missing: 'Missing',
   invalid_reference: 'Invalid reference',
+  not_applicable: 'Not applicable',
 }
 
 function healthLabel(profile: ProviderProfileDto, translate: (key: string) => string): string {
@@ -290,6 +291,15 @@ export function ProvidersPage() {
                         timestamp: formatTimestamp(testResult.tested_at),
                         detail: testResult.detail,
                       })}
+                      {testResult.test_kind !== undefined
+                        ? ` · ${t('Scope: {kind}', {
+                            kind: t(
+                              testResult.test_kind === 'local_cli_executable_check'
+                                ? 'local CLI executable check (command not executed)'
+                                : 'credential reference validation (no provider call)',
+                            ),
+                          })}`
+                        : null}
                     </p>
                   ) : null}
                   {deleteError !== undefined ? (
@@ -516,7 +526,9 @@ export function ProvidersPage() {
       <Dialog
         open={pendingTest !== null}
         title={t('Test provider connection')}
-        description={t('This is an explicit action: it makes one real call to the provider endpoint or local command.')}
+        description={t(
+          'This validates what can be checked without spending money: credential reference resolution for remote providers (no API call is made), or argv and executable resolution for local CLI (the command is not run).',
+        )}
         onClose={() => {
           if (!testing) {
             setPendingTest(null)

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
+
 import pytest
 
 from worktree_review.application.lifecycle import PublicationStatus
@@ -88,7 +90,8 @@ def _report(attempt_id: str, request_key: ReviewRequestKey) -> ReviewReport:
 @pytest.mark.asyncio
 async def test_terminal_update_retries_same_check_and_does_not_rewrite_gate() -> None:
     state = InMemoryAuthoritativeAttemptStore()
-    store = InMemoryGitHubReviewStore()
+    now = datetime.now(UTC)
+    store = InMemoryGitHubReviewStore(clock=lambda: now)
     locator = GitHubChangeRequestLocator(
         installation_id=7, repository="octo/example", pull_request_number=42
     )
@@ -114,11 +117,16 @@ async def test_terminal_update_retries_same_check_and_does_not_rewrite_gate() ->
     assert first.gate_state is GateState.PASSED
     assert await store.publication_status(lease.attempt_id) is PublicationStatus.FAILED
     assert checks.updates == []
+    # Bounded backoff: an immediate outbox retry is not due yet.
+    assert await publisher.retry_outbox(lease.attempt_id, report) is None
+    now += timedelta(seconds=60)
     retry = await publisher.retry_outbox(lease.attempt_id, report)
+    assert retry is not None
     assert retry.disposition is PublishDisposition.PUBLISHED
     assert checks.updates == [99]
     assert await store.publication_status(lease.attempt_id) is PublicationStatus.PUBLISHED
     again = await publisher.retry_outbox(lease.attempt_id, report)
+    assert again is not None
     assert again.disposition is PublishDisposition.PUBLISHED
     assert checks.updates == [99]
 
@@ -153,3 +161,40 @@ async def test_late_superseded_attempt_cannot_replace_standing_check() -> None:
     assert current.authoritative_attempt_id == newer.attempt_id
     assert current.standing_attempt_id is None
     assert checks.updates == [11]
+
+
+@pytest.mark.asyncio
+async def test_first_publish_cas_failure_releases_the_claim_immediately() -> None:
+    state = InMemoryAuthoritativeAttemptStore()
+    now = datetime.now(UTC)
+    store = InMemoryGitHubReviewStore(clock=lambda: now)
+    locator = GitHubChangeRequestLocator(
+        installation_id=7, repository="octo/example", pull_request_number=42
+    )
+    request_key = ReviewRequestKey(
+        source_repository="octo/example",
+        target_ref="main",
+        target_head_oid="a" * 40,
+        proposed_head_oid="b" * 40,
+        review_policy_version=PolicyVersionIdentity(semver="1.0.0", sha256="d" * 64),
+    )
+    lease = await state.start_authoritative_attempt(change_request=locator, request_key=request_key)
+    report = _report(lease.attempt_id, request_key)
+    await state.record_review_identity(
+        attempt_id=lease.attempt_id, review_identity=report.review_identity
+    )
+    await state.claim_attempt_job(lease.attempt_id)
+    await store.set_check_run_id(lease.attempt_id, 99)
+
+    async def _broken_cas(**_kwargs: object) -> None:
+        raise RuntimeError("authoritative store connection reset")
+
+    publisher = GitHubCheckPublisher(state=state, github_store=store, checks=_FakeChecks())
+    publisher._state.publish_if_authoritative = _broken_cas  # type: ignore[method-assign]
+    with pytest.raises(RuntimeError, match="connection reset"):
+        await publisher.publish_terminal(attempt_id=lease.attempt_id, report=report)
+    # The claim was released into the bounded backoff, not stranded IN_PROGRESS.
+    assert await store.publication_status(lease.attempt_id) is PublicationStatus.FAILED
+    assert await store.claim_publication(lease.attempt_id) is None  # backoff, not stuck
+    now += timedelta(seconds=60)
+    assert await store.claim_publication(lease.attempt_id) is not None

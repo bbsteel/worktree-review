@@ -12,7 +12,9 @@ import type {
   CreateReviewResponseDto,
   ProviderProfileDto,
   ProviderTestResultDto,
+  RegisterComputePolicyRequestDto,
   RegisterRepositoryRequestDto,
+  RegisterReviewPolicyRequestDto,
   RepositoryDto,
   RepositoryStatusDto,
   ReviewListDto,
@@ -59,7 +61,12 @@ export interface ReviewApiClientConfig {
   /** Defaults to same-origin /api/v1. */
   baseUrl?: string
   fetchFn?: typeof fetch
-  /** Sent as X-CSRF-Token on mutation requests (design 19.1). */
+  /**
+   * Sent as X-CSRF-Token on mutation requests (design 19.1). When omitted,
+   * the client bootstraps a per-process token from the same-origin
+   * GET {baseUrl}/csrf-bootstrap endpoint before the first mutation and
+   * retries a mutation once after refreshing the token on a CSRF 403.
+   */
   csrfToken?: string | null
 }
 
@@ -68,10 +75,13 @@ export interface ReviewListPage {
   nextCursor: string | null
 }
 
+const CSRF_FAILURE_CODES = new Set(['missing_csrf_token', 'invalid_csrf_token'])
+
 export class ReviewApiClient {
   private readonly baseUrl: string
   private readonly fetchFn: typeof fetch
-  private readonly csrfToken: string | null
+  private csrfToken: string | null
+  private csrfBootstrap: Promise<string> | null = null
 
   constructor(config: ReviewApiClientConfig = {}) {
     this.baseUrl = config.baseUrl ?? '/api/v1'
@@ -79,10 +89,61 @@ export class ReviewApiClient {
     this.csrfToken = config.csrfToken ?? null
   }
 
+  /** Fetch (once) and cache this server process's CSRF token. */
+  private ensureCsrfToken(): Promise<string> {
+    if (this.csrfToken !== null) {
+      return Promise.resolve(this.csrfToken)
+    }
+    this.csrfBootstrap ??= this.fetchFn(`${this.baseUrl}/csrf-bootstrap`, {
+      method: 'GET',
+      headers: { Accept: 'application/json' },
+      credentials: 'same-origin',
+    })
+      .catch((error: unknown) => {
+        this.csrfBootstrap = null
+        throw new ApiError(
+          'network_unreachable',
+          error instanceof Error ? error.message : 'Network request failed',
+          0,
+        )
+      })
+      .then(async (response) => {
+      if (!response.ok) {
+        this.csrfBootstrap = null
+        throw new ApiError(
+          'csrf_bootstrap_failed',
+          `CSRF bootstrap failed with HTTP ${response.status}.`,
+          response.status,
+        )
+      }
+      const parsed: unknown = await response.json()
+      const token =
+        typeof parsed === 'object' && parsed !== null && 'csrf_token' in parsed
+          ? (parsed as { csrf_token?: unknown }).csrf_token
+          : undefined
+      if (typeof token !== 'string' || token === '') {
+        this.csrfBootstrap = null
+        throw new ApiError('csrf_bootstrap_failed', 'CSRF bootstrap returned no token.', response.status)
+      }
+      this.csrfToken = token
+      return token
+    })
+    return this.csrfBootstrap
+  }
+
   private async request<T>(
     method: 'GET' | 'POST' | 'PATCH' | 'DELETE',
     path: string,
     options: { body?: unknown; idempotencyKey?: string } = {},
+  ): Promise<T> {
+    return this.requestWithCsrfRetry(method, path, options, true)
+  }
+
+  private async requestWithCsrfRetry<T>(
+    method: 'GET' | 'POST' | 'PATCH' | 'DELETE',
+    path: string,
+    options: { body?: unknown; idempotencyKey?: string },
+    allowCsrfRetry: boolean,
   ): Promise<T> {
     const headers: Record<string, string> = {
       Accept: 'application/json',
@@ -94,9 +155,7 @@ export class ReviewApiClient {
       if (options.idempotencyKey !== undefined) {
         headers['Idempotency-Key'] = options.idempotencyKey
       }
-      if (this.csrfToken !== null) {
-        headers['X-CSRF-Token'] = this.csrfToken
-      }
+      headers['X-CSRF-Token'] = await this.ensureCsrfToken()
     }
 
     let response: Response
@@ -142,6 +201,14 @@ export class ReviewApiClient {
         typeof errorRecord?.message === 'string'
           ? errorRecord.message
           : `Request failed with HTTP ${response.status}.`
+      if (response.status === 403 && CSRF_FAILURE_CODES.has(code) && allowCsrfRetry) {
+        // The server process restarted (new token) or the cached token went
+        // stale: refresh once and retry the same request, keeping the same
+        // Idempotency-Key so the retry cannot duplicate the mutation.
+        this.csrfToken = null
+        this.csrfBootstrap = null
+        return this.requestWithCsrfRetry(method, path, options, false)
+      }
       if (code === 'result_unavailable') {
         throw new ResultUnavailableError(path)
       }
@@ -254,6 +321,20 @@ export class ReviewApiClient {
 
   async listReviewPolicies(): Promise<ReviewPolicyDto[]> {
     return this.request<ReviewPolicyDto[]>('GET', '/review-policies')
+  }
+
+  /** Register a trusted Review Policy from a server-side path (never from repo content). */
+  async registerReviewPolicy(
+    requestBody: RegisterReviewPolicyRequestDto,
+  ): Promise<ReviewPolicyDto> {
+    return this.request<ReviewPolicyDto>('POST', '/review-policies', { body: requestBody })
+  }
+
+  /** Register a trusted Compute Policy, optionally bound to a Provider Profile. */
+  async registerComputePolicy(
+    requestBody: RegisterComputePolicyRequestDto,
+  ): Promise<ComputePolicyDto> {
+    return this.request<ComputePolicyDto>('POST', '/compute-policies', { body: requestBody })
   }
 
   async getReviewPolicy(policyId: string): Promise<ReviewPolicyDto> {

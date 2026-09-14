@@ -15,7 +15,7 @@ import { cx } from '../ui/cx.ts'
 
 const previewReason = {
   reviews: 'Reviews list is Preview. Open a demo case from the prototype banner to see a Review Detail route.',
-  sessionInsight: 'Session Insight is disconnected in this Pre-Alpha prototype.',
+  sessionInsight: 'Session Insight observation is advisory and never affects the Gate.',
   github: 'GitHub integration is Preview and is not connected.',
   settings: 'Settings is Preview and is not available in this Pre-Alpha prototype.',
 }

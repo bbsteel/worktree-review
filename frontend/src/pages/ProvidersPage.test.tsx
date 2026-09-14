@@ -169,7 +169,7 @@ describe('ProvidersPage', () => {
 
     expect(testProviderProfile).not.toHaveBeenCalled()
     const dialog = await screen.findByRole('dialog')
-    expect(within(dialog).getByText(/one real call/)).toBeInTheDocument()
+    expect(within(dialog).getByText(/no API call is made/)).toBeInTheDocument()
 
     await user.click(within(dialog).getByRole('button', { name: 'Run test' }))
 

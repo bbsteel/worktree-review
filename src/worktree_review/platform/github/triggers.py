@@ -7,6 +7,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+import yaml
+
 from worktree_review.core.identity import ReviewRequestKey
 from worktree_review.core.policy import load_compute_policy, load_review_policy
 from worktree_review.platform.github.checks import (
@@ -16,7 +18,10 @@ from worktree_review.platform.github.checks import (
 )
 from worktree_review.platform.github.persistence import GitHubReviewStore
 from worktree_review.platform.github.retry import AttemptEnqueuer
-from worktree_review.platform.github.snapshot import AttemptExecutionSnapshot
+from worktree_review.platform.github.snapshot import (
+    AttemptExecutionSnapshot,
+    assert_document_secret_free,
+)
 from worktree_review.platform.github.webhooks import GitHubWebhookEvent, WebhookDispatchResult
 from worktree_review.server.state import (
     AttemptLease,
@@ -129,7 +134,6 @@ class GitHubTriggerCoordinator:
         pull_request: dict[str, Any],
     ) -> WebhookDispatchResult:
         review_policy, review_version = load_review_policy(self._review_policy_path)
-        _compute_policy, compute_version = load_compute_policy(self._compute_policy_path)
         del review_policy
         base = _object(pull_request, "base")
         head = _object(pull_request, "head")
@@ -171,15 +175,13 @@ class GitHubTriggerCoordinator:
                 attempt_id=lease.attempt_id,
                 detail="delivery was already processed",
             )
-        snapshot = AttemptExecutionSnapshot(
+        snapshot = build_frozen_execution_snapshot(
             attempt_id=lease.attempt_id,
             change_request=locator,
             request_key=request_key,
             proposed_ref=str(head.get("ref") or "HEAD"),
-            review_policy_semver=review_version.semver,
-            review_policy_sha256=review_version.sha256,
-            compute_policy_semver=compute_version.semver,
-            compute_policy_sha256=compute_version.sha256,
+            review_policy_path=self._review_policy_path,
+            compute_policy_path=self._compute_policy_path,
             provider_profile_id=self._provider_profile_id,
             delivery_id=event.delivery_id,
             pull_request_title=str(pull_request.get("title") or "") or None,
@@ -242,18 +244,13 @@ class QueuedAttemptPreparer:
     async def __call__(self, lease: AttemptLease) -> None:
         if await self._github_store.get_check_run_id(lease.attempt_id) is not None:
             return
-        _review_policy, review_version = load_review_policy(self._review_policy_path)
-        _compute_policy, compute_version = load_compute_policy(self._compute_policy_path)
-        del _review_policy, _compute_policy
-        snapshot = AttemptExecutionSnapshot(
+        snapshot = build_frozen_execution_snapshot(
             attempt_id=lease.attempt_id,
             change_request=lease.change_request,
             request_key=lease.request_key,
             proposed_ref="HEAD",
-            review_policy_semver=review_version.semver,
-            review_policy_sha256=review_version.sha256,
-            compute_policy_semver=compute_version.semver,
-            compute_policy_sha256=compute_version.sha256,
+            review_policy_path=self._review_policy_path,
+            compute_policy_path=self._compute_policy_path,
             provider_profile_id=self._provider_profile_id,
         )
         await self._github_store.save_execution_snapshot(snapshot)
@@ -266,6 +263,58 @@ class QueuedAttemptPreparer:
             ),
         )
         await self._github_store.set_check_run_id(lease.attempt_id, check_run_id)
+
+
+def build_frozen_execution_snapshot(
+    *,
+    attempt_id: str,
+    change_request: GitHubChangeRequestLocator,
+    request_key: ReviewRequestKey,
+    proposed_ref: str,
+    review_policy_path: Path,
+    compute_policy_path: Path,
+    provider_profile_id: str | None = None,
+    delivery_id: str | None = None,
+    pull_request_title: str | None = None,
+    author_login: str | None = None,
+) -> AttemptExecutionSnapshot:
+    """The single snapshot constructor for webhook and retry paths.
+
+    Freezes the policy documents themselves (not just their identities): the
+    Attempt must resume from this immutable snapshot even after the trusted
+    files legitimately change for newer Attempts. Policy schemas carry no
+    credentials; assert that recursively before persisting.
+    """
+    _review_policy, review_version = load_review_policy(review_policy_path)
+    _compute_policy, compute_version = load_compute_policy(compute_policy_path)
+    del _review_policy, _compute_policy
+    review_document = _read_yaml_document(review_policy_path)
+    compute_document = _read_yaml_document(compute_policy_path)
+    assert_document_secret_free(review_document, path="review_policy_document")
+    assert_document_secret_free(compute_document, path="compute_policy_document")
+    return AttemptExecutionSnapshot(
+        attempt_id=attempt_id,
+        change_request=change_request,
+        request_key=request_key,
+        proposed_ref=proposed_ref,
+        review_policy_semver=review_version.semver,
+        review_policy_sha256=review_version.sha256,
+        compute_policy_semver=compute_version.semver,
+        compute_policy_sha256=compute_version.sha256,
+        review_policy_document=review_document,
+        compute_policy_document=compute_document,
+        provider_profile_id=provider_profile_id,
+        delivery_id=delivery_id,
+        pull_request_title=pull_request_title,
+        author_login=author_login,
+    )
+
+
+def _read_yaml_document(path: Path) -> dict[str, Any]:
+    loaded = yaml.safe_load(path.read_text(encoding="utf-8"))
+    if not isinstance(loaded, dict):
+        raise ValueError(f"trusted policy file is not a YAML mapping: {path}")
+    return loaded
 
 
 def _locator_from_pull_request(payload: dict[str, Any]) -> GitHubChangeRequestLocator:

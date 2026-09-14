@@ -20,14 +20,24 @@ async def _prepared_client(tmp_path: Path, git_repository: Path, policy_dir: Pat
     from fastapi.testclient import TestClient
 
     runtime = await open_web_runtime(tmp_path / "api.sqlite")
+    runtime.csrf_token = "test-csrf"
     repository = await register_local_repository(
         runtime.store, requested_root=git_repository, display_name="demo"
     )
     review = await register_trusted_policy(
         runtime.store, policy_dir / "review-policy.yaml", kind="review"
     )
+    await runtime.store.insert_provider_profile(
+        profile_id="profile-test",
+        name="test-anthropic",
+        provider="anthropic",
+        credential_reference="${ANTHROPIC_API_KEY}",
+    )
     compute = await register_trusted_policy(
-        runtime.store, policy_dir / "compute-policy.yaml", kind="compute"
+        runtime.store,
+        policy_dir / "compute-policy.yaml",
+        kind="compute",
+        provider_profile_id="profile-test",
     )
     application = create_app(web_runtime=runtime, enable_local_web=False)
     client = TestClient(application, base_url="http://127.0.0.1")

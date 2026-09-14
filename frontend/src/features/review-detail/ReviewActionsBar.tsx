@@ -34,10 +34,11 @@ export function ReviewActionsBar({ run }: { run: ReviewRunView }) {
   const [activeDialog, setActiveDialog] = useState<ActiveDialog>(null)
   const [simulatedAction, setSimulatedAction] = useState<string | null>(null)
 
-  const sessionInsightLink = sessionInsightDeepLink(
-    configuredSessionInsightBaseUrl(),
-    run.attemptId,
-  )
+  // The trusted server-provided deep link (from deployment configuration)
+  // wins; the build-time VITE_SESSION_INSIGHT_URL is a local-dev fallback.
+  const sessionInsightLink =
+    run.sessionInsightDeepLink ??
+    sessionInsightDeepLink(configuredSessionInsightBaseUrl(), run.attemptId)
   const checkUrl = run.source.kind === 'github-pull-request' ? run.source.checkUrl : null
 
   const definitions: ActionDefinition[] = [

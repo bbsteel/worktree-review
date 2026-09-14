@@ -36,6 +36,9 @@ class PublicationStatus(StrEnum):
     IN_PROGRESS = "in_progress"
     PUBLISHED = "published"
     FAILED = "failed"
+    # Terminal, never retried: a newer Attempt took authority; this Attempt's
+    # own Check was completed audit-only and no standing decision changed.
+    SUPERSEDED = "superseded"
 
 
 class BypassState(StrEnum):

@@ -133,3 +133,62 @@ async def test_draft_and_retarget_and_target_push_invalidate_standing(policy_dir
     )
     pushed = await coordinator.handle(push)
     assert pushed.status in {"invalidated", "ignored"}
+
+
+@pytest.mark.asyncio
+async def test_webhook_snapshot_freezes_policy_documents(policy_dir: Path) -> None:
+    """First-PR webhook path must freeze policy documents, not only identities."""
+    coordinator, _state, store, _checks, _queue = await _coordinator(policy_dir)
+    result = await coordinator.handle(_pr_event(action="ready_for_review"))
+    assert result.status == "accepted"
+    snapshot = await store.get_execution_snapshot(result.attempt_id or "")
+    assert snapshot is not None
+    assert snapshot.review_policy_document is not None
+    assert snapshot.compute_policy_document is not None
+    assert snapshot.review_policy_document["schema"] == "worktree-review.review-policy/v1"
+    assert snapshot.compute_policy_document["schema"] == "worktree-review.compute-policy/v1"
+
+
+@pytest.mark.asyncio
+async def test_worker_executes_webhook_snapshot_after_policy_files_change(
+    tmp_path: Path, git_repository: Path, policy_dir: Path
+) -> None:
+    """Webhook-created Attempt keeps executing from its snapshot after disk changes."""
+    from tests.platform.test_github_worker import head_oid
+
+    from worktree_review.core.provider import ScriptedProvider
+    from worktree_review.platform.github.mirrors import RepositoryMirrorManager
+    from worktree_review.platform.github.worker import GitHubReviewWorker
+
+    coordinator, state, store, checks, _queue = await _coordinator(policy_dir)
+    real_oid = head_oid(git_repository)
+    result = await coordinator.handle(
+        _pr_event(action="ready_for_review", base_sha=real_oid, head_sha=real_oid)
+    )
+    assert result.status == "accepted"
+    attempt_id = result.attempt_id or ""
+    snapshot = await store.get_execution_snapshot(attempt_id)
+    assert snapshot is not None
+
+    # Newer Attempts adopt new policy content; this Attempt must not see it.
+    (policy_dir / "review-policy.yaml").write_text(
+        (policy_dir / "review-policy.yaml").read_text().replace("  - major\n", ""),
+        encoding="utf-8",
+    )
+
+    async def _clone(_snapshot: object) -> str:
+        return str(git_repository)
+
+    worker = GitHubReviewWorker(
+        state=state,
+        github_store=store,
+        mirrors=RepositoryMirrorManager(tmp_path / "mirrors"),
+        checks=checks,
+        review_policy_path=policy_dir / "review-policy.yaml",
+        compute_policy_path=policy_dir / "compute-policy.yaml",
+        resolve_clone_url=_clone,
+        provider_factory=lambda _snap: ScriptedProvider(payloads={"correctness": {"findings": []}}),
+    )
+    report = await worker.execute_claimed_attempt(attempt_id)
+    assert report is not None
+    assert report.review_policy_version.sha256 == snapshot.review_policy_sha256

@@ -6,6 +6,7 @@ import { ReviewNotFoundError } from './review-data-source.ts'
 
 afterEach(() => {
   vi.restoreAllMocks()
+  vi.unstubAllEnvs()
 })
 
 describe('MockReviewDataSource', () => {
@@ -39,7 +40,8 @@ describe('MockReviewDataSource', () => {
 })
 
 describe('createReviewDataSource', () => {
-  it('creates the mock source by default', () => {
+  it('creates the mock source only in the explicit demo mode', () => {
+    vi.stubEnv('VITE_REVIEW_DATA_SOURCE', 'mock')
     const source = createReviewDataSource()
     expect(source).toBeInstanceOf(MockReviewDataSource)
     expect(source.kind).toBe('mock')

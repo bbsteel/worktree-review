@@ -34,14 +34,24 @@ def _event(attempt_id: str, sequence: int, event_type: str = "stage.started") ->
 
 async def _runtime_with_repo(tmp_path: Path, git_repository: Path, policy_dir: Path):
     runtime = await open_web_runtime(tmp_path / "worker.sqlite")
+    runtime.csrf_token = "test-csrf"
     repository = await register_local_repository(
         runtime.store, requested_root=git_repository, display_name="demo"
     )
     review = await register_trusted_policy(
         runtime.store, policy_dir / "review-policy.yaml", kind="review"
     )
+    await runtime.store.insert_provider_profile(
+        profile_id="profile-test",
+        name="test-anthropic",
+        provider="anthropic",
+        credential_reference="${ANTHROPIC_API_KEY}",
+    )
     compute = await register_trusted_policy(
-        runtime.store, policy_dir / "compute-policy.yaml", kind="compute"
+        runtime.store,
+        policy_dir / "compute-policy.yaml",
+        kind="compute",
+        provider_profile_id="profile-test",
     )
     runtime.provider_factory = lambda _policy, _config: ScriptedProvider(
         payloads={"correctness": {"findings": []}}
@@ -100,9 +110,14 @@ async def test_sse_last_event_id_skips_already_seen_sequences(tmp_path: Path) ->
 
 @pytest.mark.asyncio
 async def test_worker_runs_pipeline_outside_http_and_http_still_does_not(
-    tmp_path: Path, git_repository: Path, policy_dir: Path
+    tmp_path: Path,
+    git_repository: Path,
+    policy_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from fastapi.testclient import TestClient
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key-not-sent-anywhere")
 
     runtime, repository, review, compute = await _runtime_with_repo(
         tmp_path, git_repository, policy_dir

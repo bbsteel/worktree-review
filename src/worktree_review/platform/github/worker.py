@@ -8,10 +8,17 @@ from pathlib import Path
 from typing import Any
 
 from worktree_review.application.event_recorder import ReviewEventRecorder
+from worktree_review.application.review_events import safe_error_payload
 from worktree_review.application.review_service import ReviewApplicationService
 from worktree_review.core.identity import ProposedSource, ResolvedCommitPair
 from worktree_review.core.pipeline import ReviewRequest
-from worktree_review.core.policy import load_compute_policy, load_review_policy
+from worktree_review.core.policy import (
+    ComputePolicy,
+    ReviewPolicy,
+    load_compute_policy,
+    load_review_policy,
+    policy_version_identity,
+)
 from worktree_review.core.provider import ProviderClient
 from worktree_review.core.report import ReviewProgressEvent, ReviewReport
 from worktree_review.platform.cli.result import cli_result_document
@@ -31,6 +38,43 @@ ProviderFactory = Callable[[AttemptExecutionSnapshot], ProviderClient]
 
 class PolicyDriftError(RuntimeError):
     """Trusted policy files no longer match the frozen execution snapshot."""
+
+
+def _policies_for_snapshot(
+    snapshot: AttemptExecutionSnapshot,
+    review_policy_path: Path,
+    compute_policy_path: Path,
+) -> tuple[Any, Any, Any, Any]:
+    """Resolve Review/Compute Policy from the immutable snapshot when frozen.
+
+    Snapshots written before document freezing fall back to the trusted
+    files with the original drift check.
+    """
+    if snapshot.review_policy_document is not None and (
+        snapshot.compute_policy_document is not None
+    ):
+        review_policy = ReviewPolicy.model_validate(snapshot.review_policy_document)
+        compute_policy = ComputePolicy.model_validate(snapshot.compute_policy_document)
+        review_version = policy_version_identity(
+            snapshot.review_policy_document, review_policy.version
+        )
+        compute_version = policy_version_identity(
+            snapshot.compute_policy_document, compute_policy.version
+        )
+        if (
+            review_version.sha256 != snapshot.review_policy_sha256
+            or compute_version.sha256 != snapshot.compute_policy_sha256
+        ):
+            raise PolicyDriftError("frozen policy documents do not match the snapshot identity")
+        return review_policy, review_version, compute_policy, compute_version
+    review_policy, review_version = load_review_policy(review_policy_path)
+    compute_policy, compute_version = load_compute_policy(compute_policy_path)
+    if (
+        review_version.sha256 != snapshot.review_policy_sha256
+        or compute_version.sha256 != snapshot.compute_policy_sha256
+    ):
+        raise PolicyDriftError("trusted policy identity drifted after snapshot freeze")
+    return review_policy, review_version, compute_policy, compute_version
 
 
 class GitHubReviewWorker:
@@ -75,13 +119,9 @@ class GitHubReviewWorker:
         snapshot = await self._github_store.get_execution_snapshot(attempt_id)
         if snapshot is None:
             raise PolicyDriftError(f"missing execution snapshot for {attempt_id}")
-        review_policy, review_version = load_review_policy(self._review_policy_path)
-        compute_policy, compute_version = load_compute_policy(self._compute_policy_path)
-        if (
-            review_version.sha256 != snapshot.review_policy_sha256
-            or compute_version.sha256 != snapshot.compute_policy_sha256
-        ):
-            raise PolicyDriftError("trusted policy identity drifted after snapshot freeze")
+        review_policy, review_version, compute_policy, compute_version = _policies_for_snapshot(
+            snapshot, self._review_policy_path, self._compute_policy_path
+        )
         check_run_id = await self._github_store.get_check_run_id(attempt_id)
         if check_run_id is not None:
             await self._checks.update_check_run(
@@ -162,11 +202,16 @@ class GitHubReviewWorker:
         except Exception as exc:
             await progress_queue.put(None)
             await drainer
+            # NOT attempt.failed: the durable layer decides whether this is a
+            # retryable job failure (attempt continues) or a terminal one
+            # (only the exhaustion path writes attempt.failed). Writing the
+            # terminal event here would close SSE streams and show a failed
+            # terminal state for an Attempt that is about to be retried.
             await self._recorder.record(
                 attempt_id=attempt_id,
                 surface="github",
-                event_type="attempt.failed",
-                payload={"safe_detail": str(exc)},
+                event_type="attempt.execution_failed",
+                payload=safe_error_payload(exc),
             )
             raise
         await progress_queue.put(None)

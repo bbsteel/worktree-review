@@ -1,13 +1,14 @@
 # Worktree Review usage
 
-This guide describes the currently usable Worktree Review surface: the local
-`worktree-review` CLI. It covers installation, minimal provider configuration,
-the built-in review policy and prompt hierarchy, source selection, output, and
-exit codes.
+This guide describes the currently usable Worktree Review surfaces: the local
+`worktree-review` CLI and the local Web UI served by `worktree-review-server`.
+It covers installation, minimal provider configuration, the built-in review
+policy and prompt hierarchy, source selection, output, and exit codes.
 
-The GitHub server has some state, webhook, retry, and Checks adapter pieces, but
-its review worker is not connected to the shared pipeline yet. It is not an
-end-to-end user-facing review service in this stage.
+The GitHub App pipeline (webhook → authoritative Attempt → durable worker →
+Check publication with CAS and a bounded outbox) is connected end to end and
+serves the same Review Detail in the Web UI. It requires PostgreSQL and the
+deployment variables listed under "Server status".
 
 ## Requirements
 
@@ -589,7 +590,41 @@ The current development runtime recognizes these deployment variables:
 `GET /healthz` is available as a liveness endpoint. A signed `ready_for_review`
 webhook creates an authoritative Attempt, the durable worker restores the
 immutable snapshot and runs the shared Pipeline, and the terminal Check plus
-Web Review Detail are published to the same `check_run_id`.
+Web Review Detail are published to the same `check_run_id`. Stale worker
+leases are recovered after restart; failed publications retry from a bounded
+outbox backoff and always update the same `check_run_id`.
+
+## Local Web UI
+
+`worktree-review-server` also serves the local Web UI from the packaged
+frontend bundle (wheel) or `frontend/dist` (source checkout), bound to
+loopback by default (`WORKTREE_REVIEW_BIND_HOST`, `WORKTREE_REVIEW_BIND_PORT`).
+Local state lives in SQLite (`WORKTREE_REVIEW_WEB_DATABASE`, default
+`$XDG_STATE_HOME/worktree-review/web.sqlite`).
+
+- Browser mutations require the per-process CSRF token; the frontend obtains
+  it from `GET /api/v1/csrf-bootstrap` automatically. Origin is validated by
+  exact URL parsing, and mutations are loopback-only.
+- Repositories are registered from the Repositories page; trusted Review and
+  Compute Policies are registered from server-side paths outside any reviewed
+  repository on the Policies page; Compute Policies bind a Provider Profile
+  created on the Providers page.
+- Provider Profiles store connection data only: remote endpoint plus a
+  `${ENV_VAR}` credential reference, or a local-cli adapter and command argv
+  (executed without a shell). Credential values are resolved server-side at
+  execution time and never reach the browser. "Test connection" is honestly
+  scoped: credential reference validation for remote providers (no API call),
+  executable resolution for local CLI (the command is not run).
+- Each Attempt freezes its Provider Profile reference at creation; later
+  profile edits never change historical Attempts.
+- Session Insight observation is configured with
+  `WORKTREE_REVIEW_SESSION_INSIGHT_URL` and can be turned off with
+  `WORKTREE_REVIEW_SESSION_INSIGHT_DISABLED=1`; the integration status is
+  probed at `/api/v1/integrations/session-insight` and never affects the Gate.
+- The offline demo (three fixed cases) is only reachable through the explicit
+  demo build: `npm --prefix frontend run build:demo` then
+  `npm --prefix frontend run preview`. Production builds default to the live
+  local API.
 
 ## Further reading
 
