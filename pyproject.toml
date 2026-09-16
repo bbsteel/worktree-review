@@ -8,13 +8,14 @@ dynamic = ["version"]
 description = "Full-worktree code review with evidence-bound GitHub gating and a local CLI."
 readme = "README.md"
 requires-python = ">=3.12"
-license = { text = "Proprietary" }
+license = { text = "Apache-2.0" }
 authors = [{ name = "Worktree Review" }]
 keywords = ["code-review", "git-worktree", "merge-gate", "github-app"]
 classifiers = [
   "Development Status :: 2 - Pre-Alpha",
   "Environment :: Console",
   "Intended Audience :: Developers",
+  "License :: OSI Approved :: Apache Software License",
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3.12",
   "Programming Language :: Python :: 3.13",
