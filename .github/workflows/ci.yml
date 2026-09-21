@@ -20,8 +20,24 @@ jobs:
       - name: Set up Python
         run: uv python install 3.12
 
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
       - name: Install package
         run: uv sync --frozen --extra server --group dev
+
+      # server/static is gitignored; pytest create_app() defaults still serve the
+      # production bundle, so build+sync before the backend suite.
+      - name: Build and sync frontend for server tests
+        run: |
+          npm --prefix frontend ci
+          npm --prefix frontend run build
+          python3 scripts/sync_frontend_dist.py
+          test -f src/worktree_review/server/static/index.html
 
       - name: Ruff
         run: uv run ruff check src tests && uv run ruff format --check src tests
@@ -34,6 +50,10 @@ jobs:
 
   frontend:
     runs-on: ubuntu-latest
+    env:
+      # Keep install + test on the same project-local browser cache that
+      # playwright.config.ts selects via PLAYWRIGHT_BROWSERS_PATH.
+      PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/frontend/.playwright-browsers
     steps:
       - uses: actions/checkout@v4
 

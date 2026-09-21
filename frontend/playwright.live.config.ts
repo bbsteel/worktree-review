@@ -1,4 +1,9 @@
+import { fileURLToPath } from 'node:url'
 import { defineConfig, devices } from '@playwright/test'
+
+process.env.PLAYWRIGHT_BROWSERS_PATH ??= fileURLToPath(
+  new URL('./.playwright-browsers', import.meta.url),
+)
 
 /**
  * Live acceptance E2E: drives the real worktree-review-server over a fresh

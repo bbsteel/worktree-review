@@ -299,4 +299,21 @@ def create_app(
     return application
 
 
-app = create_app()
+_app: FastAPI | None = None
+
+
+def __getattr__(name: str) -> FastAPI:
+    """Expose ``app`` lazily for ASGI servers.
+
+    Importing ``create_app`` (pytest collection, tooling) must not require a
+    built frontend bundle. ``uvicorn worktree_review.server.app:app`` still
+    constructs the real app on first attribute access and fails closed when
+    the production bundle is missing.
+    """
+
+    global _app
+    if name == "app":
+        if _app is None:
+            _app = create_app()
+        return _app
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
