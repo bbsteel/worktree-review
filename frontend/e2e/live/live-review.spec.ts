@@ -60,9 +60,14 @@ test('register repository, profile, and trusted policies through the browser', a
   await expect(page.getByText(/Registered trusted Review Policy/)).toBeVisible()
 
   await page.getByRole('tab', { name: 'Compute Policies' }).click()
-  await page.getByLabel('Trusted policy file path').fill(fixture.userConfigPath)
-  await page.getByLabel('Bound Provider Profile').selectOption({ index: 1 })
-  await page.getByRole('button', { name: 'Register Compute Policy' }).click()
+  // Scope to the compute form: both tabs keep a "Trusted policy file path"
+  // field in the DOM, and an unscoped getByLabel fills the Review Policy
+  // input while Compute stays empty (submit remains disabled).
+  const computeForm = page.getByRole('form', { name: 'Register trusted Compute Policy' })
+  await computeForm.getByLabel('Trusted policy file path').fill(fixture.userConfigPath)
+  await computeForm.getByLabel('Bound Provider Profile').selectOption({ index: 1 })
+  await expect(computeForm.getByRole('button', { name: 'Register Compute Policy' })).toBeEnabled()
+  await computeForm.getByRole('button', { name: 'Register Compute Policy' }).click()
   await expect(page.getByText(/Registered trusted Compute Policy/)).toBeVisible()
   await expect(page.getByText(/Not bound — reviews using this policy/)).toHaveCount(0)
 })
