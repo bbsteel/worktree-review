@@ -1,5 +1,6 @@
 import { createBrowserRouter, Navigate } from 'react-router'
 import { ApplicationShell } from '../components/application-shell/ApplicationShell.tsx'
+import { AuditLogPage } from '../pages/AuditLogPage.tsx'
 import { NewReviewPage } from '../pages/NewReviewPage.tsx'
 import { OverviewPage } from '../pages/OverviewPage.tsx'
 import { PoliciesPage } from '../pages/PoliciesPage.tsx'
@@ -24,6 +25,7 @@ export const router = createBrowserRouter([
       { path: 'repositories', element: <RepositoriesPage /> },
       { path: 'providers', element: <ProvidersPage /> },
       { path: 'policies', element: <PoliciesPage /> },
+      { path: 'audit', element: <AuditLogPage /> },
     ],
   },
 ])

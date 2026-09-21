@@ -7,6 +7,7 @@ always created beneath ``~/tmp`` and only those paths are deleted.
 
 from __future__ import annotations
 
+import contextlib
 import io
 import os
 import socket
@@ -66,13 +67,131 @@ def _postgres_env(root: Path) -> dict[str, str]:
     return env
 
 
+def _postgres_scratch_root() -> Path:
+    """Writable directory for ephemeral PG data dirs.
+
+    Prefers ``~/tmp`` (project convention). Falls back to
+    ``WORKTREE_REVIEW_TEST_TMP`` / ``TMPDIR`` when the home scratch tree is
+    not writable (for example a workspace sandbox), but only under known
+    throwaway parents — never an arbitrary path.
+    """
+
+    home_tmp = (Path.home() / "tmp").resolve()
+    explicit = os.environ.get("WORKTREE_REVIEW_TEST_TMP") or os.environ.get("TMPDIR")
+    candidates: list[Path] = [home_tmp]
+    if explicit:
+        candidates.append(Path(explicit).expanduser().resolve())
+    allowed_parents = {
+        home_tmp,
+        Path("/var/tmp").resolve(),
+        (Path.home() / "tmp" / "worktree-review").resolve(),
+    }
+    last_error: Exception | None = None
+    for candidate in candidates:
+        try:
+            if candidate != home_tmp and candidate not in allowed_parents:
+                if not any(
+                    candidate == parent or parent in candidate.parents for parent in allowed_parents
+                ):
+                    continue
+            candidate.mkdir(parents=True, exist_ok=True)
+            probe = candidate / f".wr-pg-probe-{os.getpid()}"
+            probe.write_text("ok", encoding="utf-8")
+            probe.unlink()
+            return candidate
+        except OSError as exc:
+            last_error = exc
+            continue
+    raise RuntimeError(
+        "no writable postgres scratch root under ~/tmp or an allowed TMPDIR; "
+        f"last error: {last_error}"
+    )
+
+
+def _wait_until_postgres_accepts_sql(
+    *,
+    root: Path,
+    env: dict[str, str],
+    port: int,
+    process: subprocess.Popen[bytes],
+    timeout_seconds: float = 15.0,
+) -> None:
+    """Block until PostgreSQL accepts a real SQL query, not merely a TCP accept.
+
+    TCP readiness races with startup: the first asyncpg connect can still see
+    ``CannotConnectNowError``. Prefer ``pg_isready`` when present, then confirm
+    with an ``asyncpg`` ``SELECT 1`` (zonky's linux bundle may omit ``psql``).
+    Preserve the last diagnostic on timeout.
+    """
+
+    import asyncio
+
+    import asyncpg
+
+    deadline = time.time() + timeout_seconds
+    pg_isready = root / "bin" / "pg_isready"
+    last_diagnostic = "postgres readiness not checked yet"
+    del env  # readiness probes talk over TCP; env is only for child processes
+
+    async def _select_one() -> None:
+        connection = await asyncpg.connect(
+            host="127.0.0.1",
+            port=port,
+            user="postgres",
+            database="postgres",
+            timeout=0.5,
+        )
+        try:
+            await connection.fetchval("SELECT 1")
+        finally:
+            await connection.close()
+
+    while time.time() < deadline:
+        if process.poll() is not None:
+            raise RuntimeError(
+                f"embedded postgres exited with {process.returncode}; "
+                f"last readiness diagnostic: {last_diagnostic}"
+            )
+        if pg_isready.is_file():
+            ready = subprocess.run(
+                [
+                    str(pg_isready),
+                    "-h",
+                    "127.0.0.1",
+                    "-p",
+                    str(port),
+                    "-U",
+                    "postgres",
+                ],
+                capture_output=True,
+                text=True,
+            )
+            if ready.returncode != 0:
+                last_diagnostic = (
+                    f"pg_isready exit {ready.returncode}: "
+                    f"{(ready.stderr or ready.stdout).strip() or 'not accepting connections'}"
+                )
+                time.sleep(0.1)
+                continue
+        try:
+            asyncio.run(_select_one())
+            return
+        except Exception as exc:
+            last_diagnostic = f"asyncpg SELECT 1 failed: {type(exc).__name__}: {exc}"
+            time.sleep(0.1)
+    process.terminate()
+    raise RuntimeError(
+        "embedded postgres did not become ready for SQL within "
+        f"{timeout_seconds:.0f}s; last diagnostic: {last_diagnostic}"
+    )
+
+
 def start_embedded_postgres() -> tuple[str, subprocess.Popen[bytes], Path]:
     root = _ensure_zonky_postgres()
     env = _postgres_env(root)
-    scratch_root = Path.home() / "tmp"
-    scratch_root.mkdir(parents=True, exist_ok=True)
+    scratch_root = _postgres_scratch_root()
     data_dir = Path(tempfile.mkdtemp(prefix="wr-pg-data-", dir=scratch_root))
-    if not str(data_dir).startswith(str(scratch_root)):
+    if not str(data_dir.resolve()).startswith(str(scratch_root.resolve())):
         raise RuntimeError(f"refusing to use non-tmp postgres data dir {data_dir}")
     initdb = root / "bin" / "initdb"
     postgres = root / "bin" / "postgres"
@@ -116,18 +235,18 @@ def start_embedded_postgres() -> tuple[str, subprocess.Popen[bytes], Path]:
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
-    deadline = time.time() + 15
-    while time.time() < deadline:
-        if process.poll() is not None:
-            raise RuntimeError(f"embedded postgres exited with {process.returncode}")
-        try:
-            with socket.create_connection(("127.0.0.1", port), timeout=0.2):
-                url = f"postgresql://postgres@127.0.0.1:{port}/postgres"
-                return url, process, data_dir
-        except OSError:
-            time.sleep(0.1)
-    process.terminate()
-    raise RuntimeError("embedded postgres did not become ready")
+    try:
+        _wait_until_postgres_accepts_sql(
+            root=root, env=env, port=port, process=process, timeout_seconds=15.0
+        )
+    except Exception:
+        if process.poll() is None:
+            process.terminate()
+            with contextlib.suppress(subprocess.TimeoutExpired):
+                process.wait(timeout=5)
+        raise
+    url = f"postgresql://postgres@127.0.0.1:{port}/postgres"
+    return url, process, data_dir
 
 
 def stop_embedded_postgres(process: subprocess.Popen[bytes], data_dir: Path) -> None:
@@ -137,12 +256,20 @@ def stop_embedded_postgres(process: subprocess.Popen[bytes], data_dir: Path) -> 
     except subprocess.TimeoutExpired:
         process.kill()
         process.wait(timeout=5)
-    # Delete only a verified scratch postgres data dir under ~/tmp, never
-    # anything else: the parent, name prefix, and PG_VERSION must all match.
-    scratch_root = (Path.home() / "tmp").resolve()
+    # Delete only a verified scratch postgres data dir under an allowed
+    # throwaway root, never anything else: parent allowlist, name prefix, and
+    # PG_VERSION must all match.
+    allowed_parents = {
+        (Path.home() / "tmp").resolve(),
+        Path("/var/tmp").resolve(),
+        (Path.home() / "tmp" / "worktree-review").resolve(),
+    }
+    env_tmp = os.environ.get("WORKTREE_REVIEW_TEST_TMP") or os.environ.get("TMPDIR")
+    if env_tmp:
+        allowed_parents.add(Path(env_tmp).expanduser().resolve())
     resolved_dir = data_dir.resolve()
     if (
-        resolved_dir.parent == scratch_root
+        resolved_dir.parent in allowed_parents
         and resolved_dir.name.startswith("wr-pg-data-")
         and (resolved_dir / "PG_VERSION").is_file()
     ):

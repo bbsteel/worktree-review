@@ -17,6 +17,8 @@ import { ReviewActionsBar } from './ReviewActionsBar.tsx'
 
 interface ReviewHeaderProps {
   run: ReviewRunView
+  /** Jump entry to the Findings tab for the per-finding Accept-risk actions. */
+  onShowFindings?: () => void
 }
 
 function MetaItem({ term, children }: { term: string; children: ReactNode }) {
@@ -29,16 +31,50 @@ function MetaItem({ term, children }: { term: string; children: ReactNode }) {
 }
 
 /**
+ * P3 §9.3 standing wording: the platform decision and the remote Check sync
+ * are always explained with icon-free text plus the badges, never by color
+ * alone. Returns null when there is nothing standing-related to say.
+ */
+function standingStatusText(
+  run: ReviewRunView,
+  t: (key: string, vars?: Record<string, string | number>) => string,
+): string | null {
+  if (run.standingGateState === undefined || run.standingGateState === null) {
+    return null
+  }
+  if (run.authority === 'superseded' && run.bypassState !== 'none') {
+    return t('Superseded · bypass retained for audit, no longer applicable')
+  }
+  if (run.standingGateState === 'Passed with bypass') {
+    if (run.checkSyncStatus === 'published') {
+      return t('Passed with bypass · GitHub Check updated')
+    }
+    if (run.checkSyncStatus === 'failed') {
+      return t('Risk acceptance recorded; GitHub Check is still blocking. Retry sync.')
+    }
+    return t('Passed with bypass · GitHub Check sync pending')
+  }
+  const remaining = run.gate.remainingBlockingFingerprints?.length ?? 0
+  if (run.bypassState === 'active' && remaining > 0) {
+    return t('Risk accepted for some findings · {count} blocking findings remain', {
+      count: remaining,
+    })
+  }
+  return null
+}
+
+/**
  * Source-adaptive Review Detail header (design 13.1/13.2).
  * Local sources never render PR/author fields; GitHub sources never render
  * local worktree paths. Gate status always pairs icon, text and color.
  */
-export function ReviewHeader({ run }: ReviewHeaderProps) {
+export function ReviewHeader({ run, onShowFindings }: ReviewHeaderProps) {
   const { t } = useI18n()
   const gate = GATE_PRESENTATION[run.gateState]
   const authority = AUTHORITY_PRESENTATION[run.authority]
   const runStatus = RUN_STATUS_PRESENTATION[run.runStatus]
   const source = run.source
+  const standingText = standingStatusText(run, t)
 
   return (
     <header className="rounded-lg border border-border bg-surface p-4">
@@ -105,6 +141,12 @@ export function ReviewHeader({ run }: ReviewHeaderProps) {
         ) : null}
       </div>
 
+      {standingText !== null ? (
+        <p role="status" className="mt-2 text-sm text-text-secondary">
+          {standingText}
+        </p>
+      ) : null}
+
       <dl className="mt-4 flex flex-wrap gap-x-6 gap-y-2 border-t border-border pt-3">
         {source.kind === 'github-pull-request' ? (
           <MetaItem term={t('Author')}>{source.authorLogin}</MetaItem>
@@ -132,7 +174,7 @@ export function ReviewHeader({ run }: ReviewHeaderProps) {
       </dl>
 
       <div className="mt-4 border-t border-border pt-3">
-        <ReviewActionsBar run={run} />
+        <ReviewActionsBar run={run} onShowFindings={onShowFindings} />
       </div>
     </header>
   )

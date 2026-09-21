@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { ApiError, ReviewApiClient } from './review-api-client.ts'
+import { ApiError, IdempotencyConflictError, ReviewApiClient } from './review-api-client.ts'
 
 function jsonResponse(status: number, body: unknown): Response {
   return new Response(JSON.stringify(body), {
@@ -15,6 +15,14 @@ describe('ReviewApiClient CSRF bootstrap', () => {
       const url = String(input)
       if (url === '/api/v1/csrf-bootstrap') {
         return jsonResponse(200, { csrf_token: 'server-issued-token' })
+      }
+      if (url === '/api/v1/auth/session') {
+        // Local-mode server: the session probe drives the bootstrap fallback.
+        return jsonResponse(200, {
+          mode: 'local',
+          authenticated: false,
+          capabilities: { bypass: false, audit: false },
+        })
       }
       const headers = (init?.headers ?? {}) as Record<string, string>
       seenTokens.push(String(headers['X-CSRF-Token']))
@@ -40,6 +48,13 @@ describe('ReviewApiClient CSRF bootstrap', () => {
       if (url === '/api/v1/csrf-bootstrap') {
         bootstrapCount += 1
         return jsonResponse(200, { csrf_token: `token-${bootstrapCount}` })
+      }
+      if (url === '/api/v1/auth/session') {
+        return jsonResponse(200, {
+          mode: 'local',
+          authenticated: false,
+          capabilities: { bypass: false, audit: false },
+        })
       }
       const headers = (init?.headers ?? {}) as Record<string, string>
       const token = String(headers['X-CSRF-Token'])
@@ -105,5 +120,69 @@ describe('ReviewApiClient CSRF bootstrap', () => {
 
     await expect(client.registerRepository({ path: '/repo' })).rejects
       .toBeInstanceOf(ApiError)
+  })
+})
+
+describe('ReviewApiClient conflict mapping', () => {
+  it('keeps Bypass 409s as ApiError so the dialog can refresh on conflict', async () => {
+    const fetchFn = vi.fn<typeof fetch>(async (input) => {
+      const url = String(input)
+      if (url === '/api/v1/auth/session') {
+        return jsonResponse(200, {
+          mode: 'github-oauth',
+          authenticated: true,
+          actor_id: 1,
+          actor_login: 'octocat',
+          expires_at: '2099-01-01T00:00:00Z',
+          csrf_token: 'session-csrf',
+          capabilities: { bypass: true, audit: true },
+        })
+      }
+      if (url.includes('/findings/') && url.endsWith('/bypass')) {
+        return jsonResponse(409, {
+          error: { code: 'bypass_not_standing', message: 'standing moved' },
+        })
+      }
+      throw new Error(`unexpected ${url}`)
+    })
+    const client = new ReviewApiClient({ fetchFn })
+
+    await expect(client.bypassFinding('attempt-1', 'fp-1', 'accepted risk')).rejects.toMatchObject({
+      name: 'ApiError',
+      code: 'bypass_not_standing',
+      httpStatus: 409,
+    })
+  })
+
+  it('still maps idempotency_conflict to IdempotencyConflictError', async () => {
+    const fetchFn = vi.fn<typeof fetch>(async (input) => {
+      const url = String(input)
+      if (url === '/api/v1/csrf-bootstrap') {
+        return jsonResponse(200, { csrf_token: 'csrf' })
+      }
+      if (url === '/api/v1/auth/session') {
+        return jsonResponse(200, {
+          mode: 'local',
+          authenticated: false,
+          capabilities: { bypass: false, audit: false },
+        })
+      }
+      return jsonResponse(409, {
+        error: { code: 'idempotency_conflict', message: 'same key, different body' },
+      })
+    })
+    const client = new ReviewApiClient({ fetchFn })
+
+    await expect(
+      client.createReview(
+        {
+          repository_id: 'repo_1',
+          source: { kind: 'local-worktree' },
+          review_policy_id: 'rp_1',
+          compute_policy_id: 'cp_1',
+        },
+        'idem-dup',
+      ),
+    ).rejects.toBeInstanceOf(IdempotencyConflictError)
   })
 })

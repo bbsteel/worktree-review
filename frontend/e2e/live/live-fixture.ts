@@ -98,10 +98,43 @@ async function waitForHealthz(baseUrl: string, timeoutMs: number): Promise<void>
   }
 }
 
+function resolveLiveScratchBase(): string {
+  // Prefer ~/tmp (project convention). Fall back to TMPDIR /
+  // WORKTREE_REVIEW_TEST_TMP when the home scratch tree is not writable
+  // (for example a workspace sandbox), but only under known throwaway roots.
+  const homeTmp = path.join(os.homedir(), 'tmp')
+  const candidates = [
+    homeTmp,
+    process.env.WORKTREE_REVIEW_TEST_TMP,
+    process.env.TMPDIR,
+  ].filter((value): value is string => typeof value === 'string' && value.length > 0)
+  const allowedRoots = new Set([homeTmp, '/var/tmp', path.join(homeTmp, 'worktree-review')])
+  const errors: string[] = []
+  for (const candidate of candidates) {
+    const resolved = path.resolve(candidate)
+    const allowed = [...allowedRoots].some(
+      (root) => resolved === path.resolve(root) || resolved.startsWith(`${path.resolve(root)}${path.sep}`),
+    )
+    if (!allowed && resolved !== path.resolve(homeTmp)) {
+      continue
+    }
+    try {
+      fs.mkdirSync(resolved, { recursive: true })
+      const probe = path.join(resolved, `.wr-live-probe-${process.pid}`)
+      fs.writeFileSync(probe, 'ok')
+      fs.unlinkSync(probe)
+      return resolved
+    } catch (error) {
+      errors.push(`${resolved}: ${error instanceof Error ? error.message : String(error)}`)
+    }
+  }
+  throw new Error(
+    `no writable live-e2e scratch root under ~/tmp or an allowed TMPDIR; tried: ${errors.join('; ')}`,
+  )
+}
+
 export async function startLiveFixture(): Promise<LiveFixture> {
-  // Scratch space follows the project convention (~/tmp), created on demand.
-  const scratchBase = path.join(os.homedir(), 'tmp')
-  fs.mkdirSync(scratchBase, { recursive: true })
+  const scratchBase = resolveLiveScratchBase()
   const workDir = fs.mkdtempSync(path.join(scratchBase, 'wr-live-e2e-'))
   const repositoryDir = path.join(workDir, 'repo')
   fs.mkdirSync(repositoryDir)
@@ -153,6 +186,8 @@ export async function startLiveFixture(): Promise<LiveFixture> {
   const baseUrl = `http://127.0.0.1:${port}`
   const xdgStateHome = path.join(workDir, 'xdg-state')
   const journalRoot = path.join(xdgStateHome, 'worktree-review', 'sessions')
+  const cacheHome = path.join(workDir, 'cache')
+  fs.mkdirSync(cacheHome, { recursive: true })
   const serverProcess: ChildProcess = spawn(
     'uv',
     ['run', 'worktree-review-server'],
@@ -164,6 +199,9 @@ export async function startLiveFixture(): Promise<LiveFixture> {
         WORKTREE_REVIEW_FRONTEND_DIST: path.join(REPO_ROOT, 'frontend', 'dist'),
         WORKTREE_REVIEW_BIND_PORT: String(port),
         XDG_STATE_HOME: xdgStateHome,
+        XDG_CACHE_HOME: cacheHome,
+        UV_CACHE_DIR: path.join(cacheHome, 'uv'),
+        TMPDIR: workDir,
         WORKTREE_REVIEW_SESSION_INSIGHT_URL: sessionInsightUrl,
       },
       stdio: ['ignore', 'pipe', 'pipe'],

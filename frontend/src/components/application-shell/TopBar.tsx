@@ -9,7 +9,7 @@ import { Tooltip } from '../ui/tooltip.tsx'
 import { formatProviderFreshness } from './format.ts'
 
 export function TopBar() {
-  const { overview } = useDataSource()
+  const { overview, authSession } = useDataSource()
   const { t } = useI18n()
   const [searchParams, setSearchParams] = useSearchParams()
   const selected = searchParams.get('repository') ?? 'all'
@@ -54,14 +54,23 @@ export function TopBar() {
       <div className="ml-auto flex flex-wrap items-center gap-2">
         <LanguageSwitcher />
         <ThemeSwitcher />
-        <Tooltip content={t('Local prototype environment. No authenticated user in this mode.')}>
-          <button
-            type="button"
-            className="inline-flex min-h-10 items-center rounded-md border border-border px-2.5 text-sm text-text-secondary"
+        {authSession !== null && authSession.mode === 'github-oauth' && authSession.authenticated ? (
+          <span
+            className="inline-flex min-h-10 items-center rounded-md border border-border px-2.5 text-sm text-text-primary"
+            title={t('Signed in with GitHub')}
           >
-            {t('Local')}
-          </button>
-        </Tooltip>
+            {authSession.actorLogin}
+          </span>
+        ) : (
+          <Tooltip content={t('Local prototype environment. No authenticated user in this mode.')}>
+            <button
+              type="button"
+              className="inline-flex min-h-10 items-center rounded-md border border-border px-2.5 text-sm text-text-secondary"
+            >
+              {t('Local')}
+            </button>
+          </Tooltip>
+        )}
         <Link
           to="/reviews/new"
           className="inline-flex min-h-10 items-center gap-2 rounded-md bg-action-primary px-3 text-sm font-medium text-background transition-[filter] duration-[var(--wr-motion-control)] hover:brightness-110 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"

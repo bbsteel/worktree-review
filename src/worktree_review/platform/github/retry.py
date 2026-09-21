@@ -13,6 +13,7 @@ from typing import Protocol
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from worktree_review.application.review_events import safe_error_payload
 from worktree_review.core.identity import ReviewRequestKey
 from worktree_review.server.state import (
     AttemptLease,
@@ -121,7 +122,8 @@ class GitHubRetryCoordinator:
                 event_type="retry_denied",
                 change_request=retry_request.change_request,
                 attempt_id=retry_request.prior_attempt_id,
-                payload={"actor": retry_request.actor, "reason": retry_request.reason},
+                actor_login=retry_request.actor,
+                payload={"reason": retry_request.reason},
             )
             raise RetryAuthorizationError(
                 f"GitHub actor {retry_request.actor!r} is not authorized to retry this review"
@@ -154,8 +156,8 @@ class GitHubRetryCoordinator:
             event_type="retry_authorized",
             change_request=retry_request.change_request,
             attempt_id=lease.attempt_id,
+            actor_login=retry_request.actor,
             payload={
-                "actor": retry_request.actor,
                 "reason": retry_request.reason,
                 "prior_attempt_id": prior_attempt_id,
                 "delivery_id": retry_request.delivery_id,
@@ -172,7 +174,8 @@ class GitHubRetryCoordinator:
                     event_type="retry_enqueue_failed",
                     change_request=retry_request.change_request,
                     attempt_id=lease.attempt_id,
-                    payload={"error": str(exc)},
+                    actor_login=retry_request.actor,
+                    payload=dict(safe_error_payload(exc)),
                 )
                 raise
         return RetryAccepted(

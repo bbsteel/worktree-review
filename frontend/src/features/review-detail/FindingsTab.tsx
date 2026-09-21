@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { useSearchParams } from 'react-router'
 import { Badge } from '../../components/ui/badge.tsx'
 import { Button } from '../../components/ui/button.tsx'
@@ -5,6 +6,7 @@ import { EmptyState } from '../../components/ui/empty-state.tsx'
 import { cx } from '../../components/ui/cx.ts'
 import type { ReviewFindingView, ReviewRunView } from '../../domain/review.ts'
 import { useI18n } from '../../i18n.tsx'
+import { BypassRiskDialog } from './BypassRiskDialog.tsx'
 import { FindingDetail } from './FindingDetail.tsx'
 import { shortenFingerprint } from './formatting.ts'
 import {
@@ -22,16 +24,22 @@ const FIELD_CLASS =
 
 interface FindingsTabProps {
   run: ReviewRunView
+  /** Called after a bypass was persisted server-side; the page refetches. */
+  onBypassSubmitted?: () => void
 }
 
 /**
  * Findings master/detail workspace (design 13.5). Selection and all filters
  * live in the URL query, so refresh and direct links keep the same view.
- * Filtering only changes the view; it never changes the Gate.
+ * Filtering only changes the view; it never changes the Gate. When the server
+ * projects an available bypass capability, each blocking finding carries its
+ * own real Accept-risk action (P3) — never a whole-gate switch.
  */
-export function FindingsTab({ run }: FindingsTabProps) {
+export function FindingsTab({ run, onBypassSubmitted }: FindingsTabProps) {
   const { t } = useI18n()
   const [searchParams, setSearchParams] = useSearchParams()
+  const [bypassTarget, setBypassTarget] = useState<ReviewFindingView | null>(null)
+  const [staleNotice, setStaleNotice] = useState(false)
   const filter = readFindingFilter(searchParams)
   const filtered = filterFindings(run.findings, filter)
 
@@ -45,6 +53,27 @@ export function FindingsTab({ run }: FindingsTabProps) {
 
   function selectFinding(fingerprint: string) {
     setSearchParams(writeSelectedFinding(searchParams, fingerprint))
+  }
+
+  // Client-side hint only; the server re-authorizes every POST. The enabled
+  // state comes from the server's own capability projection
+  // (availableActions.bypass), which already accounts for the session,
+  // authority, and gate — anonymous users always see a disabled action.
+  const bypassCapabilityAvailable = run.bypassCapability === 'available'
+  const serverBypass = run.availableActions.bypass
+  function bypassActionFor(finding: ReviewFindingView) {
+    if (!bypassCapabilityAvailable || !serverBypass.visible) return undefined
+    const enabled =
+      serverBypass.enabled && finding.blocking && finding.bypassRecord?.status !== 'active'
+    const disabledReason = enabled
+      ? null
+      : (serverBypass.disabledReason ??
+        t('Bypass requires an authorized GitHub actor and a completed blocking review.'))
+    return {
+      enabled,
+      disabledReason,
+      onAcceptRisk: () => setBypassTarget(finding),
+    }
   }
 
   if (run.findings.length === 0) {
@@ -222,7 +251,7 @@ export function FindingsTab({ run }: FindingsTabProps) {
 
       <div className="min-w-0">
         {selected !== null ? (
-          <FindingDetail finding={selected} />
+          <FindingDetail finding={selected} bypassAction={bypassActionFor(selected)} />
         ) : (
           <EmptyState
             title={t('Select a finding')}
@@ -230,6 +259,33 @@ export function FindingsTab({ run }: FindingsTabProps) {
           />
         )}
       </div>
+
+      {bypassTarget !== null ? (
+        <BypassRiskDialog
+          open
+          run={run}
+          finding={bypassTarget}
+          onClose={() => setBypassTarget(null)}
+          onSubmitted={() => {
+            setBypassTarget(null)
+            setStaleNotice(false)
+            onBypassSubmitted?.()
+          }}
+          onConflict={() => {
+            // Stale confirmation context: close it and refetch the
+            // authoritative state (P3 §9.1).
+            setBypassTarget(null)
+            setStaleNotice(true)
+            onBypassSubmitted?.()
+          }}
+        />
+      ) : null}
+
+      {staleNotice ? (
+        <p role="status" className="text-sm text-status-warning">
+          {t('The candidate, authority, or policy changed. The risk was not accepted — review the refreshed state.')}
+        </p>
+      ) : null}
     </div>
   )
 }

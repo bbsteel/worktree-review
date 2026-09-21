@@ -1,25 +1,39 @@
 import { useEffect, useRef } from 'react'
 import { Badge } from '../../components/ui/badge.tsx'
+import { Button } from '../../components/ui/button.tsx'
+import { Tooltip } from '../../components/ui/tooltip.tsx'
 import type { ReviewFindingView } from '../../domain/review.ts'
 import { useI18n } from '../../i18n.tsx'
 import { CopyValue } from './CopyValue.tsx'
 import { EvidenceViewer } from './EvidenceViewer.tsx'
-import { shortenFingerprint } from './formatting.ts'
+import { formatTimestamp, shortenFingerprint } from './formatting.ts'
 import { EVIDENCE_BAND_PRESENTATION, SEVERITY_PRESENTATION } from './presentation.ts'
 
 interface FindingDetailProps {
   finding: ReviewFindingView
+  /**
+   * Present only when the run's bypass capability is available (authorized
+   * GitHub deployment). The server still re-authorizes every submission.
+   */
+  bypassAction?: {
+    enabled: boolean
+    disabledReason: string | null
+    onAcceptRisk: () => void
+  }
 }
 
 /**
  * Finding detail pane (design 13.5). All model output renders as plain text.
- * No auto-fix, commit or push actions exist by design.
+ * No auto-fix, commit or push actions exist by design. An active risk
+ * acceptance is shown with actor, time and reason; invalidated acceptances
+ * remain visible as history (P3 §9.1).
  */
-export function FindingDetail({ finding }: FindingDetailProps) {
+export function FindingDetail({ finding, bypassAction }: FindingDetailProps) {
   const { t } = useI18n()
   const severity = SEVERITY_PRESENTATION[finding.severity]
   const band = EVIDENCE_BAND_PRESENTATION[finding.evidenceBand]
   const detailRef = useRef<HTMLDivElement>(null)
+  const bypassRecord = finding.bypassRecord ?? null
 
   useEffect(() => {
     const element = detailRef.current
@@ -88,6 +102,69 @@ export function FindingDetail({ finding }: FindingDetailProps) {
             })}
           </p>
         </section>
+
+        {bypassRecord !== null && bypassRecord.status === 'active' ? (
+          <section
+            aria-label={t('Accepted risk')}
+            className="rounded-md border border-status-warning/40 bg-surface-subtle p-3"
+          >
+            <h4 className="text-meta font-semibold uppercase tracking-wide text-text-secondary">
+              {t('Accepted risk')}
+            </h4>
+            <p className="mt-1 text-sm text-text-primary">{bypassRecord.reason}</p>
+            <p className="mt-1 text-meta text-text-secondary">
+              {t('Accepted by {actor} · {time}', {
+                actor: bypassRecord.actorLogin,
+                time: formatTimestamp(bypassRecord.createdAt),
+              })}
+            </p>
+          </section>
+        ) : null}
+
+        {bypassRecord !== null && bypassRecord.status === 'invalidated' ? (
+          <section
+            aria-label={t('Bypass history')}
+            className="rounded-md border border-border bg-surface-subtle p-3"
+          >
+            <h4 className="text-meta font-semibold uppercase tracking-wide text-text-secondary">
+              {t('Bypass history (no longer applies)')}
+            </h4>
+            <p className="mt-1 text-sm text-text-primary">{bypassRecord.reason}</p>
+            <p className="mt-1 text-meta text-text-secondary">
+              {t('Accepted by {actor} · invalidated: {reason}', {
+                actor: bypassRecord.actorLogin,
+                reason: bypassRecord.invalidationReason ?? t('unknown'),
+              })}
+            </p>
+          </section>
+        ) : null}
+
+        {bypassAction !== undefined && finding.blocking && bypassRecord?.status !== 'active' ? (
+          <section aria-label={t('Risk acceptance')}>
+            {bypassAction.enabled ? (
+              <Button variant="danger" size="sm" onClick={bypassAction.onAcceptRisk}>
+                {t('Accept risk…')}
+              </Button>
+            ) : (
+              <Tooltip content={bypassAction.disabledReason ?? ''}>
+                <span
+                  tabIndex={0}
+                  aria-label={t('Accept risk unavailable: {reason}', {
+                    reason: bypassAction.disabledReason ?? '',
+                  })}
+                  className="inline-flex rounded-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                >
+                  <Button variant="danger" size="sm" disabled>
+                    {t('Accept risk…')}
+                  </Button>
+                </span>
+              </Tooltip>
+            )}
+            <p className="mt-1 text-meta text-text-secondary">
+              {t('Bypass means accepting the risk. It does not mean the finding was resolved.')}
+            </p>
+          </section>
+        ) : null}
       </div>
     </div>
   )

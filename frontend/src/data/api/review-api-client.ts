@@ -5,6 +5,12 @@
  */
 import { ReviewNotFoundError } from '../sources/review-data-source.ts'
 import type { OverviewView, ReviewSummaryView } from '../../domain/index.ts'
+import type {
+  AuditEventFilter,
+  AuditEventPageView,
+  AuthSessionView,
+  BypassSubmissionView,
+} from '../../domain/audit.ts'
 import type { ReviewRunView } from '../../domain/review.ts'
 import type {
   ComputePolicyDto,
@@ -23,6 +29,9 @@ import type {
 } from './dto.ts'
 import {
   DtoValidationError,
+  mapAuditEventPageDto,
+  mapAuthSessionDto,
+  mapBypassSubmissionDto,
   mapOverviewDto,
   mapReviewRunDto,
   mapReviewSummaryDto,
@@ -75,7 +84,7 @@ export interface ReviewListPage {
   nextCursor: string | null
 }
 
-const CSRF_FAILURE_CODES = new Set(['missing_csrf_token', 'invalid_csrf_token'])
+const CSRF_FAILURE_CODES = new Set(['missing_csrf_token', 'invalid_csrf_token', 'csrf_rejected'])
 
 export class ReviewApiClient {
   private readonly baseUrl: string
@@ -89,46 +98,56 @@ export class ReviewApiClient {
     this.csrfToken = config.csrfToken ?? null
   }
 
-  /** Fetch (once) and cache this server process's CSRF token. */
-  private ensureCsrfToken(): Promise<string> {
+  /**
+   * Mutation CSRF token for the current deployment mode. The authorized
+   * deployment issues a per-session token via GET /auth/session; the default
+   * local mode falls back to the per-process /csrf-bootstrap token.
+   */
+  private async ensureCsrfToken(): Promise<string> {
     if (this.csrfToken !== null) {
-      return Promise.resolve(this.csrfToken)
+      return this.csrfToken
     }
-    this.csrfBootstrap ??= this.fetchFn(`${this.baseUrl}/csrf-bootstrap`, {
+    this.csrfBootstrap ??= this.bootstrapCsrfToken()
+    try {
+      return await this.csrfBootstrap
+    } catch (error) {
+      this.csrfBootstrap = null
+      throw error
+    }
+  }
+
+  private async bootstrapCsrfToken(): Promise<string> {
+    try {
+      const session = await this.getAuthSession()
+      if (session.authenticated && session.csrfToken !== null) {
+        this.csrfToken = session.csrfToken
+        return session.csrfToken
+      }
+    } catch {
+      // Older or local-only server: fall through to the process-level token.
+    }
+    const response = await this.fetchFn(`${this.baseUrl}/csrf-bootstrap`, {
       method: 'GET',
       headers: { Accept: 'application/json' },
       credentials: 'same-origin',
     })
-      .catch((error: unknown) => {
-        this.csrfBootstrap = null
-        throw new ApiError(
-          'network_unreachable',
-          error instanceof Error ? error.message : 'Network request failed',
-          0,
-        )
-      })
-      .then(async (response) => {
-      if (!response.ok) {
-        this.csrfBootstrap = null
-        throw new ApiError(
-          'csrf_bootstrap_failed',
-          `CSRF bootstrap failed with HTTP ${response.status}.`,
-          response.status,
-        )
-      }
-      const parsed: unknown = await response.json()
-      const token =
-        typeof parsed === 'object' && parsed !== null && 'csrf_token' in parsed
-          ? (parsed as { csrf_token?: unknown }).csrf_token
-          : undefined
-      if (typeof token !== 'string' || token === '') {
-        this.csrfBootstrap = null
-        throw new ApiError('csrf_bootstrap_failed', 'CSRF bootstrap returned no token.', response.status)
-      }
-      this.csrfToken = token
-      return token
-    })
-    return this.csrfBootstrap
+    if (!response.ok) {
+      throw new ApiError(
+        'csrf_bootstrap_failed',
+        `CSRF bootstrap failed with HTTP ${response.status}.`,
+        response.status,
+      )
+    }
+    const parsed: unknown = await response.json()
+    const token =
+      typeof parsed === 'object' && parsed !== null && 'csrf_token' in parsed
+        ? (parsed as { csrf_token?: unknown }).csrf_token
+        : undefined
+    if (typeof token !== 'string' || token === '') {
+      throw new ApiError('csrf_bootstrap_failed', 'CSRF bootstrap returned no token.', response.status)
+    }
+    this.csrfToken = token
+    return token
   }
 
   private async request<T>(
@@ -212,7 +231,10 @@ export class ReviewApiClient {
       if (code === 'result_unavailable') {
         throw new ResultUnavailableError(path)
       }
-      if (code === 'idempotency_conflict' || response.status === 409) {
+      // Only the local-create idempotency collision uses this type. Other 409s
+      // (Bypass standing/policy/conflict) stay ApiError so callers can refresh
+      // on the real conflict code and HTTP status.
+      if (code === 'idempotency_conflict') {
         throw new IdempotencyConflictError(message)
       }
       throw new ApiError(code, message, response.status)
@@ -350,5 +372,84 @@ export class ReviewApiClient {
       'GET',
       `/compute-policies/${encodeURIComponent(policyId)}`,
     )
+  }
+
+  /**
+   * Current deployment auth session (P3 §4). A local-mode server answers with
+   * `{authenticated: false}`; a very old server may 501/404, which maps to the
+   * same local-mode view.
+   */
+  async getAuthSession(): Promise<AuthSessionView> {
+    try {
+      const dto = await this.request<Record<string, unknown>>('GET', '/auth/session')
+      return mapAuthSessionDto(dto)
+    } catch (error) {
+      if (error instanceof ApiError && (error.httpStatus === 501 || error.httpStatus === 404)) {
+        return {
+          mode: 'local',
+          authenticated: false,
+          actorId: null,
+          actorLogin: null,
+          expiresAt: null,
+          csrfToken: null,
+          capabilities: { bypass: false, audit: false },
+        }
+      }
+      throw error
+    }
+  }
+
+  /** End the current authorized-mode session. Local mode answers 501. */
+  async logout(): Promise<void> {
+    await this.request<null>('POST', '/auth/logout', {})
+  }
+
+  /**
+   * Accept the risk of one blocking finding (P3 §8.1). The actor identity
+   * comes from the verified server-side session; the body carries only the
+   * reason. Error codes map straight through: authentication_required /
+   * session_expired (401), csrf_rejected (403), attempt_not_found /
+   * finding_not_found (404; denied looks identical to missing),
+   * bypass_not_standing / bypass_gate_error / bypass_not_blocking /
+   * bypass_policy_changed / bypass_conflict (409 as ApiError — not an
+   * IdempotencyConflictError), bypass_reason_invalid (422),
+   * github_authorization_unavailable / audit_store_unavailable (503),
+   * capability_unavailable (501).
+   */
+  async bypassFinding(
+    attemptId: string,
+    fingerprint: string,
+    reason: string,
+    idempotencyKey?: string,
+  ): Promise<BypassSubmissionView> {
+    const dto = await this.request<Record<string, unknown>>(
+      'POST',
+      `/reviews/${encodeURIComponent(attemptId)}/findings/${encodeURIComponent(fingerprint)}/bypass`,
+      { body: { reason }, ...(idempotencyKey === undefined ? {} : { idempotencyKey }) },
+    )
+    return mapBypassSubmissionDto(dto)
+  }
+
+  /**
+   * Newest-first page of append-only audit events (P3 §8.3). The repository
+   * filter is mandatory; the cursor resumes the previous page exactly.
+   */
+  async listAuditEvents(
+    filter: AuditEventFilter,
+    cursor: string | null = null,
+    limit = 50,
+  ): Promise<AuditEventPageView> {
+    const params = new URLSearchParams({ repository: filter.repository, limit: String(limit) })
+    if (filter.eventType) params.set('event_type', filter.eventType)
+    if (filter.attemptId) params.set('attempt_id', filter.attemptId)
+    if (filter.pullRequestNumber !== undefined) {
+      params.set('pull_request_number', String(filter.pullRequestNumber))
+    }
+    if (cursor !== null) params.set('cursor', cursor)
+    const dto = await this.request<Record<string, unknown>>(
+      'GET',
+      `/audit-events?${params.toString()}`,
+    )
+    return mapAuditEventPageDto(dto)
   }
 }

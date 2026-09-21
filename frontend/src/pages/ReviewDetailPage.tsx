@@ -242,7 +242,12 @@ export function ReviewDetailPage({ dataSource, openEventStream }: ReviewDetailPa
           ApplicationShell banner; per-case provenance (handwritten mock vs
           real pipeline snapshot) is shown by the banner's demo case selector,
           so this page does not repeat a source-level badge here. */}
-      <ReviewHeader run={run} />
+      <ReviewHeader
+            run={run}
+            onShowFindings={() =>
+              setSearchParams(withTabParam(searchParams, 'findings'))
+            }
+          />
 
       {showLiveIndicator ? (
         <p role="status" className="mt-3 flex items-center gap-2 text-meta text-status-running">
@@ -309,7 +314,7 @@ export function ReviewDetailPage({ dataSource, openEventStream }: ReviewDetailPa
           <OverviewTab run={run} />
         </TabPanel>
         <TabPanel value="findings">
-          <FindingsTab run={run} />
+          <FindingsTab run={run} onBypassSubmitted={() => void refreshRun()} />
         </TabPanel>
         <TabPanel value="coverage">
           <CoverageTab run={run} />

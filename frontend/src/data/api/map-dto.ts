@@ -9,6 +9,11 @@ import type {
   SessionInsightConnectionState,
 } from '../../domain/overview.ts'
 import type {
+  AuditEventPageView,
+  AuthSessionView,
+  BypassSubmissionView,
+} from '../../domain/audit.ts'
+import type {
   Authority,
   BypassState,
   CoverageCategory,
@@ -31,6 +36,7 @@ import type {
   DimensionDto,
   EvidenceSpanDto,
   FindingDto,
+  BypassRecordDto,
   OverviewDto,
   ReviewRunDto,
   ReviewSummaryDto,
@@ -243,6 +249,25 @@ function mapFinding(raw: unknown, index: number): ReviewFindingView {
       mapEvidenceSpan(record(span, `${path}.evidence_spans[${spanIndex}]`) as unknown as EvidenceSpanDto, `${path}.evidence_spans[${spanIndex}]`),
     ),
     blocking: bool(dto.blocking, `${path}.blocking`),
+    ...(dto.bypass_record === undefined
+      ? {}
+      : { bypassRecord: mapBypassRecord(dto.bypass_record, `${path}.bypass_record`) }),
+  }
+}
+
+/** P3: optional; absent on legacy/local DTOs, null when the finding was never bypassed. */
+function mapBypassRecord(raw: unknown, path: string) {
+  if (raw === undefined || raw === null) {
+    return null
+  }
+  const dto = record(raw, path) as unknown as BypassRecordDto
+  return {
+    status: oneOf(dto.status, ['active', 'invalidated'] as const, `${path}.status`),
+    actorId: numOrNull(dto.actor_id, `${path}.actor_id`),
+    actorLogin: str(dto.actor_login, `${path}.actor_login`),
+    reason: str(dto.reason, `${path}.reason`),
+    createdAt: str(dto.created_at, `${path}.created_at`),
+    invalidationReason: strOrNull(dto.invalidation_reason, `${path}.invalidation_reason`),
   }
 }
 
@@ -284,6 +309,16 @@ export function mapReviewRunDto(raw: unknown): ReviewRunView {
         gateDto.required_coverage_complete,
         'gate.required_coverage_complete',
       ),
+      ...(gateDto.remaining_blocking_fingerprints === undefined
+        ? {}
+        : {
+            remainingBlockingFingerprints: list(
+              gateDto.remaining_blocking_fingerprints,
+              'gate.remaining_blocking_fingerprints',
+            ).map((fingerprint, index) =>
+              str(fingerprint, `gate.remaining_blocking_fingerprints[${index}]`),
+            ),
+          }),
     },
     findings: list(dto.findings, 'run.findings').map((finding, index) => mapFinding(finding, index)),
     coverage: {
@@ -435,6 +470,99 @@ export function mapReviewRunDto(raw: unknown): ReviewRunView {
     ...(typeof dto.session_insight_deep_link === 'string'
       ? { sessionInsightDeepLink: dto.session_insight_deep_link }
       : {}),
+    // P3 standing projection: present only on GitHub attempt DTOs.
+    ...(dto.core_gate_state !== undefined
+      ? { coreGateState: strOrNull(dto.core_gate_state, 'run.core_gate_state') }
+      : {}),
+    ...(dto.standing_gate_state !== undefined
+      ? { standingGateState: strOrNull(dto.standing_gate_state, 'run.standing_gate_state') }
+      : {}),
+    ...(dto.standing_revision !== undefined && dto.standing_revision !== null
+      ? { standingRevision: numOrNull(dto.standing_revision, 'run.standing_revision') }
+      : {}),
+    ...(dto.check_sync_status !== undefined
+      ? {
+          checkSyncStatus:
+            dto.check_sync_status === null
+              ? null
+              : oneOf(dto.check_sync_status, CHECK_SYNC_STATUSES, 'run.check_sync_status'),
+        }
+      : {}),
+    ...(dto.bypass_capability !== undefined
+      ? {
+          bypassCapability: oneOf(
+            dto.bypass_capability,
+            ['available', 'unavailable'] as const,
+            'run.bypass_capability',
+          ),
+        }
+      : {}),
+  }
+}
+
+const CHECK_SYNC_STATUSES = [
+  'queued',
+  'in_progress',
+  'published',
+  'failed',
+  'superseded',
+  'not_applicable',
+] as const
+
+/** P3: GET /auth/session — tolerate both deployment modes. */
+export function mapAuthSessionDto(raw: unknown): AuthSessionView {
+  const dto = record(raw, 'session')
+  const capabilities = record(dto.capabilities ?? {}, 'session.capabilities')
+  return {
+    mode: oneOf(dto.mode, ['local', 'github-oauth'] as const, 'session.mode'),
+    authenticated: bool(dto.authenticated, 'session.authenticated'),
+    actorId: numOrNull(dto.actor_id ?? null, 'session.actor_id'),
+    actorLogin: strOrNull(dto.actor_login ?? null, 'session.actor_login'),
+    expiresAt: strOrNull(dto.expires_at ?? null, 'session.expires_at'),
+    csrfToken: strOrNull(dto.csrf_token ?? null, 'session.csrf_token'),
+    capabilities: {
+      bypass: bool(capabilities.bypass ?? false, 'session.capabilities.bypass'),
+      audit: bool(capabilities.audit ?? false, 'session.capabilities.audit'),
+    },
+  }
+}
+
+/** P3 §8.1: POST bypass success body. */
+export function mapBypassSubmissionDto(raw: unknown): BypassSubmissionView {
+  const dto = record(raw, 'bypass')
+  return {
+    bypassId: num(dto.bypass_id, 'bypass.bypass_id'),
+    bypassState: str(dto.bypass_state, 'bypass.bypass_state'),
+    standingGateState: strOrNull(dto.standing_gate_state, 'bypass.standing_gate_state'),
+    remainingBlockingCount: num(dto.remaining_blocking_count, 'bypass.remaining_blocking_count'),
+    standingRevision: num(dto.standing_revision, 'bypass.standing_revision'),
+    checkSyncStatus: oneOf(dto.check_sync_status, CHECK_SYNC_STATUSES, 'bypass.check_sync_status'),
+    gateTransitioned: bool(dto.gate_transitioned, 'bypass.gate_transitioned'),
+    replayed: bool(dto.replayed, 'bypass.replayed'),
+  }
+}
+
+/** P3 §8.3: keyset page of sanitized audit events. */
+export function mapAuditEventPageDto(raw: unknown): AuditEventPageView {
+  const dto = record(raw, 'audit')
+  return {
+    events: list(dto.events, 'audit.events').map((rawEvent, index) => {
+      const path = `audit.events[${index}]`
+      const event = record(rawEvent, path)
+      return {
+        eventId: num(event.event_id, `${path}.event_id`),
+        eventType: str(event.event_type, `${path}.event_type`),
+        occurredAt: str(event.occurred_at, `${path}.occurred_at`),
+        installationId: num(event.installation_id, `${path}.installation_id`),
+        repository: str(event.repository, `${path}.repository`),
+        pullRequestNumber: num(event.pull_request_number, `${path}.pull_request_number`),
+        attemptId: strOrNull(event.attempt_id, `${path}.attempt_id`),
+        actorId: numOrNull(event.actor_id, `${path}.actor_id`),
+        actorLogin: strOrNull(event.actor_login, `${path}.actor_login`),
+        payload: record(event.payload, `${path}.payload`),
+      }
+    }),
+    nextCursor: strOrNull(dto.next_cursor, 'audit.next_cursor'),
   }
 }
 

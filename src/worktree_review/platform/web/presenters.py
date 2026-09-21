@@ -20,6 +20,7 @@ from worktree_review.application.projections import project_coverage, project_us
 from worktree_review.application.review_runs import OverviewAggregate, ReviewRunRecord
 from worktree_review.application.views import GitHubPullRequestSourceView, SurfaceProjection
 from worktree_review.core.findings import EvidenceBand, Finding, Severity
+from worktree_review.core.gate import finding_blocks_under_policy
 from worktree_review.core.policy import ComputePolicy, ReviewPolicy
 from worktree_review.core.report import PIPELINE_STAGE_ORDER, ReviewReport, StageStatus
 from worktree_review.platform.cli.result import load_review_report_from_cli_result
@@ -27,7 +28,12 @@ from worktree_review.platform.github.checks import github_check_run_url
 from worktree_review.platform.github.snapshot import AttemptExecutionSnapshot
 from worktree_review.platform.web.local_store import SqliteReviewRunStore
 from worktree_review.platform.web.registry import parse_credential_reference
-from worktree_review.server.state import AuthoritativeChangeRequestState
+from worktree_review.server.audit import AuditEvent
+from worktree_review.server.state import (
+    AuthoritativeChangeRequestState,
+    BypassRecord,
+    BypassStatus,
+)
 
 
 def _cost_number(value: str | None) -> float | None:
@@ -177,10 +183,12 @@ def _evidence_band_for_view(band: EvidenceBand) -> str:
     return "supported"
 
 
-def _finding_dto(finding: Finding, *, blocking_severities: tuple[Severity, ...]) -> dict[str, Any]:
-    blocking = finding.severity in blocking_severities and finding.evidence_band is not (
-        EvidenceBand.INSUFFICIENT
-    )
+def _finding_dto(
+    finding: Finding,
+    *,
+    blocking: bool,
+    bypass_record: BypassRecord | None = None,
+) -> dict[str, Any]:
     return {
         "fingerprint": finding.fingerprint,
         "severity": finding.severity.value,
@@ -204,6 +212,20 @@ def _finding_dto(finding: Finding, *, blocking_severities: tuple[Severity, ...])
             for span in finding.evidence_spans
         ],
         "blocking": blocking,
+        # Read-only risk-acceptance projection (P3 §8.2); never hides the
+        # finding itself, only explains who accepted it and when.
+        "bypass_record": (
+            None
+            if bypass_record is None
+            else {
+                "status": bypass_record.status.value,
+                "actor_id": bypass_record.actor_id,
+                "actor_login": bypass_record.actor_login,
+                "reason": bypass_record.reason,
+                "created_at": bypass_record.created_at.isoformat(),
+                "invalidation_reason": bypass_record.invalidation_reason,
+            }
+        ),
     }
 
 
@@ -371,7 +393,11 @@ def present_review_run(
                 ),
             },
             "findings": [
-                _finding_dto(finding, blocking_severities=blocking_severities)
+                _finding_dto(
+                    finding,
+                    blocking=finding.severity in blocking_severities
+                    and finding.evidence_band is not EvidenceBand.INSUFFICIENT,
+                )
                 for finding in report.findings
             ],
             "coverage": _coverage_from_report(report),
@@ -603,6 +629,13 @@ def present_github_review_run(
     session_insight_deep_link: str | None = None,
     job_status: str | None = None,
     job_failure_detail: str | None = None,
+    bypasses: tuple[BypassRecord, ...] = (),
+    check_sync_status: str | None = None,
+    bypass_capability: str = "unavailable",
+    actor_authenticated: bool = False,
+    bypass_preconditions_met: bool = False,
+    blocking_policy: ReviewPolicy | None = None,
+    review_policy_trusted: bool = False,
 ) -> dict[str, Any]:
     """Map a PostgreSQL GitHub Attempt onto the frozen Review Detail DTO."""
 
@@ -618,25 +651,49 @@ def present_github_review_run(
         report = load_review_report_from_cli_result(result_json)
         run_status = RunStatus.COMPLETED.value
         gate_state = project_gate_state(report.gate_state).value
+        bypass_by_fingerprint = {record.finding_fingerprint: record for record in bypasses}
+        active_bypassed = {
+            record.finding_fingerprint
+            for record in bypasses
+            if record.status is BypassStatus.ACTIVE
+        }
+        if not bypasses:
+            run_bypass_state = BypassState.NONE
+        elif active_bypassed:
+            run_bypass_state = BypassState.ACTIVE
+        else:
+            run_bypass_state = BypassState.INVALIDATED
+        standing_gate = (
+            None
+            if change_state.standing_gate_state is None
+            else change_state.standing_gate_state.value
+        )
         surface = SurfaceProjection(
             source=source,
             run_status=RunStatus.COMPLETED,
             authority=authority,
             publication_status=publication,
-            bypass_state=BypassState.NONE,
+            bypass_state=run_bypass_state,
             session_insight_connected=session_insight_state == "connected",
+            github_actor_authenticated=actor_authenticated and bypass_capability == "available",
+            bypass_preconditions_met=bypass_preconditions_met,
         )
         actions = project_available_actions(
             gate_state=project_gate_state(report.gate_state),
             surface=surface,
         )
-        blocking_severities = (Severity.CRITICAL, Severity.MAJOR)
-        blocking = [
-            finding.fingerprint
-            for finding in report.findings
-            if finding.severity in blocking_severities
-            and finding.evidence_band is not EvidenceBand.INSUFFICIENT
-        ]
+        if blocking_policy is not None and review_policy_trusted:
+            # The frozen Review Policy from the execution snapshot decides
+            # what blocks — never a hardcoded severity/band table (P3 §5.1.5).
+            blocking = [
+                finding.fingerprint
+                for finding in report.findings
+                if finding_blocks_under_policy(finding, blocking_policy)
+            ]
+        else:
+            # Untrusted / missing Policy: fail closed. Do not invent blockers
+            # from a hardcoded Critical/Major table; Bypass stays disabled.
+            blocking = []
         identity_unavailable = (
             None
             if report.review_identity is not None
@@ -690,19 +747,35 @@ def present_github_review_run(
             "gate_state": gate_state,
             "authority": authority.value,
             "publication_status": publication.value,
-            "bypass_state": BypassState.NONE.value,
+            "bypass_state": run_bypass_state.value,
+            # P3 §8.2 standing projection: the immutable Core gate and the
+            # platform standing decision are reported side by side; a remote
+            # Check sync lag never disguises either.
+            "core_gate_state": report.gate_state.value,
+            "standing_gate_state": standing_gate,
+            "standing_revision": change_state.standing_revision,
+            "check_sync_status": check_sync_status,
+            "bypass_capability": bypass_capability,
+            "review_policy_trusted": review_policy_trusted,
             "source": source_payload,
             "summary": summary,
             "gate": {
                 "gate_state": gate_state,
                 "blocking_fingerprints": blocking,
+                "remaining_blocking_fingerprints": [
+                    fingerprint for fingerprint in blocking if fingerprint not in active_bypassed
+                ],
                 "summary": report.summary,
                 "required_coverage_complete": (
                     report.coverage.required_coverage_complete if report.coverage else False
                 ),
             },
             "findings": [
-                _finding_dto(finding, blocking_severities=blocking_severities)
+                _finding_dto(
+                    finding,
+                    blocking=finding.fingerprint in blocking,
+                    bypass_record=bypass_by_fingerprint.get(finding.fingerprint),
+                )
                 for finding in report.findings
             ],
             "coverage": _coverage_from_report(report),
@@ -964,6 +1037,23 @@ def present_repository(row: dict[str, str]) -> dict[str, Any]:
         "canonical_root": row["canonical_root"],
         "last_gate_state": None,
         "last_reviewed_at": None,
+    }
+
+
+def present_audit_event(event: AuditEvent) -> dict[str, Any]:
+    """Read-only audit projection; payloads were sanitized before persistence."""
+
+    return {
+        "event_id": event.event_id,
+        "event_type": event.event_type,
+        "occurred_at": event.occurred_at.isoformat(),
+        "installation_id": event.installation_id,
+        "repository": event.repository,
+        "pull_request_number": event.pull_request_number,
+        "attempt_id": event.attempt_id,
+        "actor_id": event.actor_id,
+        "actor_login": event.actor_login,
+        "payload": event.payload,
     }
 
 

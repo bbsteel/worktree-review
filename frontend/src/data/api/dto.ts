@@ -75,6 +75,8 @@ export interface GateDecisionDto {
   blocking_fingerprints: string[]
   summary: string
   required_coverage_complete: boolean
+  /** P3: blocking fingerprints without an active bypass; absent on legacy DTOs. */
+  remaining_blocking_fingerprints?: string[]
 }
 
 export interface EvidenceSpanDto {
@@ -97,6 +99,18 @@ export interface FindingDto {
   repair_guidance: string
   evidence_spans: EvidenceSpanDto[]
   blocking: boolean
+  /** P3: present on GitHub Detail DTOs when the attempt has bypass history. */
+  bypass_record?: BypassRecordDto | null
+}
+
+/** P3 §8.2: read-only per-finding risk acceptance projection. */
+export interface BypassRecordDto {
+  status: string
+  actor_id: number | null
+  actor_login: string
+  reason: string
+  created_at: string
+  invalidation_reason: string | null
 }
 
 export interface CoverageFileDto {
@@ -227,6 +241,12 @@ export interface ReviewRunDto {
   available_actions: AvailableActionsDto
   /** Server-computed Session Insight deep link from trusted deployment config. */
   session_insight_deep_link?: string | null
+  /** P3 standing projection (GitHub attempts only); absent on legacy DTOs. */
+  core_gate_state?: string | null
+  standing_gate_state?: string | null
+  standing_revision?: number | null
+  check_sync_status?: string | null
+  bypass_capability?: string
 }
 
 export interface OverviewStatsDto {

@@ -170,8 +170,12 @@ class GitHubReviewStore(Protocol):
 
     async def get_attempt_created_at(self, attempt_id: str) -> datetime | None: ...
 
-    async def list_recent_attempt_ids(self, limit: int = 50) -> tuple[str, ...]:
-        """Most recent GitHub Attempt ids for Web list/overview projections."""
+    async def list_recent_attempt_ids(self, limit: int | None = 50) -> tuple[str, ...]:
+        """Most recent GitHub Attempt ids for Web list/overview projections.
+
+        ``limit=None`` returns every Attempt id (authorized Overview totals).
+        The default remains a bounded recent window for list feeds.
+        """
         ...
 
     async def overview_gate_counts(self) -> dict[str, int]:
@@ -397,11 +401,13 @@ class InMemoryGitHubReviewStore:
             extras = self._attempts.get(attempt_id)
             return None if extras is None else extras.created_at
 
-    async def list_recent_attempt_ids(self, limit: int = 50) -> tuple[str, ...]:
+    async def list_recent_attempt_ids(self, limit: int | None = 50) -> tuple[str, ...]:
         async with self._lock:
             ordered = sorted(
                 self._attempts.items(), key=lambda item: item[1].created_at, reverse=True
             )
+            if limit is None:
+                return tuple(attempt_id for attempt_id, _ in ordered)
             return tuple(attempt_id for attempt_id, _ in ordered[:limit])
 
     async def overview_gate_counts(self) -> dict[str, int]:
@@ -758,15 +764,23 @@ class PostgresGitHubReviewStore:
             return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
         return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
 
-    async def list_recent_attempt_ids(self, limit: int = 50) -> tuple[str, ...]:
+    async def list_recent_attempt_ids(self, limit: int | None = 50) -> tuple[str, ...]:
         async with self._pool.acquire() as connection:
-            rows = await connection.fetch(
-                """
-                SELECT attempt_id FROM review_attempts
-                ORDER BY created_at DESC, attempt_id DESC LIMIT $1
-                """,
-                limit,
-            )
+            if limit is None:
+                rows = await connection.fetch(
+                    """
+                    SELECT attempt_id FROM review_attempts
+                    ORDER BY created_at DESC, attempt_id DESC
+                    """
+                )
+            else:
+                rows = await connection.fetch(
+                    """
+                    SELECT attempt_id FROM review_attempts
+                    ORDER BY created_at DESC, attempt_id DESC LIMIT $1
+                    """,
+                    limit,
+                )
         return tuple(str(row["attempt_id"]) for row in rows)
 
     async def overview_gate_counts(self) -> dict[str, int]:

@@ -3,6 +3,7 @@ import {
   FolderGit2,
   GitPullRequest,
   LayoutDashboard,
+  ScrollText,
   Settings,
   Shield,
   Unplug,
@@ -74,6 +75,14 @@ export function SideNav({ onNavigate }: { onNavigate?: () => void }) {
         >
           <Unplug aria-hidden="true" className="h-4 w-4" />
           {t('Providers')}
+        </NavLink>
+        <NavLink
+          to="/audit"
+          onClick={onNavigate}
+          className={({ isActive }) => navLinkClass(isActive)}
+        >
+          <ScrollText aria-hidden="true" className="h-4 w-4" />
+          {t('Audit Log')}
         </NavLink>
         <p className="mt-3 px-2.5 text-[11px] uppercase tracking-wide text-text-secondary">{t('Integrations')}</p>
         <PreviewControl

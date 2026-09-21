@@ -2,8 +2,36 @@ from __future__ import annotations
 
 import pytest
 
-from worktree_review.platform.github.authz import GitHubRoleRetryAuthorizer
+from worktree_review.platform.github.authz import (
+    GitHubRoleRetryAuthorizer,
+    normalize_standard_repository_role,
+)
 from worktree_review.server.state import GitHubChangeRequestLocator
+
+
+@pytest.mark.parametrize(
+    ("role_name", "permission", "expected"),
+    [
+        ("admin", "admin", "admin"),
+        ("maintain", "write", "maintain"),
+        ("write", "write", "write"),
+        ("triage", "triage", "triage"),
+        ("read", "read", "read"),
+        ("release-manager", "write", None),
+        ("org-custom", "admin", None),
+        (None, "write", None),
+        ("", "admin", None),
+        ("write", None, "write"),
+    ],
+)
+def test_normalize_standard_repository_role_prefers_role_name(
+    role_name: str | None,
+    permission: str | None,
+    expected: str | None,
+) -> None:
+    assert (
+        normalize_standard_repository_role(role_name=role_name, permission=permission) == expected
+    )
 
 
 class _StaticRepositoryRoleLookup:

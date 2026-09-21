@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, ConfigDict
@@ -156,6 +157,11 @@ def _retry_request_from_event(event: GitHubWebhookEvent) -> RetryRequest:
     )
 
 
+# Revokes every server-side web session for one deauthorized GitHub user
+# (numeric user ID); returns how many sessions were dropped.
+SessionRevoker = Callable[[int], Awaitable[int]]
+
+
 async def handle_github_webhook(
     *,
     payload: bytes,
@@ -165,6 +171,7 @@ async def handle_github_webhook(
     delivery_id: str | None = None,
     retry_coordinator: GitHubRetryCoordinator | None = None,
     trigger_coordinator: GitHubTriggerCoordinator | None = None,
+    session_revoker: SessionRevoker | None = None,
 ) -> WebhookDispatchResult:
     event = parse_github_webhook(
         payload=payload,
@@ -175,6 +182,29 @@ async def handle_github_webhook(
     )
     if event.event_name in {"pull_request", "push"} and trigger_coordinator is not None:
         return await trigger_coordinator.handle(event)
+    if event.event_name == "github_app_authorization" and event.action == "revoked":
+        # A user revoked the App authorization: every server-side session for
+        # that GitHub user dies now (P3 §4.2). Per-action re-verification
+        # remains the backstop when this webhook never arrives.
+        sender = event.payload.get("sender")
+        sender_id = sender.get("id") if isinstance(sender, dict) else None
+        if (
+            session_revoker is not None
+            and isinstance(sender_id, int)
+            and not isinstance(sender_id, bool)
+            and sender_id > 0
+        ):
+            revoked = await session_revoker(sender_id)
+            return WebhookDispatchResult(
+                status="accepted",
+                event_name=event.event_name,
+                detail=f"revoked {revoked} web session(s) for the deauthorized user",
+            )
+        return WebhookDispatchResult(
+            status="ignored",
+            event_name=event.event_name,
+            detail="authorization revocation noted; no session store is configured",
+        )
     if event.action != "requested_action":
         return WebhookDispatchResult(
             status="ignored",

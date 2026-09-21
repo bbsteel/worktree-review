@@ -77,6 +77,7 @@ def project_available_actions(
             gate_state is ViewGateState.BLOCKED
             and surface.authority is Authority.AUTHORITATIVE
             and surface.github_actor_authenticated
+            and surface.bypass_preconditions_met
         )
         bypass = ReviewActionCapabilityView(
             visible=True,
@@ -84,7 +85,11 @@ def project_available_actions(
             disabled_reason=(
                 None
                 if bypass_enabled
-                else "Bypass requires an authorized GitHub actor and a completed blocking review."
+                else (
+                    "Bypass requires an authorized write-class GitHub actor, a "
+                    "published standing Blocked review with a Check, and a trusted "
+                    "frozen Review Policy."
+                )
             ),
         )
         open_check = ReviewActionCapabilityView(

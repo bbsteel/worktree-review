@@ -167,6 +167,69 @@ def create_app(
 
     application.include_router(create_api_router())
 
+    @application.middleware("http")
+    async def authorized_deployment_gate(request: Request, call_next):  # type: ignore[no-untyped-def]
+        """Authorized deployment mode: every remote API requires a verified
+        session and is served no-store (P3 §4.1/§8). The default local mode
+        (no authenticator) keeps its loopback process-level protections.
+
+        Local SQLite admin routes and csrf-bootstrap are not part of the
+        authorized surface: they answer uniform 404 without consulting
+        client Host / Forwarded headers or revealing endpoint existence.
+        """
+        path = request.url.path
+        if not path.startswith("/api/v1/"):
+            return await call_next(request)
+        server_runtime = getattr(request.app.state, "server_runtime", None)
+        authenticator = getattr(server_runtime, "web_authenticator", None)
+        if authenticator is None:
+            return await call_next(request)
+
+        def _local_admin_path(request_path: str, method: str) -> bool:
+            if request_path == "/api/v1/csrf-bootstrap":
+                return True
+            for prefix in (
+                "/api/v1/repositories",
+                "/api/v1/provider-profiles",
+                "/api/v1/review-policies",
+                "/api/v1/compute-policies",
+                "/api/v1/integrations/session-insight",
+            ):
+                if request_path == prefix or request_path.startswith(prefix + "/"):
+                    return True
+            if method == "POST" and request_path == "/api/v1/reviews":
+                return True
+            if (
+                method == "POST"
+                and request_path.startswith("/api/v1/reviews/")
+                and request_path.endswith("/retry")
+            ):
+                return True
+            return False
+
+        if _local_admin_path(path, request.method):
+            return JSONResponse(
+                status_code=404,
+                content={"error": {"code": "not_found", "message": "not found"}},
+                headers={"Cache-Control": "no-store"},
+            )
+        if path.startswith("/api/v1/auth/"):
+            return await call_next(request)
+        if authenticator.session_for_cookie(request.headers.get("cookie")) is None:
+            return JSONResponse(
+                status_code=401,
+                content={
+                    "error": {
+                        "code": "authentication_required",
+                        "message": "a verified GitHub session is required",
+                    }
+                },
+                headers={"Cache-Control": "no-store"},
+            )
+        response = await call_next(request)
+        response.headers["Cache-Control"] = "no-store"
+        return response
+
     @application.get("/healthz")
     async def healthz() -> dict[str, str]:
         return {"status": "ok", "version": __version__}
@@ -175,6 +238,11 @@ def create_app(
     async def github_webhook(request: Request) -> Response:
         if not configured_webhook_secret:
             return Response(status_code=status.HTTP_501_NOT_IMPLEMENTED)
+        server_runtime = getattr(application.state, "server_runtime", None)
+        web_authenticator = None if server_runtime is None else server_runtime.web_authenticator
+        session_revoker = (
+            None if web_authenticator is None else web_authenticator.revoke_actor_sessions
+        )
         try:
             dispatch = await handle_github_webhook(
                 payload=await request.body(),
@@ -188,6 +256,7 @@ def create_app(
                     retry_coordinator,
                 ),
                 trigger_coordinator=getattr(application.state, "trigger_coordinator", None),
+                session_revoker=session_revoker,
             )
         except WebhookValidationError as exc:
             return Response(content=str(exc), status_code=status.HTTP_401_UNAUTHORIZED)

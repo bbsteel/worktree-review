@@ -71,7 +71,7 @@ async def test_github_rest_client_sends_bearer_token_and_maps_repository_role() 
 
     def respond(request: httpx.Request) -> httpx.Response:
         requests.append(request)
-        return httpx.Response(200, json={"permission": "write"})
+        return httpx.Response(200, json={"permission": "write", "role_name": "write"})
 
     async with httpx.AsyncClient(
         transport=httpx.MockTransport(respond),
@@ -87,6 +87,44 @@ async def test_github_rest_client_sends_bearer_token_and_maps_repository_role() 
     assert role == "write"
     assert requests[0].url.path == "/repos/octo/example/collaborators/maintainer/permission"
     assert requests[0].headers["authorization"] == "Bearer installation-token"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("payload", "expected_role"),
+    [
+        ({"permission": "admin", "role_name": "admin"}, "admin"),
+        ({"permission": "write", "role_name": "maintain"}, "maintain"),
+        ({"permission": "write", "role_name": "write"}, "write"),
+        ({"permission": "triage", "role_name": "triage"}, "triage"),
+        ({"permission": "read", "role_name": "read"}, "read"),
+        # Custom roles often report permission=write; role_name must win and fail closed.
+        ({"permission": "write", "role_name": "release-manager"}, None),
+        ({"permission": "admin", "role_name": "org-custom"}, None),
+        ({"permission": "write"}, None),
+        ({"role_name": "not-a-base-role"}, None),
+        ({}, None),
+    ],
+)
+async def test_github_rest_client_repository_role_prefers_role_name_and_fails_closed(
+    payload: dict[str, str],
+    expected_role: str | None,
+) -> None:
+    def respond(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=payload)
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(respond),
+        base_url="https://api.github.test",
+    ) as http_client:
+        github_api = GitHubRestClient(http_client=http_client, token="installation-token")
+        role = await github_api.repository_role(
+            installation_id=7,
+            repository="octo/example",
+            actor="contributor",
+        )
+
+    assert role == expected_role
 
 
 @pytest.mark.asyncio

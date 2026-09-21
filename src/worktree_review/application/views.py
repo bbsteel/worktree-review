@@ -75,6 +75,10 @@ class SurfaceProjection(BaseModel):
     bypass_state: BypassState
     session_insight_connected: bool = False
     github_actor_authenticated: bool = False
+    # Server-computed Bypass preconditions (standing, publication, Check,
+    # live write-class role, trusted frozen Policy). The UI must not invent
+    # these; ``project_available_actions`` only ANDs them with gate state.
+    bypass_preconditions_met: bool = False
 
 
 class ReviewRunView(BaseModel):

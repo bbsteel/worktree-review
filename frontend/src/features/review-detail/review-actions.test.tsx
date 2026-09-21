@@ -97,33 +97,18 @@ describe('Retry confirmation', () => {
 })
 
 describe('Bypass risk confirmation', () => {
-  it('requires a reason and frames bypass as accepting risk, not resolving findings', async () => {
+  it('jump entry routes to the per-finding actions and never submits', async () => {
     const run = withActions(derive({}), { bypass: enabled })
     const user = userEvent.setup()
-    render(<ReviewActionsBar run={run} />)
+    const onShowFindings = vi.fn()
+    render(<ReviewActionsBar run={run} onShowFindings={onShowFindings} />)
 
     await user.click(screen.getByRole('button', { name: 'Bypass' }))
 
-    const dialog = screen.getByRole('dialog', { name: 'Accept the risk and bypass the gate?' })
-    expect(within(dialog).getByText(/accepting the risk/)).toBeInTheDocument()
-    expect(within(dialog).getByText(/does not mean the finding was resolved/)).toBeInTheDocument()
-
-    // Every blocking finding is listed with its fingerprint.
-    const blocking = blockedCase.findings.filter((finding) => finding.blocking)
-    expect(blocking.length).toBeGreaterThan(0)
-    for (const finding of blocking) {
-      expect(within(dialog).getByText(new RegExp(finding.fingerprint))).toBeInTheDocument()
-    }
-
-    const confirm = within(dialog).getByRole('button', { name: /Accept risk and bypass/ })
-    expect(confirm).toBeDisabled()
-    expect(within(dialog).getByText(/Enter a reason to enable this action/)).toBeInTheDocument()
-
-    await user.type(within(dialog).getByRole('textbox'), 'Accepted by on-call for the hotfix window.')
-    expect(confirm).toBeEnabled()
-
-    await user.click(confirm)
-    expect(screen.getByRole('status')).toHaveTextContent(/simulated locally/i)
+    // P3: the bar is only a jump entry. Risk is accepted per finding through
+    // the real API in the Findings tab — never by one whole-gate click.
+    expect(onShowFindings).toHaveBeenCalledOnce()
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
     expect(fetchSpy).not.toHaveBeenCalled()
   })
 

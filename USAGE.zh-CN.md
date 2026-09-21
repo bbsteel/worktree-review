@@ -523,10 +523,39 @@ uv sync --extra server
 - `WORKTREE_REVIEW_GITHUB_API_URL`（可选，默认 `https://api.github.com`）
 - `WORKTREE_REVIEW_PUBLIC_BASE_URL`（可选，默认 `http://127.0.0.1:8000`）
 
+### 授权部署模式（Web Bypass / Audit Log，P3）
+
+默认本地模式没有可证明的 GitHub actor：Web Bypass 与远程审计读取保持
+`capability_unavailable`。授权部署模式按需开启，缺一即启动失败（fail closed）：
+
+- `WORKTREE_REVIEW_WEB_AUTH_MODE=github-oauth`：启用 GitHub App user-token web flow。
+- `WORKTREE_REVIEW_PUBLIC_BASE_URL`：必须是受信任的 HTTPS origin（无路径/查询）。
+- `WORKTREE_REVIEW_GITHUB_OAUTH_CLIENT_ID` / `WORKTREE_REVIEW_GITHUB_OAUTH_CLIENT_SECRET`。
+- `WORKTREE_REVIEW_GITHUB_WEB_URL`（可选，默认 `https://github.com`，GHES 时指向实例）。
+
+会话为 30 分钟 opaque cookie（`HttpOnly`、`Secure`、`SameSite=Lax`），user token 仅存于
+单进程内存、从不落库；登录 state 通过短期 pre-login cookie 绑定发起登录的浏览器（防
+登录 CSRF / 会话互换）；每次 Bypass 前都会重新校验 `GET /user` 身份与实时仓库角色
+（`write`/`maintain`/`admin`）。用户撤销 App 授权时 `github_app_authorization` webhook
+会使其会话立即失效。
+
+授权模式下所有 `/api/v1` 远程接口（Review 列表/Detail/Events/Result/Overview/Audit 及
+本地管理面）都要求已验证会话并返回 `Cache-Control: no-store`；GitHub 资源按会话 actor
+的实时仓库角色做读取授权，无读权限时一律 404（不暴露存在性）。审计的风险理由详情仅
+`write`/`maintain`/`admin` 可见，较低角色只得到事件元数据。前端在无会话时整页呈现登录墙，
+不发起任何受保护请求。
+
+Rollback 只需移除 `WORKTREE_REVIEW_WEB_AUTH_MODE`：Bypass 路由回到 501，已记录的
+Bypass/Audit 历史保留在 Postgres（`bypasses`、`audit_events`、`standing_check_outbox`），
+迁移均为 additive/幂等，旧库无 P3 表时基础 Review 与 GitHub 闭环照常运行。
+
 `GET /healthz` 可作为 liveness endpoint。已签名的 `ready_for_review` webhook 会创建权威
 Attempt；durable worker 从不可变 snapshot 恢复并运行 shared Pipeline；终态 Check 与 Web
 Review Detail 发布到同一个 `check_run_id`。重启后过期的 worker lease 会被恢复；发布失败
-通过有界退避的 outbox 重试，并且始终更新同一个 `check_run_id`。
+通过有界退避的 outbox 重试，并且始终更新同一个 `check_run_id`。Bypass 后的 standing
+Check 同步同样经持久 outbox（`standing_check_outbox`，按 `(attempt_id, standing_revision)`
+唯一），崩溃/超时/限流按有界退避恢复；耗尽后 intent 进入可查询的 `failed` 并留有
+`check_sync_failed` 审计事件，运维可将该行状态重置为 `queued` 触发重新投递。
 
 ## 本地 Web UI
 

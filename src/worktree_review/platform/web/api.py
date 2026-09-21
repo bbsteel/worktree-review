@@ -10,21 +10,42 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
-from fastapi import APIRouter, Header, Request
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi import APIRouter, Header, Request, Response
+from fastapi.responses import JSONResponse, RedirectResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
-from worktree_review.application.lifecycle import RunStatus
+from worktree_review.application.lifecycle import PublicationStatus, RunStatus
 from worktree_review.application.review_events import ReviewEvent
 from worktree_review.application.review_runs import OverviewAggregate
 from worktree_review.application.review_service import allocate_attempt_id
 from worktree_review.core.errors import InvalidInvocationError
 from worktree_review.core.git import invoke_git, worktree_is_clean
-from worktree_review.core.policy import load_review_policy
+from worktree_review.core.policy import ReviewPolicy, load_review_policy
+from worktree_review.core.report import GateState
+from worktree_review.platform.github.authz import BYPASS_ALLOWED_REPOSITORY_ROLES
+from worktree_review.platform.github.bypass import (
+    BypassAuthorizationError,
+    BypassAuthorizationUnavailableError,
+    BypassRejectionError,
+    BypassRequest,
+    BypassStorageUnavailableError,
+)
+from worktree_review.platform.github.frozen_policy import (
+    FrozenReviewPolicyError,
+    resolve_frozen_review_policy,
+)
 from worktree_review.platform.github.runtime import ServerRuntime
+from worktree_review.platform.web.authentication import (
+    LOGIN_NONCE_COOKIE_NAME,
+    SESSION_COOKIE_NAME,
+    AuthenticationError,
+    WebSession,
+    read_login_nonce_cookie,
+)
 from worktree_review.platform.web.errors import ApiError
 from worktree_review.platform.web.local_store import IdempotencyConflictError
 from worktree_review.platform.web.presenters import (
+    present_audit_event,
     present_compute_policy,
     present_github_review_run,
     present_overview,
@@ -104,6 +125,13 @@ class RegisterComputePolicyRequest(BaseModel):
     provider_profile_id: str | None = None
 
 
+class BypassFindingRequest(BaseModel):
+    """Risk-acceptance reason; the actor comes from the verified session,
+    never from the request body."""
+
+    reason: str = Field(min_length=1)
+
+
 def _runtime(request: Request) -> WebRuntime:
     runtime = request.app.state.web_runtime
     if not isinstance(runtime, WebRuntime):
@@ -119,6 +147,121 @@ def _web_runtime(request: Request) -> WebRuntime | None:
 def _server_runtime(request: Request) -> ServerRuntime | None:
     runtime = getattr(request.app.state, "server_runtime", None)
     return runtime if isinstance(runtime, ServerRuntime) else None
+
+
+def _is_authorized_deployment(request: Request) -> bool:
+    """True when this process is running the GitHub OAuth authorized deployment."""
+
+    server = _server_runtime(request)
+    return server is not None and server.web_authenticator is not None
+
+
+def _reject_local_admin_in_authorized_deployment(request: Request) -> None:
+    """Authorized deployments never expose the local SQLite admin surface.
+
+    Answers with a uniform 404 so clients cannot probe for endpoint names,
+    env vars, local paths, or resource existence (P3 fail-closed boundary).
+    """
+
+    if _is_authorized_deployment(request):
+        raise ApiError(404, "not_found", "not found")
+
+
+def _local_admin_runtime(request: Request) -> WebRuntime:
+    """Local loopback admin only — never available under github-oauth mode."""
+
+    _reject_local_admin_in_authorized_deployment(request)
+    return _runtime(request)
+
+
+async def _authorized_session(request: Request) -> WebSession | None:
+    """The verified session in authorized mode; ``None`` in default local mode.
+
+    Local mode keeps its loopback, process-level protections. Authorized mode
+    requires a session for every remote API — reads included (P3 §4.1).
+    """
+
+    server = _server_runtime(request)
+    authenticator = None if server is None else server.web_authenticator
+    if authenticator is None:
+        return None
+    session = authenticator.session_for_cookie(request.headers.get("cookie"))
+    if session is None:
+        raise ApiError(401, "authentication_required", "a verified GitHub session is required")
+    return session
+
+
+async def _repo_read_role(
+    request: Request,
+    *,
+    installation_id: int,
+    repository: str,
+    session: WebSession,
+) -> str | None:
+    """Live repository role for the session actor, cached per request.
+
+    ``None`` means the actor has no readable role on this repository — callers
+    must answer 404, never a distinguishable 403 (no existence probing). A
+    lookup failure raises 503: an undecidable authorization signal is never a
+    pass.
+    """
+
+    cache: dict[tuple[int, str], str | None] | None = getattr(
+        request.state, "_repo_read_roles", None
+    )
+    if cache is None:
+        cache = {}
+        request.state._repo_read_roles = cache
+    key = (installation_id, repository)
+    if key not in cache:
+        server = _server_runtime(request)
+        role: str | None = None
+        lookup = None if server is None else server.role_lookup
+        if lookup is not None:
+            try:
+                role = await lookup.repository_role(
+                    installation_id=installation_id,
+                    repository=repository,
+                    actor=session.actor_login,
+                )
+            except Exception as exc:
+                raise ApiError(
+                    503,
+                    "github_authorization_unavailable",
+                    "repository authorization could not be determined",
+                ) from exc
+        cache[key] = role
+    return cache[key]
+
+
+_REPO_WRITE_ROLES = frozenset({"write", "maintain", "admin"})
+
+
+async def _github_attempt_read_gate(request: Request, attempt_id: str) -> None:
+    """Authorized mode: require a session with a readable role on the Attempt's
+    repository. All failures surface as 404 — the existence of a private
+    repository or Attempt must not be probeable (P3 §8)."""
+
+    server = _server_runtime(request)
+    if server is None or server.web_authenticator is None:
+        return
+    session = await _authorized_session(request)
+    assert session is not None  # authorized mode guarantees a session here
+    snapshot = (
+        None
+        if server.github_store is None
+        else await server.github_store.get_execution_snapshot(attempt_id)
+    )
+    if snapshot is None:
+        return  # the route's own 404 handles absence uniformly
+    role = await _repo_read_role(
+        request,
+        installation_id=snapshot.change_request.installation_id,
+        repository=snapshot.change_request.repository,
+        session=session,
+    )
+    if role is None:
+        raise ApiError(404, "attempt_not_found", "unknown attempt")
 
 
 async def _github_review_dto(
@@ -143,6 +286,51 @@ async def _github_review_dto(
         events = await server.github_store.list_review_events(attempt_id)
         created_at = events[0].occurred_at if events else datetime.fromtimestamp(0, tz=UTC)
     job_status_value = await server.attempt_store.job_status(attempt_id)
+    bypasses = await server.attempt_store.list_bypasses(attempt_id=attempt_id)
+    latest_sync = await server.attempt_store.latest_standing_check_sync(attempt_id=attempt_id)
+    # Shared frozen-policy trust path with Bypass POST (P3 §5.1.4). Never
+    # invent Critical/Major blockers when the document is untrusted.
+    blocking_policy: ReviewPolicy | None = None
+    review_policy_trusted = False
+    legacy_policy_path = getattr(server.bypass_coordinator, "_review_policy_path", None)
+    try:
+        blocking_policy = resolve_frozen_review_policy(
+            snapshot,
+            legacy_review_policy_path=legacy_policy_path,
+        )
+        review_policy_trusted = True
+    except FrozenReviewPolicyError:
+        blocking_policy = None
+        review_policy_trusted = False
+    # Capability hint only — the POST re-checks session, CSRF, live role, and
+    # authoritative state. Never treat this flag as an authorization result.
+    actor_authenticated = False
+    actor_repository_role: str | None = None
+    if server.web_authenticator is not None:
+        session = server.web_authenticator.session_for_cookie(request.headers.get("cookie"))
+        actor_authenticated = session is not None
+        if session is not None:
+            try:
+                actor_repository_role = await _repo_read_role(
+                    request,
+                    installation_id=snapshot.change_request.installation_id,
+                    repository=snapshot.change_request.repository,
+                    session=session,
+                )
+            except ApiError:
+                # Undecidable authz disables Bypass in the projection; the
+                # read gate already decided visibility separately.
+                actor_repository_role = None
+    publication = publication_status
+    bypass_preconditions_met = (
+        change_state.authoritative_attempt_id == attempt_id
+        and change_state.standing_attempt_id == attempt_id
+        and publication is PublicationStatus.PUBLISHED
+        and check_run_id is not None
+        and actor_repository_role in BYPASS_ALLOWED_REPOSITORY_ROLES
+        and review_policy_trusted
+        and change_state.standing_gate_state is GateState.BLOCKED
+    )
     return present_github_review_run(
         snapshot=snapshot,
         change_state=change_state,
@@ -154,6 +342,17 @@ async def _github_review_dto(
         session_insight_deep_link=session_insight_deep_link,
         job_status=None if job_status_value is None else job_status_value.value,
         job_failure_detail=await server.attempt_store.job_last_error(attempt_id),
+        bypasses=bypasses,
+        check_sync_status=None if latest_sync is None else latest_sync.status.value,
+        bypass_capability=(
+            "available"
+            if server.bypass_coordinator is not None and server.web_authenticator is not None
+            else "unavailable"
+        ),
+        actor_authenticated=actor_authenticated,
+        bypass_preconditions_met=bypass_preconditions_met,
+        blocking_policy=blocking_policy,
+        review_policy_trusted=review_policy_trusted,
     )
 
 
@@ -196,10 +395,14 @@ async def _merged_overview_aggregate(
     request: Request, local_aggregate: OverviewAggregate
 ) -> OverviewAggregate:
     """Stats must not silently exclude GitHub Attempts — including queued,
-    running and failed-without-result ones (reviewer blocker 3)."""
+    running and failed-without-result ones (reviewer blocker 3). In the
+    authorized deployment, counts only cover repositories the session actor
+    may read: cross-installation aggregates must not leak (P3 §4.1)."""
     server = _server_runtime(request)
     if server is None or server.github_store is None or server.attempt_store is None:
         return local_aggregate
+    if server.web_authenticator is not None:
+        return await _authorized_github_overview_aggregate(request, local_aggregate)
     gate_counts = await server.github_store.overview_gate_counts()
     job_counts = await server.attempt_store.job_status_counts()
     github_total = sum(job_counts.values())
@@ -225,13 +428,83 @@ async def _merged_overview_aggregate(
     )
 
 
+async def _authorized_github_overview_aggregate(
+    request: Request, local_aggregate: OverviewAggregate
+) -> OverviewAggregate:
+    """Repository-read-filtered GitHub merge for the authorized deployment."""
+
+    server = _server_runtime(request)
+    assert server is not None and server.github_store is not None
+    assert server.attempt_store is not None
+    session = await _authorized_session(request)
+    assert session is not None
+    github_total = 0
+    passed = blocked = errored = 0
+    failed_without_result = 0
+    # Overview totals must cover every Attempt the actor can read, not only
+    # the recent list window used by the dashboard feed (default 50).
+    for attempt_id in await server.github_store.list_recent_attempt_ids(limit=None):
+        snapshot = await server.github_store.get_execution_snapshot(attempt_id)
+        if snapshot is None:
+            continue
+        role = await _repo_read_role(
+            request,
+            installation_id=snapshot.change_request.installation_id,
+            repository=snapshot.change_request.repository,
+            session=session,
+        )
+        if role is None:
+            continue
+        github_total += 1
+        result_json = await server.github_store.get_review_result(attempt_id)
+        gate = None
+        if result_json:
+            try:
+                gate = json.loads(result_json).get("gate_state")
+            except ValueError:
+                gate = None
+        if gate == "Passed":
+            passed += 1
+        elif gate == "Blocked":
+            blocked += 1
+        elif gate == "Error":
+            errored += 1
+        elif (
+            await server.attempt_store.job_status(attempt_id) is GitHubJobStatus.FAILED
+            and result_json is None
+        ):
+            failed_without_result += 1
+    if github_total == 0:
+        return local_aggregate
+    return OverviewAggregate(
+        attempt_count=local_aggregate.attempt_count + github_total,
+        passed_count=local_aggregate.passed_count + passed,
+        blocked_count=local_aggregate.blocked_count + blocked,
+        error_count=local_aggregate.error_count + errored + failed_without_result,
+        known_cost_usd=local_aggregate.known_cost_usd,
+        unknown_cost_record_count=local_aggregate.unknown_cost_record_count + github_total,
+    )
+
+
 async def _github_recent_summaries(request: Request) -> list[dict[str, Any]]:
-    """Recent GitHub Attempts projected onto the Review Summary shape."""
+    """Recent GitHub Attempts projected onto the Review Summary shape.
+
+    Authorized deployment: attempts on repositories the session actor cannot
+    read simply do not exist for this response (P3 §4.1). Only expected
+    visibility 404s are swallowed; authorization undecidability (503) and
+    other failures propagate so the list never disguises an empty Overview.
+    """
     server = _server_runtime(request)
     if server is None or server.github_store is None or server.attempt_store is None:
         return []
     summaries: list[dict[str, Any]] = []
     for attempt_id in await server.github_store.list_recent_attempt_ids():
+        try:
+            await _github_attempt_read_gate(request, attempt_id)
+        except ApiError as exc:
+            if exc.status_code == 404:
+                continue
+            raise
         dto = await _github_review_dto(request, attempt_id)
         if dto is not None:
             summaries.append(dto["summary"])
@@ -304,12 +577,16 @@ def create_api_router() -> APIRouter:
 
     @router.get("/api/v1/csrf-bootstrap")
     async def csrf_bootstrap(request: Request) -> JSONResponse:
-        """Issue this process's CSRF token to the same-origin frontend.
+        """Issue this process's local CSRF token to the same-origin frontend.
 
-        Loopback-only and never cached; no CORS headers exist anywhere in
-        this app, so a cross-origin page cannot read this response.
+        Local loopback admin only. The authorized github-oauth deployment
+        never serves this endpoint — session CSRF comes from
+        ``GET /api/v1/auth/session``, and client-supplied Host /
+        X-Forwarded-* headers are never trusted to reopen local admin CSRF.
+        In local mode the Host must still be loopback so a non-loopback bind
+        cannot bootstrap the process CSRF token.
         """
-        runtime = _runtime(request)
+        runtime = _local_admin_runtime(request)
         if not is_loopback_host(request.headers.get("host")):
             raise ApiError(403, "forbidden_host", "CSRF bootstrap is only served on loopback")
         return JSONResponse(
@@ -324,7 +601,7 @@ def create_api_router() -> APIRouter:
         idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
         csrf_token: str | None = Header(default=None, alias="X-CSRF-Token"),
     ) -> dict[str, str]:
-        runtime = _runtime(request)
+        runtime = _local_admin_runtime(request)
         _mutation_guard(request, csrf_token)
         if not idempotency_key:
             raise ApiError(400, "missing_idempotency_key", "Idempotency-Key is required")
@@ -381,40 +658,46 @@ def create_api_router() -> APIRouter:
 
     @router.get("/api/v1/reviews")
     async def list_reviews(request: Request) -> dict[str, Any]:
-        runtime = _runtime(request)
-        runs = await runtime.store.list_runs()
         summaries: list[dict[str, Any]] = []
-        for run in runs:
-            request_body = json.loads(run.request_json) if run.request_json else {}
-            display = await repository_display_name(runtime.store, request_body)
-            summaries.append(present_review_summary(run, display_name=display))
+        if _is_authorized_deployment(request):
+            await _authorized_session(request)
+        else:
+            runtime = _runtime(request)
+            runs = await runtime.store.list_runs()
+            for run in runs:
+                request_body = json.loads(run.request_json) if run.request_json else {}
+                display = await repository_display_name(runtime.store, request_body)
+                summaries.append(present_review_summary(run, display_name=display))
         summaries.extend(await _github_recent_summaries(request))
         summaries.sort(key=lambda item: str(item["created_at"]), reverse=True)
         return {"runs": summaries, "next_cursor": None}
 
     @router.get("/api/v1/reviews/{attempt_id}")
     async def get_review(attempt_id: str, request: Request) -> dict[str, Any]:
-        runtime = _web_runtime(request)
         session_insight_state = "disconnected"
         session_insight_deep_link: str | None = None
-        if runtime is not None:
-            probe = await runtime.session_insight.current()
-            session_insight_state = probe.state.value
-            if session_insight_state == "connected":
-                session_insight_deep_link = runtime.session_insight.deep_link(attempt_id)
-            run = await runtime.store.get_run(attempt_id)
-            if run is not None:
-                request_body = json.loads(run.request_json) if run.request_json else {}
-                display = await repository_display_name(runtime.store, request_body)
-                review_policy, compute_policy = await _load_policies(runtime, request_body)
-                return present_review_run(
-                    run,
-                    display_name=display,
-                    review_policy=review_policy,
-                    compute_policy=compute_policy,
-                    session_insight_state=session_insight_state,
-                    session_insight_deep_link=session_insight_deep_link,
-                )
+        # Authorized deployments never read the local SQLite review store.
+        if not _is_authorized_deployment(request):
+            runtime = _web_runtime(request)
+            if runtime is not None:
+                probe = await runtime.session_insight.current()
+                session_insight_state = probe.state.value
+                if session_insight_state == "connected":
+                    session_insight_deep_link = runtime.session_insight.deep_link(attempt_id)
+                run = await runtime.store.get_run(attempt_id)
+                if run is not None:
+                    request_body = json.loads(run.request_json) if run.request_json else {}
+                    display = await repository_display_name(runtime.store, request_body)
+                    review_policy, compute_policy = await _load_policies(runtime, request_body)
+                    return present_review_run(
+                        run,
+                        display_name=display,
+                        review_policy=review_policy,
+                        compute_policy=compute_policy,
+                        session_insight_state=session_insight_state,
+                        session_insight_deep_link=session_insight_deep_link,
+                    )
+        await _github_attempt_read_gate(request, attempt_id)
         github = await _github_review_dto(
             request,
             attempt_id,
@@ -432,26 +715,28 @@ def create_api_router() -> APIRouter:
         last_event_id: str | None = Header(default=None, alias="Last-Event-ID"),
         since: int | None = None,
     ) -> StreamingResponse:
-        runtime = _web_runtime(request)
-        if runtime is not None:
-            run = await runtime.store.get_run(attempt_id)
-            if run is not None:
+        if not _is_authorized_deployment(request):
+            runtime = _web_runtime(request)
+            if runtime is not None:
+                run = await runtime.store.get_run(attempt_id)
+                if run is not None:
 
-                async def _stream_local() -> Any:
-                    async for item in iter_attempt_events(
-                        runtime, attempt_id, last_event_id=last_event_id, since=since
-                    ):
-                        if item is None:
-                            yield ": heartbeat\n\n"
-                            continue
-                        event_json = item.model_dump_json(by_alias=True)
-                        yield f"id: {item.sequence}\ndata: {event_json}\n\n"
+                    async def _stream_local() -> Any:
+                        async for item in iter_attempt_events(
+                            runtime, attempt_id, last_event_id=last_event_id, since=since
+                        ):
+                            if item is None:
+                                yield ": heartbeat\n\n"
+                                continue
+                            event_json = item.model_dump_json(by_alias=True)
+                            yield f"id: {item.sequence}\ndata: {event_json}\n\n"
 
-                return StreamingResponse(_stream_local(), media_type="text/event-stream")
+                    return StreamingResponse(_stream_local(), media_type="text/event-stream")
         server = _server_runtime(request)
         if server is not None and server.github_store is not None:
             snapshot = await server.github_store.get_execution_snapshot(attempt_id)
             if snapshot is not None:
+                await _github_attempt_read_gate(request, attempt_id)
                 github_store = server.github_store
 
                 async def _stream_github() -> Any:
@@ -469,22 +754,24 @@ def create_api_router() -> APIRouter:
 
     @router.get("/api/v1/reviews/{attempt_id}/result")
     async def get_review_result(attempt_id: str, request: Request) -> Any:
-        runtime = _web_runtime(request)
-        if runtime is not None:
-            run = await runtime.store.get_run(attempt_id)
-            if run is not None:
-                if not run.result_json:
-                    raise ApiError(
-                        409, "result_unavailable", "terminal result is not available yet"
-                    )
-                return json.loads(run.result_json)
+        if not _is_authorized_deployment(request):
+            runtime = _web_runtime(request)
+            if runtime is not None:
+                run = await runtime.store.get_run(attempt_id)
+                if run is not None:
+                    if not run.result_json:
+                        raise ApiError(
+                            409, "result_unavailable", "terminal result is not available yet"
+                        )
+                    return json.loads(run.result_json)
         server = _server_runtime(request)
         if server is not None and server.github_store is not None:
-            result_json = await server.github_store.get_review_result(attempt_id)
-            if result_json:
-                return json.loads(result_json)
             snapshot = await server.github_store.get_execution_snapshot(attempt_id)
             if snapshot is not None:
+                await _github_attempt_read_gate(request, attempt_id)
+                result_json = await server.github_store.get_review_result(attempt_id)
+                if result_json:
+                    return json.loads(result_json)
                 raise ApiError(409, "result_unavailable", "terminal result is not available yet")
         raise ApiError(404, "attempt_not_found", "unknown attempt")
 
@@ -495,7 +782,7 @@ def create_api_router() -> APIRouter:
         idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
         csrf_token: str | None = Header(default=None, alias="X-CSRF-Token"),
     ) -> dict[str, str]:
-        runtime = _runtime(request)
+        runtime = _local_admin_runtime(request)
         _mutation_guard(request, csrf_token)
         if not idempotency_key:
             raise ApiError(400, "missing_idempotency_key", "Idempotency-Key is required")
@@ -528,28 +815,366 @@ def create_api_router() -> APIRouter:
             await runtime.enqueue(stored_id)
         return {"attempt_id": stored_id}
 
+    @router.get("/api/v1/auth/github/start")
+    async def auth_github_start(request: Request) -> Response:
+        server = _server_runtime(request)
+        authenticator = None if server is None else server.web_authenticator
+        if authenticator is None:
+            raise ApiError(
+                501,
+                "capability_unavailable",
+                "GitHub sign-in requires the authorized deployment mode",
+            )
+        login = authenticator.start_login()
+        response = RedirectResponse(
+            login.authorize_url,
+            status_code=302,
+            headers={"Cache-Control": "no-store"},
+        )
+        # Browser-bound pre-login cookie: the callback is only honored when
+        # the same browser presents this nonce (login CSRF protection).
+        response.set_cookie(
+            LOGIN_NONCE_COOKIE_NAME,
+            login.browser_nonce,
+            max_age=login.max_age_seconds,
+            httponly=True,
+            secure=True,
+            samesite="lax",
+            path="/api/v1/auth",
+        )
+        return response
+
+    @router.get("/api/v1/auth/github/callback")
+    async def auth_github_callback(request: Request, code: str = "", state: str = "") -> Response:
+        server = _server_runtime(request)
+        authenticator = None if server is None else server.web_authenticator
+        if authenticator is None:
+            raise ApiError(
+                501,
+                "capability_unavailable",
+                "GitHub sign-in requires the authorized deployment mode",
+            )
+        try:
+            session = await authenticator.complete_login(
+                state=state,
+                code=code,
+                browser_nonce=read_login_nonce_cookie(request.headers.get("cookie")),
+            )
+        except AuthenticationError as exc:
+            status = 503 if exc.code == "github_identity_unavailable" else 401
+            raise ApiError(status, exc.code, "GitHub sign-in failed") from exc
+        # Fixed local landing path only: callback never honors a caller URL.
+        response = RedirectResponse("/", status_code=302)
+        response.set_cookie(
+            SESSION_COOKIE_NAME,
+            session.session_id,
+            max_age=authenticator.config.session_ttl_seconds,
+            httponly=True,
+            secure=True,
+            samesite="lax",
+            path="/",
+        )
+        response.delete_cookie(LOGIN_NONCE_COOKIE_NAME, path="/api/v1/auth")
+        response.headers["Cache-Control"] = "no-store"
+        return response
+
+    @router.get("/api/v1/auth/session")
+    async def auth_session(request: Request) -> JSONResponse:
+        server = _server_runtime(request)
+        authenticator = None if server is None else server.web_authenticator
+        if authenticator is None:
+            return JSONResponse(
+                content={
+                    "mode": "local",
+                    "authenticated": False,
+                    "capabilities": {"bypass": False, "audit": False},
+                },
+                headers={"Cache-Control": "no-store"},
+            )
+        session = authenticator.session_for_cookie(request.headers.get("cookie"))
+        if session is None:
+            return JSONResponse(
+                content={
+                    "mode": "github-oauth",
+                    "authenticated": False,
+                    "capabilities": {"bypass": False, "audit": False},
+                },
+                headers={"Cache-Control": "no-store"},
+            )
+        bypass_available = getattr(server, "bypass_coordinator", None) is not None
+        return JSONResponse(
+            content={
+                "mode": "github-oauth",
+                "authenticated": True,
+                "actor_id": session.actor_id,
+                "actor_login": session.actor_login,
+                "expires_at": session.expires_at.isoformat(),
+                "csrf_token": session.csrf_token,
+                "capabilities": {"bypass": bypass_available, "audit": True},
+            },
+            headers={"Cache-Control": "no-store"},
+        )
+
+    @router.post("/api/v1/auth/logout")
+    async def auth_logout(
+        request: Request,
+        csrf_token: str | None = Header(default=None, alias="X-CSRF-Token"),
+    ) -> JSONResponse:
+        server = _server_runtime(request)
+        authenticator = None if server is None else server.web_authenticator
+        if authenticator is None:
+            raise ApiError(
+                501,
+                "capability_unavailable",
+                "GitHub sign-in requires the authorized deployment mode",
+            )
+        session = authenticator.session_for_cookie(request.headers.get("cookie"))
+        if session is None:
+            raise ApiError(401, "authentication_required", "a verified GitHub session is required")
+        try:
+            # Logout is a session mutation: same session-CSRF rules as bypass.
+            authenticator.assert_session_mutation(
+                session,
+                csrf_token=csrf_token,
+                origin=request.headers.get("origin"),
+            )
+        except AuthenticationError as exc:
+            raise ApiError(403, "csrf_rejected", "request protection rejected") from exc
+        authenticator.logout(request.headers.get("cookie"))
+        response = JSONResponse(content={"authenticated": False})
+        response.delete_cookie(SESSION_COOKIE_NAME, path="/")
+        response.headers["Cache-Control"] = "no-store"
+        return response
+
+    @router.post("/api/v1/reviews/{attempt_id}/findings/{fingerprint}/bypass")
+    async def bypass_finding(
+        attempt_id: str,
+        fingerprint: str,
+        payload: BypassFindingRequest,
+        request: Request,
+        csrf_token: str | None = Header(default=None, alias="X-CSRF-Token"),
+    ) -> JSONResponse:
+        server = _server_runtime(request)
+        if server is None or server.bypass_coordinator is None:
+            raise ApiError(
+                501,
+                "capability_unavailable",
+                "finding bypass requires the GitHub platform runtime",
+            )
+        authenticator = server.web_authenticator
+        if authenticator is None:
+            raise ApiError(
+                501,
+                "capability_unavailable",
+                "finding bypass requires the authorized deployment mode",
+            )
+        session = authenticator.session_for_cookie(request.headers.get("cookie"))
+        if session is None:
+            raise ApiError(401, "authentication_required", "a verified GitHub session is required")
+        try:
+            authenticator.assert_session_mutation(
+                session,
+                csrf_token=csrf_token,
+                origin=request.headers.get("origin"),
+            )
+            # Every action re-verifies the GitHub identity; a revoked or
+            # drifted token fails closed (P3 §4.2).
+            session = await authenticator.reverify_session_user(session)
+        except AuthenticationError as exc:
+            if exc.code == "csrf_rejected":
+                raise ApiError(403, "csrf_rejected", "request protection rejected") from exc
+            if exc.code == "session_expired":
+                raise ApiError(401, "session_expired", "the session has expired") from exc
+            if exc.code == "github_identity_unavailable":
+                raise ApiError(
+                    503,
+                    "github_authorization_unavailable",
+                    "GitHub identity verification is unavailable",
+                ) from exc
+            raise ApiError(401, "authentication_required", "re-authentication required") from exc
+        try:
+            accepted = await server.bypass_coordinator.request_bypass(
+                BypassRequest(
+                    attempt_id=attempt_id,
+                    finding_fingerprint=fingerprint,
+                    actor_id=session.actor_id,
+                    actor_login=session.actor_login,
+                    reason=payload.reason,
+                )
+            )
+        except BypassAuthorizationError as exc:
+            # Same non-probing 404 as authorized reads: existence of a private
+            # Attempt must not be distinguishable from absence (P3 §8).
+            raise ApiError(404, "attempt_not_found", "unknown attempt") from exc
+        except BypassAuthorizationUnavailableError as exc:
+            raise ApiError(
+                503,
+                "github_authorization_unavailable",
+                "repository authorization could not be determined",
+            ) from exc
+        except BypassStorageUnavailableError as exc:
+            raise ApiError(
+                503, "audit_store_unavailable", "the authoritative store is unavailable"
+            ) from exc
+        except BypassRejectionError as exc:
+            status = {
+                "attempt_not_found": 404,
+                "finding_not_found": 404,
+                "bypass_reason_invalid": 422,
+            }.get(exc.code, 409)
+            raise ApiError(status, exc.code, "bypass rejected") from exc
+        result = accepted.result
+        return JSONResponse(
+            content={
+                "attempt_id": attempt_id,
+                "finding_fingerprint": fingerprint,
+                "bypass_id": result.record.bypass_id,
+                "bypass_state": result.record.status.value,
+                "standing_gate_state": (
+                    None if result.standing_gate_state is None else result.standing_gate_state.value
+                ),
+                "remaining_blocking_count": result.remaining_blocking_count,
+                "standing_revision": result.standing_revision,
+                "check_sync_status": result.check_sync_status.value,
+                "gate_transitioned": result.gate_transitioned,
+                "replayed": result.replayed,
+            },
+            headers={"Cache-Control": "no-store"},
+        )
+
+    @router.get("/api/v1/audit-events")
+    async def list_audit_events(
+        request: Request,
+        repository: str | None = None,
+        cursor: str | None = None,
+        limit: int = 50,
+        event_type: str | None = None,
+        attempt_id: str | None = None,
+        pull_request_number: int | None = None,
+    ) -> JSONResponse:
+        # Read-only by design: audit events are written only by server-side
+        # state transitions and can never be modified through the API. The
+        # repository filter is mandatory so a caller can never enumerate every
+        # installation. In authorized mode the session actor must hold a
+        # readable role on the repository (else 404 — no existence probing),
+        # and risk-reason payloads are only visible to write/maintain/admin
+        # (P3 §8.3); lower roles get event metadata with an empty payload.
+        server = _server_runtime(request)
+        if server is None or server.attempt_store is None:
+            raise ApiError(
+                501,
+                "capability_unavailable",
+                "audit events require the GitHub platform state store",
+            )
+        if not repository:
+            raise ApiError(
+                400,
+                "repository_required",
+                "audit event queries must name one repository",
+            )
+        # Authorized mode: authorize per Installation, then query only those
+        # Installation IDs. A readable role on one Installation must never
+        # expose audit rows (or risk-acceptance reasons) from another.
+        authorized_installation_ids: tuple[int, ...] | None = None
+        write_installation_ids: frozenset[int] = frozenset()
+        if server.web_authenticator is not None:
+            session = await _authorized_session(request)
+            assert session is not None
+            installations = await server.attempt_store.audit_installations_for_repository(
+                repository
+            )
+            readable: list[int] = []
+            writable: list[int] = []
+            for installation_id in installations:
+                role = await _repo_read_role(
+                    request,
+                    installation_id=installation_id,
+                    repository=repository,
+                    session=session,
+                )
+                if role is None:
+                    continue
+                readable.append(installation_id)
+                if role in _REPO_WRITE_ROLES:
+                    writable.append(installation_id)
+            if not readable:
+                raise ApiError(404, "repository_not_found", "unknown repository")
+            authorized_installation_ids = tuple(readable)
+            write_installation_ids = frozenset(writable)
+        try:
+            page = await server.attempt_store.list_audit_events(
+                cursor=cursor,
+                limit=limit,
+                event_type=event_type,
+                attempt_id=attempt_id,
+                repository=repository,
+                pull_request_number=pull_request_number,
+                installation_ids=authorized_installation_ids,
+            )
+        except ValueError as exc:
+            raise ApiError(400, "invalid_cursor", str(exc)) from exc
+        events = []
+        for event in page.events:
+            presented = present_audit_event(event)
+            if authorized_installation_ids is not None:
+                # Per-installation payload visibility: write on Installation A
+                # never unlocks risk reasons recorded under Installation B.
+                if event.installation_id not in write_installation_ids:
+                    presented["payload"] = {}
+            events.append(presented)
+        return JSONResponse(
+            content={"events": events, "next_cursor": page.next_cursor},
+            headers={"Cache-Control": "no-store"},
+        )
+
     @router.get("/api/v1/overview")
     async def overview(request: Request) -> dict[str, Any]:
-        runtime = _runtime(request)
-        aggregate = await runtime.store.overview_aggregate()
-        runs = await runtime.store.list_runs()
         summaries: list[dict[str, Any]] = []
-        for run in runs:
-            request_body = json.loads(run.request_json) if run.request_json else {}
-            display = await repository_display_name(runtime.store, request_body)
-            summaries.append(present_review_summary(run, display_name=display))
+        if _is_authorized_deployment(request):
+            await _authorized_session(request)
+            aggregate = OverviewAggregate(
+                attempt_count=0,
+                passed_count=0,
+                blocked_count=0,
+                error_count=0,
+                known_cost_usd="0",
+                unknown_cost_record_count=0,
+            )
+            session_insight_block = {
+                "state": "disconnected",
+                "base_url": None,
+                "current_attempt_id": None,
+                "child_session_count": 0,
+                "last_probe_at": None,
+                "detail": "Session Insight is a local-loopback integration",
+                "reader_revision": 0,
+                "journal": {
+                    "enabled": False,
+                    "ok": False,
+                    "last_error": None,
+                    "last_error_at": None,
+                },
+            }
+        else:
+            runtime = _runtime(request)
+            aggregate = await runtime.store.overview_aggregate()
+            runs = await runtime.store.list_runs()
+            for run in runs:
+                request_body = json.loads(run.request_json) if run.request_json else {}
+                display = await repository_display_name(runtime.store, request_body)
+                summaries.append(present_review_summary(run, display_name=display))
+            _state_name, _deep_link_base, session_insight_block = await _session_insight_projection(
+                runtime
+            )
         summaries.extend(await _github_recent_summaries(request))
         summaries.sort(key=lambda item: str(item["created_at"]), reverse=True)
-        _state_name, _deep_link_base, session_insight_block = await _session_insight_projection(
-            runtime
-        )
         aggregate = await _merged_overview_aggregate(request, aggregate)
         return present_overview(aggregate, summaries, session_insight=session_insight_block)
 
     @router.get("/api/v1/integrations/session-insight")
     async def session_insight_status(request: Request) -> dict[str, Any]:
         """Integration status probe. Advisory only; never a Gate input."""
-        runtime = _runtime(request)
+        runtime = _local_admin_runtime(request)
         _state_name, _deep_link_base, session_insight_block = await _session_insight_projection(
             runtime
         )
@@ -557,7 +1182,7 @@ def create_api_router() -> APIRouter:
 
     @router.get("/api/v1/repositories")
     async def list_repositories(request: Request) -> list[dict[str, Any]]:
-        runtime = _runtime(request)
+        runtime = _local_admin_runtime(request)
         return [present_repository(row) for row in await runtime.store.list_repositories()]
 
     @router.post("/api/v1/repositories", status_code=201)
@@ -566,7 +1191,7 @@ def create_api_router() -> APIRouter:
         request: Request,
         csrf_token: str | None = Header(default=None, alias="X-CSRF-Token"),
     ) -> dict[str, Any]:
-        runtime = _runtime(request)
+        runtime = _local_admin_runtime(request)
         _mutation_guard(request, csrf_token)
         try:
             row = await register_local_repository(
@@ -580,7 +1205,7 @@ def create_api_router() -> APIRouter:
 
     @router.get("/api/v1/repositories/{repository_id}/status")
     async def repository_status(repository_id: str, request: Request) -> dict[str, Any]:
-        runtime = _runtime(request)
+        runtime = _local_admin_runtime(request)
         row = await runtime.store.get_repository(repository_id)
         if row is None:
             raise ApiError(404, "repository_not_found", "unknown repository")
@@ -607,7 +1232,7 @@ def create_api_router() -> APIRouter:
         request: Request,
         csrf_token: str | None = Header(default=None, alias="X-CSRF-Token"),
     ) -> None:
-        runtime = _runtime(request)
+        runtime = _local_admin_runtime(request)
         _mutation_guard(request, csrf_token)
         deleted = await runtime.store.delete_repository(repository_id)
         if not deleted:
@@ -615,7 +1240,7 @@ def create_api_router() -> APIRouter:
 
     @router.get("/api/v1/provider-profiles")
     async def list_provider_profiles(request: Request) -> list[dict[str, Any]]:
-        runtime = _runtime(request)
+        runtime = _local_admin_runtime(request)
         items = []
         for row in await runtime.store.list_provider_profiles():
             in_use = await runtime.store.provider_profile_in_use(str(row["id"]))
@@ -628,7 +1253,7 @@ def create_api_router() -> APIRouter:
         request: Request,
         csrf_token: str | None = Header(default=None, alias="X-CSRF-Token"),
     ) -> dict[str, Any]:
-        runtime = _runtime(request)
+        runtime = _local_admin_runtime(request)
         _mutation_guard(request, csrf_token)
         try:
             validate_provider_profile_shape(
@@ -662,7 +1287,7 @@ def create_api_router() -> APIRouter:
         request: Request,
         csrf_token: str | None = Header(default=None, alias="X-CSRF-Token"),
     ) -> dict[str, Any]:
-        runtime = _runtime(request)
+        runtime = _local_admin_runtime(request)
         _mutation_guard(request, csrf_token)
         existing = await runtime.store.get_provider_profile(profile_id)
         if existing is None:
@@ -698,7 +1323,7 @@ def create_api_router() -> APIRouter:
         request: Request,
         csrf_token: str | None = Header(default=None, alias="X-CSRF-Token"),
     ) -> None:
-        runtime = _runtime(request)
+        runtime = _local_admin_runtime(request)
         _mutation_guard(request, csrf_token)
         deleted = await runtime.store.delete_provider_profile(profile_id)
         if not deleted:
@@ -718,7 +1343,7 @@ def create_api_router() -> APIRouter:
         no model call is made. For a local-cli profile it verifies the argv
         and that the executable resolves on PATH without running it.
         """
-        runtime = _runtime(request)
+        runtime = _local_admin_runtime(request)
         _mutation_guard(request, csrf_token)
         row = await runtime.store.get_provider_profile(profile_id)
         if row is None:
@@ -783,7 +1408,7 @@ def create_api_router() -> APIRouter:
 
     @router.get("/api/v1/review-policies")
     async def list_review_policies(request: Request) -> list[dict[str, Any]]:
-        runtime = _runtime(request)
+        runtime = _local_admin_runtime(request)
         items = []
         for row in await runtime.store.list_trusted_policies("trusted_review_policies"):
             policy, identity = load_review_policy(Path(row["path"]))
@@ -801,7 +1426,7 @@ def create_api_router() -> APIRouter:
         The policy must live outside every registered (reviewed) repository;
         the browser supplies a path, never policy content.
         """
-        runtime = _runtime(request)
+        runtime = _local_admin_runtime(request)
         _mutation_guard(request, csrf_token)
         try:
             row = await register_trusted_policy(runtime.store, Path(payload.path), kind="review")
@@ -820,7 +1445,7 @@ def create_api_router() -> APIRouter:
         csrf_token: str | None = Header(default=None, alias="X-CSRF-Token"),
     ) -> dict[str, Any]:
         """Register a trusted Compute Policy, optionally bound to a Provider Profile."""
-        runtime = _runtime(request)
+        runtime = _local_admin_runtime(request)
         _mutation_guard(request, csrf_token)
         try:
             row = await register_trusted_policy(
@@ -841,7 +1466,7 @@ def create_api_router() -> APIRouter:
 
     @router.get("/api/v1/review-policies/{policy_id}")
     async def get_review_policy(policy_id: str, request: Request) -> dict[str, Any]:
-        runtime = _runtime(request)
+        runtime = _local_admin_runtime(request)
         row = await runtime.store.get_trusted_policy("trusted_review_policies", policy_id)
         if row is None:
             raise ApiError(404, "review_policy_not_found", "unknown review policy")
@@ -850,7 +1475,7 @@ def create_api_router() -> APIRouter:
 
     @router.get("/api/v1/compute-policies")
     async def list_compute_policies(request: Request) -> list[dict[str, Any]]:
-        runtime = _runtime(request)
+        runtime = _local_admin_runtime(request)
         items = []
         for row in await runtime.store.list_trusted_policies("trusted_compute_policies"):
             policy, identity, _format = load_trusted_compute_document(Path(row["path"]))
@@ -866,7 +1491,7 @@ def create_api_router() -> APIRouter:
 
     @router.get("/api/v1/compute-policies/{policy_id}")
     async def get_compute_policy(policy_id: str, request: Request) -> dict[str, Any]:
-        runtime = _runtime(request)
+        runtime = _local_admin_runtime(request)
         row = await runtime.store.get_trusted_policy("trusted_compute_policies", policy_id)
         if row is None:
             raise ApiError(404, "compute_policy_not_found", "unknown compute policy")

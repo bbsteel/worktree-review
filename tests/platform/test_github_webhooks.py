@@ -130,3 +130,41 @@ async def test_retry_webhook_requires_delivery_id_for_idempotency() -> None:
             webhook_secret="webhook-secret",
             retry_coordinator=_RecordingRetryCoordinator(),  # type: ignore[arg-type]
         )
+
+
+@pytest.mark.asyncio
+async def test_app_authorization_revoked_drops_web_sessions() -> None:
+    payload = {"action": "revoked", "sender": {"id": 123456, "login": "octocat"}}
+    body, signature = _signed_payload(payload, "webhook-secret")
+    revoked_ids: list[int] = []
+
+    async def _revoke(actor_id: int) -> int:
+        revoked_ids.append(actor_id)
+        return 2
+
+    result = await handle_github_webhook(
+        payload=body,
+        signature_header=signature,
+        webhook_secret="webhook-secret",
+        event_name="github_app_authorization",
+        session_revoker=_revoke,
+    )
+
+    assert result.status == "accepted"
+    assert revoked_ids == [123456]
+    assert "2 web session(s)" in result.detail
+
+
+@pytest.mark.asyncio
+async def test_app_authorization_revoked_without_session_store_is_ignored() -> None:
+    payload = {"action": "revoked", "sender": {"id": 123456, "login": "octocat"}}
+    body, signature = _signed_payload(payload, "webhook-secret")
+
+    result = await handle_github_webhook(
+        payload=body,
+        signature_header=signature,
+        webhook_secret="webhook-secret",
+        event_name="github_app_authorization",
+    )
+
+    assert result.status == "ignored"

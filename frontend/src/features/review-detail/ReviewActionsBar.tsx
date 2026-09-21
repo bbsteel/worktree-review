@@ -9,7 +9,6 @@ import {
   configuredSessionInsightBaseUrl,
   sessionInsightDeepLink,
 } from '../session-insight/session-insight.ts'
-import { BypassRiskDialog } from './BypassRiskDialog.tsx'
 import { RetryConfirmDialog } from './RetryConfirmDialog.tsx'
 
 interface ActionDefinition {
@@ -19,16 +18,23 @@ interface ActionDefinition {
   capability: ReviewActionCapabilityView
 }
 
-type ActiveDialog = 'retry' | 'bypass' | null
+type ActiveDialog = 'retry' | null
+
+interface ReviewActionsBarProps {
+  run: ReviewRunView
+  /** Jump entry to the per-finding Accept-risk actions (P3 §9.1). */
+  onShowFindings?: () => void
+}
 
 /**
  * Renders Retry / Bypass / Open Check / Open Session Insight purely from the
  * capability view (visible / enabled / disabledReason). Disabled actions show
- * their reason in a focusable tooltip. Enabled Retry/Bypass open the target
- * confirmation dialogs (B-014); this prototype never submits these actions —
- * confirming only simulates the interaction locally and sends no request.
+ * their reason in a focusable tooltip. Bypass is a jump entry to the per-
+ * finding Accept-risk actions (P3 §9.1): risk is accepted one finding at a
+ * time with a real API call, never by one whole-gate click. Retry still opens
+ * the target confirmation dialog (B-014).
  */
-export function ReviewActionsBar({ run }: { run: ReviewRunView }) {
+export function ReviewActionsBar({ run, onShowFindings }: ReviewActionsBarProps) {
   const { t } = useI18n()
   const { availableActions: actions } = run
   const [activeDialog, setActiveDialog] = useState<ActiveDialog>(null)
@@ -111,15 +117,19 @@ export function ReviewActionsBar({ run }: { run: ReviewRunView }) {
               )
             }
 
-            const opensDialog = definition.key === 'retry' || definition.key === 'bypass'
+            const opensDialog = definition.key === 'retry'
             const button = (
               <Button
                 variant="secondary"
                 size="sm"
                 disabled={!capability.enabled}
                 onClick={
-                  capability.enabled && opensDialog
-                    ? () => setActiveDialog(definition.key as ActiveDialog)
+                  capability.enabled
+                    ? opensDialog
+                      ? () => setActiveDialog('retry')
+                      : definition.key === 'bypass'
+                        ? onShowFindings
+                        : undefined
                     : undefined
                 }
               >
@@ -163,12 +173,6 @@ export function ReviewActionsBar({ run }: { run: ReviewRunView }) {
         run={run}
         onClose={() => setActiveDialog(null)}
         onConfirm={() => onSimulatedConfirm('Retry')}
-      />
-      <BypassRiskDialog
-        open={activeDialog === 'bypass'}
-        run={run}
-        onClose={() => setActiveDialog(null)}
-        onConfirm={() => onSimulatedConfirm('Bypass')}
       />
     </div>
   )

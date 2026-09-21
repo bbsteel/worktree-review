@@ -1,5 +1,6 @@
 import { createContext, useContext } from 'react'
 import type { ReviewDataSource } from '../data/sources/review-data-source.ts'
+import type { AuthSessionView } from '../domain/audit.ts'
 import type { FixtureCaseDescriptor, OverviewView } from '../domain/overview.ts'
 
 export interface DataSourceContextValue {
@@ -8,6 +9,12 @@ export interface DataSourceContextValue {
   cases: FixtureCaseDescriptor[]
   loading: boolean
   error: string | null
+  /**
+   * Deployment auth session (P3). `null` until probed; in the authorized
+   * mode an unauthenticated session means the shell shows a sign-in wall and
+   * no protected data is ever fetched.
+   */
+  authSession: AuthSessionView | null
 }
 
 export const DataSourceContext = createContext<DataSourceContextValue | null>(null)

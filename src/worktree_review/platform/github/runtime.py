@@ -21,7 +21,13 @@ import httpx
 from worktree_review.core.identity import ReviewRequestKey
 from worktree_review.core.policy import load_compute_policy, load_review_policy
 from worktree_review.core.provider import ProviderClient, build_provider
-from worktree_review.platform.github.authz import GitHubRoleRetryAuthorizer
+from worktree_review.platform.github.authz import (
+    GitHubRepositoryRoleLookup,
+    GitHubRoleBypassAuthorizer,
+    GitHubRoleRetryAuthorizer,
+    normalize_standard_repository_role,
+)
+from worktree_review.platform.github.bypass import GitHubBypassCoordinator
 from worktree_review.platform.github.checks import (
     DEFAULT_PUBLIC_BASE_URL,
     CheckRunPayload,
@@ -44,6 +50,12 @@ from worktree_review.platform.github.worker import (
     CloneUrlResolver,
     GitHubReviewWorker,
     ProviderFactory,
+)
+from worktree_review.platform.web.authentication import (
+    GitHubWebAuthenticator,
+    HttpxOAuthTransport,
+    WebAuthConfiguration,
+    load_web_auth_configuration,
 )
 from worktree_review.server.state import (
     AttemptLease,
@@ -137,8 +149,10 @@ class GitHubRestClient:
         payload = await self.get_json(
             f"/repos/{quote(repository, safe='/')}/collaborators/{quote(actor, safe='')}/permission"
         )
-        permission = payload.get("permission")
-        return permission if isinstance(permission, str) else None
+        return normalize_standard_repository_role(
+            role_name=payload.get("role_name"),
+            permission=payload.get("permission"),
+        )
 
 
 def _decode_github_json_response(response: httpx.Response) -> dict[str, object]:
@@ -342,6 +356,15 @@ class ServerRuntime:
     trigger_coordinator: GitHubTriggerCoordinator | None = None
     attempt_store: PostgresAuthoritativeAttemptStore | None = None
     publisher: GitHubCheckPublisher | None = None
+    # None in the default local mode: there is no provable GitHub actor, so
+    # session-gated capabilities (bypass, remote audit reads) stay unavailable.
+    web_authenticator: GitHubWebAuthenticator | None = None
+    # The coordinator exists whenever the GitHub runtime does, but the bypass
+    # route stays capability_unavailable without web_authenticator (P3 §13).
+    bypass_coordinator: GitHubBypassCoordinator | None = None
+    # Live repository-role lookup; the authorized deployment uses it for
+    # read-scope checks on remote APIs, not only for retry/bypass writes.
+    role_lookup: GitHubRepositoryRoleLookup | None = None
     review_worker: GitHubReviewWorker | None = None
     durable_worker: DurableGitHubAttemptWorker | None = None
     token_provider: GitHubTokenProvider | None = None
@@ -375,6 +398,7 @@ async def build_server_runtime(
     clone_url_resolver: CloneUrlResolver | None = None,
     provider_factory: ProviderFactory | None = None,
     github_token: str | None = None,
+    web_auth_config: WebAuthConfiguration | None = None,
 ) -> ServerRuntime:
     """Initialize the production GitHub Gate dependency graph for FastAPI startup."""
 
@@ -453,6 +477,13 @@ async def build_server_runtime(
             checks=checks,
             public_base_url=public_base,
         )
+        bypass_coordinator = GitHubBypassCoordinator(
+            state=state,
+            github_store=github_store,
+            authorizer=GitHubRoleBypassAuthorizer(InstallationAwareRoleLookup(factory)),
+            review_policy_path=review_policy_path,
+        )
+        role_lookup = InstallationAwareRoleLookup(factory)
         resolved_clone = clone_url_resolver or _github_clone_url_resolver(factory)
         resolved_provider = provider_factory or _trusted_provider_factory(compute_policy_path)
         mirrors = RepositoryMirrorManager(
@@ -475,6 +506,12 @@ async def build_server_runtime(
             publisher=publisher,
             state=state,
         )
+        web_authenticator = None
+        if web_auth_config is not None:
+            web_authenticator = GitHubWebAuthenticator(
+                config=web_auth_config,
+                transport=HttpxOAuthTransport(config=web_auth_config, http_client=http_client),
+            )
         return ServerRuntime(
             retry_coordinator=retry_coordinator,
             database_pool=database_pool,
@@ -483,6 +520,9 @@ async def build_server_runtime(
             trigger_coordinator=trigger_coordinator,
             attempt_store=state,
             publisher=publisher,
+            web_authenticator=web_authenticator,
+            bypass_coordinator=bypass_coordinator,
+            role_lookup=role_lookup,
             review_worker=review_worker,
             durable_worker=durable_worker,
             token_provider=token_provider,
@@ -554,17 +594,28 @@ async def build_server_runtime_from_environment() -> ServerRuntime:
     if not compute_policy_path_value:
         raise ServerConfigurationError("WORKTREE_REVIEW_COMPUTE_POLICY_PATH is required")
     mirror_root_value = os.environ.get("WORKTREE_REVIEW_MIRROR_ROOT")
+    public_base_url = os.environ.get(
+        "WORKTREE_REVIEW_PUBLIC_BASE_URL",
+        DEFAULT_PUBLIC_BASE_URL,
+    )
+    github_api_url = os.environ.get(
+        "WORKTREE_REVIEW_GITHUB_API_URL",
+        "https://api.github.com",
+    )
+    try:
+        web_auth_config = load_web_auth_configuration(
+            dict(os.environ),
+            public_base_url=public_base_url,
+            github_api_url=github_api_url,
+        )
+    except ValueError as exc:
+        raise ServerConfigurationError(str(exc)) from exc
     return await build_server_runtime(
         database_url=os.environ.get("WORKTREE_REVIEW_DATABASE_URL", ""),
-        github_api_url=os.environ.get(
-            "WORKTREE_REVIEW_GITHUB_API_URL",
-            "https://api.github.com",
-        ),
+        github_api_url=github_api_url,
         review_policy_path=_expand_user_path(review_policy_path_value),
         compute_policy_path=_expand_user_path(compute_policy_path_value),
-        public_base_url=os.environ.get(
-            "WORKTREE_REVIEW_PUBLIC_BASE_URL",
-            DEFAULT_PUBLIC_BASE_URL,
-        ),
+        public_base_url=public_base_url,
         mirror_root=None if not mirror_root_value else _expand_user_path(mirror_root_value),
+        web_auth_config=web_auth_config,
     )

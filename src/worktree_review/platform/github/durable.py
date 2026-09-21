@@ -15,7 +15,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from worktree_review.application.lifecycle import PublicationStatus
 from worktree_review.application.review_events import (
@@ -24,13 +24,20 @@ from worktree_review.application.review_events import (
 )
 from worktree_review.core.report import ReviewReport
 from worktree_review.platform.cli.result import load_review_report_from_cli_result
-from worktree_review.platform.github.persistence import GitHubReviewStore
+from worktree_review.platform.github.persistence import (
+    MAX_PUBLICATION_ATTEMPTS,
+    PUBLICATION_IN_PROGRESS_LEASE_SECONDS,
+    GitHubReviewStore,
+    publication_backoff_seconds,
+)
 from worktree_review.platform.github.publication import GitHubCheckPublisher
 from worktree_review.platform.github.worker import GitHubReviewWorker
 from worktree_review.server.state import (
     AuthoritativeAttemptStore,
+    CheckSyncStatus,
     JobStatus,
     PublishDisposition,
+    StandingCheckSyncIntent,
 )
 
 logger = logging.getLogger(__name__)
@@ -40,6 +47,8 @@ Clock = Callable[[], datetime]
 
 DEFAULT_MAX_JOB_ATTEMPTS = 5
 DEFAULT_JOB_LEASE_SECONDS = 1800.0
+# Per-pass delivery budget for standing Check sync (P3 §7 fairness).
+_STANDING_SYNC_BATCH = 32
 
 
 class DurableGitHubAttemptWorker:
@@ -215,6 +224,78 @@ class DurableGitHubAttemptWorker:
             except Exception:
                 logger.exception("failed to finalize job", extra={"attempt_id": attempt_id})
 
+    async def _sync_standing_checks(self) -> None:
+        """Deliver queued standing Check sync intents (P3 §7).
+
+        The standing decision in the database is authoritative; this loop only
+        re-renders the existing GitHub Check. Bounded backoff and lease
+        recovery come from the outbox row itself; a crashed delivery is
+        reclaimed once its lease expires. Unexpected exceptions requeue with
+        the same bounded backoff (never an immediate hot loop) and exhaust
+        into the queryable FAILED terminal state. Each pass claims at most
+        _STANDING_SYNC_BATCH intents so a busy queue cannot starve review
+        jobs — and review jobs can never starve the sync (it runs every pass).
+        """
+        if self._state is None:
+            return
+        for _ in range(_STANDING_SYNC_BATCH):
+            try:
+                intent = await self._state.claim_standing_check_sync(
+                    now=self._clock(), lease_seconds=PUBLICATION_IN_PROGRESS_LEASE_SECONDS
+                )
+            except Exception:
+                logger.exception("standing check sync claim failed")
+                return
+            if intent is None:
+                return
+            try:
+                await self._publisher.deliver_standing_check_sync(intent)
+            except Exception:
+                logger.exception(
+                    "standing check sync delivery raised", extra={"intent_id": intent.intent_id}
+                )
+                await self._release_failed_sync(intent)
+
+    async def _release_failed_sync(self, intent: StandingCheckSyncIntent) -> None:
+        """Requeue a failed delivery with bounded backoff, or finalize it.
+
+        An immediate requeue here would spin the claim loop hot; the retry is
+        always delayed, and a spent budget lands in the explicit FAILED state
+        with an audit event — the same contract as the publication outbox.
+        """
+        if self._state is None:
+            return
+        try:
+            if intent.attempt_count >= MAX_PUBLICATION_ATTEMPTS:
+                await self._state.mark_standing_check_sync(
+                    intent.intent_id,
+                    status=CheckSyncStatus.FAILED,
+                    last_error="unexpected delivery error; budget exhausted",
+                )
+                snapshot = await self._github_store.get_execution_snapshot(intent.attempt_id)
+                if snapshot is not None:
+                    await self._state.append_audit_event(
+                        event_type="check_sync_failed",
+                        change_request=snapshot.change_request,
+                        attempt_id=intent.attempt_id,
+                        payload={
+                            "standing_revision": intent.standing_revision,
+                            "error": "unexpected delivery error; budget exhausted",
+                        },
+                    )
+                return
+            await self._state.mark_standing_check_sync(
+                intent.intent_id,
+                status=CheckSyncStatus.QUEUED,
+                next_retry_at=self._clock()
+                + timedelta(seconds=publication_backoff_seconds(intent.attempt_count)),
+            )
+        except Exception:
+            logger.exception(
+                "failed to release standing check sync intent",
+                extra={"intent_id": intent.intent_id},
+            )
+
     async def _run_one(self, attempt_id: str) -> ReviewReport | None:
         try:
             return await self.execute_attempt(attempt_id)
@@ -230,6 +311,10 @@ class DurableGitHubAttemptWorker:
             except Exception:
                 await self._sleep(self.idle_seconds)
                 continue
+            # Standing Check sync runs every pass: steady review traffic must
+            # never starve it (P3 §7), and the bounded batch keeps it from
+            # starving review jobs in return.
+            await self._sync_standing_checks()
             if not snapshots:
                 await self._scan_publications()
                 await self._sleep(self.idle_seconds)

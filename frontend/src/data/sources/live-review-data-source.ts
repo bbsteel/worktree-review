@@ -1,4 +1,10 @@
 import type { FixtureCaseDescriptor, OverviewView } from '../../domain/overview.ts'
+import type {
+  AuditEventFilter,
+  AuditEventPageView,
+  AuthSessionView,
+  BypassSubmissionView,
+} from '../../domain/audit.ts'
 import type { ReviewRunView } from '../../domain/review.ts'
 import { ReviewApiClient, type ReviewApiClientConfig } from '../api/review-api-client.ts'
 import type { FixtureCaseKey } from '../fixtures/index.ts'
@@ -41,5 +47,30 @@ export class LiveReviewDataSource implements ReviewDataSource {
       throw new ReviewNotFoundError(`case:${caseKey}`)
     }
     return this.getReviewRun(snapshot.attemptId)
+  }
+
+  /** P3: the live server reports the deployment auth mode truthfully. */
+  async getAuthSession(): Promise<AuthSessionView> {
+    return this.client.getAuthSession()
+  }
+
+  async listAuditEvents(
+    filter: AuditEventFilter,
+    cursor: string | null,
+    limit?: number,
+  ): Promise<AuditEventPageView> {
+    return this.client.listAuditEvents(filter, cursor, limit)
+  }
+
+  async bypassFinding(
+    attemptId: string,
+    fingerprint: string,
+    reason: string,
+  ): Promise<BypassSubmissionView> {
+    return this.client.bypassFinding(attemptId, fingerprint, reason, crypto.randomUUID())
+  }
+
+  async logout(): Promise<void> {
+    return this.client.logout()
   }
 }

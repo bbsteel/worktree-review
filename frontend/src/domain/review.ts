@@ -122,7 +122,27 @@ export interface GateDecisionView {
   blockingFingerprints: string[]
   summary: string
   requiredCoverageComplete: boolean
+  /** Blocking fingerprints without an active bypass (P3). Absent for older DTOs. */
+  remainingBlockingFingerprints?: string[]
 }
+
+/** One per-finding risk acceptance as projected read-only onto the Detail DTO (P3 §8.2). */
+export interface BypassRecordView {
+  status: 'active' | 'invalidated'
+  actorId: number | null
+  actorLogin: string
+  reason: string
+  createdAt: string
+  invalidationReason: string | null
+}
+
+export type CheckSyncStatus =
+  | 'queued'
+  | 'in_progress'
+  | 'published'
+  | 'failed'
+  | 'superseded'
+  | 'not_applicable'
 
 export interface EvidenceSpanView {
   path: string
@@ -144,6 +164,8 @@ export interface ReviewFindingView {
   repairGuidance: string
   evidenceSpans: EvidenceSpanView[]
   blocking: boolean
+  /** Present on GitHub Detail DTOs when the attempt has bypass history (P3). */
+  bypassRecord?: BypassRecordView | null
 }
 
 export interface CoverageFileView {
@@ -294,4 +316,15 @@ export interface ReviewRunView {
    * Session Insight integration is connected.
    */
   sessionInsightDeepLink?: string | null
+  /**
+   * P3 standing projection (GitHub attempts only): the immutable Core gate,
+   * the platform standing decision with its monotonic revision, and the
+   * standing Check sync state. Absent on local/legacy DTOs.
+   */
+  coreGateState?: string | null
+  standingGateState?: string | null
+  standingRevision?: number | null
+  checkSyncStatus?: CheckSyncStatus | null
+  /** UI hint only — the server re-authorizes every bypass POST. */
+  bypassCapability?: 'available' | 'unavailable'
 }

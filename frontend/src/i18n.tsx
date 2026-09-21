@@ -775,6 +775,71 @@ export const messages: Record<Locale, Record<string, string>> = {
       'Not bound — reviews using this policy cannot start',
     'Session Insight observation is advisory and never affects the Gate.':
       'Session Insight observation is advisory and never affects the Gate.',
+    // P3: authorized bypass and audit log
+    'Accept the risk of this finding?': 'Accept the risk of this finding?',
+    '{count} other blocking findings remain after this acceptance.':
+      '{count} other blocking findings remain after this acceptance.',
+    'Submitting…': 'Submitting…',
+    'Accept risk': 'Accept risk',
+    'Accept risk…': 'Accept risk…',
+    'The candidate, authority, or policy changed. The risk was not accepted — review the refreshed state.':
+      'The candidate, authority, or policy changed. The risk was not accepted — review the refreshed state.',
+    'GitHub or the audit store could not decide. Your reason is preserved — retry when the service recovers.':
+      'GitHub or the audit store could not decide. Your reason is preserved — retry when the service recovers.',
+    'Your GitHub session expired. Sign in again before accepting risk.':
+      'Your GitHub session expired. Sign in again before accepting risk.',
+    'The reason is empty, too long, or contains credential-shaped content.':
+      'The reason is empty, too long, or contains credential-shaped content.',
+    'The bypass request failed: {message}': 'The bypass request failed: {message}',
+    'Accepted risk': 'Accepted risk',
+    'Accepted by {actor} · {time}': 'Accepted by {actor} · {time}',
+    'Bypass history (no longer applies)': 'Bypass history (no longer applies)',
+    'Accepted by {actor} · invalidated: {reason}': 'Accepted by {actor} · invalidated: {reason}',
+    'Risk acceptance': 'Risk acceptance',
+    'Accept risk unavailable: {reason}': 'Accept risk unavailable: {reason}',
+    'This attempt is no longer authoritative; its bypasses are retained for audit only.':
+      'This attempt is no longer authoritative; its bypasses are retained for audit only.',
+    'Bypass is unavailable: the review is not in a completed Blocked state, so the remaining risk is unknown.':
+      'Bypass is unavailable: the review is not in a completed Blocked state, so the remaining risk is unknown.',
+    'Superseded · bypass retained for audit, no longer applicable':
+      'Superseded · bypass retained for audit, no longer applicable',
+    'Passed with bypass · GitHub Check updated': 'Passed with bypass · GitHub Check updated',
+    'Risk acceptance recorded; GitHub Check is still blocking. Retry sync.':
+      'Risk acceptance recorded; GitHub Check is still blocking. Retry sync.',
+    'Passed with bypass · GitHub Check sync pending':
+      'Passed with bypass · GitHub Check sync pending',
+    'Risk accepted for some findings · {count} blocking findings remain':
+      'Risk accepted for some findings · {count} blocking findings remain',
+    'Audit Log': 'Audit Log',
+    'This deployment has no platform audit capability. Audit events exist only on the authorized GitHub runtime.':
+      'This deployment has no platform audit capability. Audit events exist only on the authorized GitHub runtime.',
+    'Sign in required': 'Sign in required',
+    'The audit log requires a verified GitHub session.':
+      'The audit log requires a verified GitHub session.',
+    'Sign in with GitHub': 'Sign in with GitHub',
+    'Append-only platform decisions. Events are written by the server, never editable, and payloads are sanitized before persistence.':
+      'Append-only platform decisions. Events are written by the server, never editable, and payloads are sanitized before persistence.',
+    'Session probe failed: {message}': 'Session probe failed: {message}',
+    'Audit filters': 'Audit filters',
+    'Repository (required)': 'Repository (required)',
+    'Select a repository': 'Select a repository',
+    'Event type': 'Event type',
+    'All event types': 'All event types',
+    'Audit log query failed: {message}': 'Audit log query failed: {message}',
+    'You do not have read access to this repository’s audit log.':
+      'You do not have read access to this repository’s audit log.',
+    'Choose a repository': 'Choose a repository',
+    'No audit events': 'No audit events',
+    'Audit queries are always scoped to one repository you can read.':
+      'Audit queries are always scoped to one repository you can read.',
+    'No events match the current filters.': 'No events match the current filters.',
+    'Audit events': 'Audit events',
+    'Load more': 'Load more',
+    'Safe payload': 'Safe payload',
+    'Your GitHub session expired.': 'Your GitHub session expired.',
+    'Signed in with GitHub': 'Signed in with GitHub',
+    'This Worktree Review deployment requires a verified GitHub session. Reviews, audit logs, and policies are only visible after sign-in.':
+      'This Worktree Review deployment requires a verified GitHub session. Reviews, audit logs, and policies are only visible after sign-in.',
   },
   'zh-CN': {
     'Worktree Review': 'Worktree Review',
@@ -1505,6 +1570,67 @@ export const messages: Record<Locale, Record<string, string>> = {
     'Not bound — reviews using this policy cannot start': '未绑定 — 使用此策略的检视无法启动',
     'Session Insight observation is advisory and never affects the Gate.':
       'Session Insight 观测仅为建议性，绝不影响 Gate。',
+    // P3: 授权 Bypass 与审计日志
+    'Accept the risk of this finding?': '接受此 Finding 的风险？',
+    '{count} other blocking findings remain after this acceptance.': '接受后仍有 {count} 个阻断 Finding。',
+    'Submitting…': '提交中…',
+    'Accept risk': '接受风险',
+    'Accept risk…': '接受风险…',
+    'The candidate, authority, or policy changed. The risk was not accepted — review the refreshed state.':
+      '候选、权威或策略已改变，未接受风险 — 请查看刷新后的状态。',
+    'GitHub or the audit store could not decide. Your reason is preserved — retry when the service recovers.':
+      'GitHub 或审计存储暂不可判定。已保留你的理由 — 服务恢复后可重试。',
+    'Your GitHub session expired. Sign in again before accepting risk.':
+      'GitHub 会话已过期。请重新登录后再接受风险。',
+    'The reason is empty, too long, or contains credential-shaped content.':
+      '理由为空、过长，或包含疑似凭据内容。',
+    'The bypass request failed: {message}': 'Bypass 请求失败：{message}',
+    'Accepted risk': '已接受的风险',
+    'Accepted by {actor} · {time}': '{actor} 接受 · {time}',
+    'Bypass history (no longer applies)': 'Bypass 历史（已失效）',
+    'Accepted by {actor} · invalidated: {reason}': '{actor} 接受 · 失效原因：{reason}',
+    'Risk acceptance': '风险接受',
+    'Accept risk unavailable: {reason}': '无法接受风险：{reason}',
+    'This attempt is no longer authoritative; its bypasses are retained for audit only.':
+      '此 Attempt 已不再是权威 Attempt；其 Bypass 仅保留用于审计。',
+    'Bypass is unavailable: the review is not in a completed Blocked state, so the remaining risk is unknown.':
+      'Bypass 不可用：检视不在已完成的 Blocked 状态，剩余风险未知。',
+    'Superseded · bypass retained for audit, no longer applicable':
+      '已被取代 · Bypass 保留用于审计，不再生效',
+    'Passed with bypass · GitHub Check updated': '通过（已接受风险）· GitHub Check 已更新',
+    'Risk acceptance recorded; GitHub Check is still blocking. Retry sync.':
+      '风险接受已记录；GitHub Check 仍在阻断。请重试同步。',
+    'Passed with bypass · GitHub Check sync pending': '通过（已接受风险）· GitHub Check 同步中',
+    'Risk accepted for some findings · {count} blocking findings remain':
+      '部分 Finding 风险已接受 · 仍有 {count} 个阻断 Finding',
+    'Audit Log': '审计日志',
+    'This deployment has no platform audit capability. Audit events exist only on the authorized GitHub runtime.':
+      '此部署没有平台审计能力。审计事件仅存在于授权 GitHub 运行时。',
+    'Sign in required': '需要登录',
+    'The audit log requires a verified GitHub session.': '审计日志需要经过验证的 GitHub 会话。',
+    'Sign in with GitHub': '使用 GitHub 登录',
+    'Append-only platform decisions. Events are written by the server, never editable, and payloads are sanitized before persistence.':
+      '仅追加的平台决策记录。事件由服务端写入，不可修改，payload 在持久化前已脱敏。',
+    'Session probe failed: {message}': '会话探测失败：{message}',
+    'Audit filters': '审计筛选',
+    'Repository (required)': '仓库（必选）',
+    'Select a repository': '选择仓库',
+    'Event type': '事件类型',
+    'All event types': '全部事件类型',
+    'Audit log query failed: {message}': '审计日志查询失败：{message}',
+    'You do not have read access to this repository’s audit log.': '你没有该仓库审计日志的读取权限。',
+    'Choose a repository': '选择仓库',
+    'No audit events': '没有审计事件',
+    'Audit queries are always scoped to one repository you can read.':
+      '审计查询始终限定在你可读的一个仓库内。',
+    'No events match the current filters.': '当前筛选条件下没有事件。',
+    'Audit events': '审计事件',
+    'Load more': '加载更多',
+    'Safe payload': '安全 payload',
+    'Your GitHub session expired.': 'GitHub 会话已过期。',
+    'Signed in with GitHub': '已通过 GitHub 登录',
+    'This Worktree Review deployment requires a verified GitHub session. Reviews, audit logs, and policies are only visible after sign-in.':
+      '此 Worktree Review 部署需要经过验证的 GitHub 会话。登录后才能查看检视、审计日志与策略。',
   },
 }
 

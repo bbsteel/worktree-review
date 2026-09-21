@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
+
 from worktree_review.application.lifecycle import PublicationStatus
+from worktree_review.application.review_events import scrub_secret_content
 from worktree_review.core.findings import EvidenceSpan, Finding
 from worktree_review.core.report import ReviewReport
+from worktree_review.platform.cli.result import load_review_report_from_cli_result
 from worktree_review.platform.github.checks import (
     CHECK_RUN_ANNOTATION_BATCH_SIZE,
     CheckRunAnnotation,
@@ -14,12 +18,19 @@ from worktree_review.platform.github.checks import (
     web_review_detail_url,
 )
 from worktree_review.platform.github.errors import GitHubApiError
-from worktree_review.platform.github.persistence import GitHubReviewStore
+from worktree_review.platform.github.persistence import (
+    MAX_PUBLICATION_ATTEMPTS,
+    GitHubReviewStore,
+    publication_backoff_seconds,
+)
 from worktree_review.platform.github.snapshot import PublicationIntent
 from worktree_review.server.state import (
     AuthoritativeAttemptStore,
+    BypassStatus,
+    CheckSyncStatus,
     PublishDisposition,
     PublishResult,
+    StandingCheckSyncIntent,
 )
 
 
@@ -36,6 +47,37 @@ def limited_annotations(report: ReviewReport) -> tuple[CheckRunAnnotation, ...]:
                 end_line=span.end_line,
                 annotation_level=annotation_level_for_severity(finding.severity),
                 message=finding.problem_statement,
+                title=finding.fingerprint[:64] or "finding",
+            )
+        )
+        if len(annotations) >= CHECK_RUN_ANNOTATION_BATCH_SIZE:
+            break
+    return tuple(annotations)
+
+
+def standing_sync_annotations(
+    report: ReviewReport, bypassed_fingerprints: frozenset[str]
+) -> tuple[CheckRunAnnotation, ...]:
+    """Annotations for a standing Check sync: accepted findings stay visible
+    and are explicitly marked as accepted risk, never silently dropped."""
+
+    annotations: list[CheckRunAnnotation] = []
+    for finding in report.findings:
+        span = _first_span(finding)
+        if span is None:
+            continue
+        accepted = finding.fingerprint in bypassed_fingerprints
+        annotations.append(
+            CheckRunAnnotation(
+                path=span.path,
+                start_line=span.start_line,
+                end_line=span.end_line,
+                annotation_level=annotation_level_for_severity(finding.severity),
+                message=(
+                    f"[Accepted risk] {finding.problem_statement}"
+                    if accepted
+                    else finding.problem_statement
+                ),
                 title=finding.fingerprint[:64] or "finding",
             )
         )
@@ -219,3 +261,125 @@ class GitHubCheckPublisher:
             return publication_decision
         await self._github_store.mark_publication(attempt_id, status=PublicationStatus.PUBLISHED)
         return publication_decision
+
+    async def deliver_standing_check_sync(self, intent: StandingCheckSyncIntent) -> None:
+        """Deliver one claimed standing Check sync intent (P3 §7).
+
+        The database standing decision is authoritative; this PATCHes the
+        Attempt's *existing* Check — never a new one — and re-verifies that the
+        intent is still the current standing revision before touching GitHub.
+        A remote failure only moves the intent through the bounded backoff;
+        it never rewrites the Core gate or clears a bypass.
+        """
+
+        if intent.check_run_id is None:
+            await self._state.mark_standing_check_sync(
+                intent.intent_id, status=CheckSyncStatus.NOT_APPLICABLE
+            )
+            return
+        snapshot = await self._github_store.get_execution_snapshot(intent.attempt_id)
+        if snapshot is None:
+            await self._state.mark_standing_check_sync(
+                intent.intent_id,
+                status=CheckSyncStatus.SUPERSEDED,
+                last_error="execution snapshot is gone",
+            )
+            return
+        change_request = snapshot.change_request
+        change_state = await self._state.get_change_request_state(change_request)
+        if (
+            change_state.standing_attempt_id != intent.attempt_id
+            or change_state.standing_revision != intent.standing_revision
+        ):
+            await self._state.mark_standing_check_sync(
+                intent.intent_id, status=CheckSyncStatus.SUPERSEDED
+            )
+            await self._state.append_audit_event(
+                event_type="check_sync_superseded",
+                change_request=change_request,
+                attempt_id=intent.attempt_id,
+                payload={"standing_revision": intent.standing_revision},
+            )
+            return
+        result_json = await self._github_store.get_review_result(intent.attempt_id)
+        if result_json is None:
+            await self._state.mark_standing_check_sync(
+                intent.intent_id,
+                status=CheckSyncStatus.FAILED,
+                last_error="terminal review result is missing",
+            )
+            await self._state.append_audit_event(
+                event_type="check_sync_failed",
+                change_request=change_request,
+                attempt_id=intent.attempt_id,
+                payload={
+                    "standing_revision": intent.standing_revision,
+                    "error": "terminal review result is missing",
+                },
+            )
+            return
+        report = load_review_report_from_cli_result(result_json)
+        bypasses = await self._state.list_bypasses(attempt_id=intent.attempt_id)
+        bypassed = frozenset(
+            record.finding_fingerprint
+            for record in bypasses
+            if record.status is BypassStatus.ACTIVE
+        )
+        standing_gate = change_state.standing_gate_state or report.gate_state
+        updated_report = report.model_copy(
+            update={
+                "gate_state": standing_gate,
+                "findings": tuple(
+                    finding.model_copy(update={"bypass_applied": True})
+                    if finding.fingerprint in bypassed
+                    else finding
+                    for finding in report.findings
+                ),
+            }
+        )
+        payload = build_check_run_payload(
+            updated_report,
+            annotations=standing_sync_annotations(report, bypassed),
+            details_url=self._details_url_for(intent.attempt_id),
+        )
+        try:
+            await self._checks.update_check_run(
+                repository=change_request.repository,
+                check_run_id=intent.check_run_id,
+                payload=payload,
+            )
+        except GitHubApiError as exc:
+            safe_detail = scrub_secret_content(str(exc))[:512]
+            if intent.attempt_count >= MAX_PUBLICATION_ATTEMPTS:
+                await self._state.mark_standing_check_sync(
+                    intent.intent_id,
+                    status=CheckSyncStatus.FAILED,
+                    last_error=safe_detail,
+                )
+                await self._state.append_audit_event(
+                    event_type="check_sync_failed",
+                    change_request=change_request,
+                    attempt_id=intent.attempt_id,
+                    payload={
+                        "standing_revision": intent.standing_revision,
+                        "error": safe_detail,
+                    },
+                )
+                return
+            await self._state.mark_standing_check_sync(
+                intent.intent_id,
+                status=CheckSyncStatus.QUEUED,
+                last_error=safe_detail,
+                next_retry_at=datetime.now(UTC)
+                + timedelta(seconds=publication_backoff_seconds(intent.attempt_count)),
+            )
+            return
+        await self._state.mark_standing_check_sync(
+            intent.intent_id, status=CheckSyncStatus.PUBLISHED
+        )
+        await self._state.append_audit_event(
+            event_type="check_sync_published",
+            change_request=change_request,
+            attempt_id=intent.attempt_id,
+            payload={"standing_revision": intent.standing_revision},
+        )
