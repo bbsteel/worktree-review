@@ -27,6 +27,20 @@ from worktree_review.core.report import (
 CHECK_RUN_NAME = "Worktree Review"
 CHECK_RUN_ANNOTATION_BATCH_SIZE = 50
 ATTEMPT_FINGERPRINT_LENGTH = 12
+DEFAULT_PUBLIC_BASE_URL = "http://127.0.0.1:8000"
+
+
+def web_review_detail_url(*, public_base_url: str, attempt_id: str) -> str:
+    """Canonical Web Review Detail URL shared by queued, in-progress, and terminal Checks."""
+
+    if not attempt_id:
+        raise ValueError("attempt_id is required for the review detail URL")
+    base = public_base_url.rstrip("/") or DEFAULT_PUBLIC_BASE_URL
+    return f"{base}/reviews/{attempt_id}"
+
+
+def github_check_run_url(*, repository: str, check_run_id: int) -> str:
+    return f"https://github.com/{repository}/runs/{check_run_id}"
 
 
 class CheckRunStatus(StrEnum):
@@ -141,6 +155,50 @@ def check_run_annotation_batches(
             CHECK_RUN_ANNOTATION_BATCH_SIZE,
         )
     ) or ((),)
+
+
+def build_queued_check_run_payload(
+    *,
+    attempt_id: str,
+    head_sha: str,
+    details_url: str | None = None,
+) -> CheckRunPayload:
+    """Queued Check created before the worker runs the Pipeline."""
+
+    fingerprint = attempt_fingerprint(attempt_id)
+    return CheckRunPayload(
+        head_sha=head_sha,
+        status=CheckRunStatus.QUEUED,
+        conclusion=None,
+        details_url=details_url,
+        external_id=f"worktree-review:{attempt_id}",
+        output=CheckRunOutput(
+            title=f"{CHECK_RUN_NAME}: queued",
+            summary=f"Worktree Review queued (attempt {fingerprint}).",
+            text=f"Attempt `{attempt_id}` is queued and has not started.",
+        ),
+    )
+
+
+def build_in_progress_check_run_payload(
+    *,
+    attempt_id: str,
+    head_sha: str,
+    details_url: str | None = None,
+) -> CheckRunPayload:
+    fingerprint = attempt_fingerprint(attempt_id)
+    return CheckRunPayload(
+        head_sha=head_sha,
+        status=CheckRunStatus.IN_PROGRESS,
+        conclusion=None,
+        details_url=details_url,
+        external_id=f"worktree-review:{attempt_id}",
+        output=CheckRunOutput(
+            title=f"{CHECK_RUN_NAME}: in progress",
+            summary=f"Worktree Review is running (attempt {fingerprint}).",
+            text=f"Attempt `{attempt_id}` is in progress.",
+        ),
+    )
 
 
 def build_check_run_payload(

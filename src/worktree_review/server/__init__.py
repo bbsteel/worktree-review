@@ -14,9 +14,13 @@ def main() -> None:
             "pip install 'worktree-review[server]'"
         ) from exc
 
+    import os
+
+    from worktree_review.server.app import DEFAULT_BIND_HOST
+
     uvicorn.run(
         "worktree_review.server.app:app",
-        host="0.0.0.0",
-        port=8000,
+        host=os.environ.get("WORKTREE_REVIEW_BIND_HOST", DEFAULT_BIND_HOST),
+        port=int(os.environ.get("WORKTREE_REVIEW_BIND_PORT", "8000")),
         factory=False,
     )

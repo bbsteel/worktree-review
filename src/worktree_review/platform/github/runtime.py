@@ -7,9 +7,11 @@ none of those platform details are added to core identity models.
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import os
-from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from collections.abc import Awaitable, Callable, Mapping
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol
 from urllib.parse import quote
@@ -17,15 +19,43 @@ from urllib.parse import quote
 import httpx
 
 from worktree_review.core.identity import ReviewRequestKey
-from worktree_review.core.policy import load_review_policy
+from worktree_review.core.policy import load_compute_policy, load_review_policy
+from worktree_review.core.provider import ProviderClient, build_provider
 from worktree_review.platform.github.authz import (
     GitHubRepositoryRoleLookup,
+    GitHubRoleBypassAuthorizer,
     GitHubRoleRetryAuthorizer,
+    normalize_standard_repository_role,
 )
-from worktree_review.platform.github.checks import CheckRunPayload
+from worktree_review.platform.github.bypass import GitHubBypassCoordinator
+from worktree_review.platform.github.checks import (
+    DEFAULT_PUBLIC_BASE_URL,
+    CheckRunPayload,
+)
+from worktree_review.platform.github.durable import DurableGitHubAttemptWorker
+from worktree_review.platform.github.errors import GitHubApiError, ServerConfigurationError
+from worktree_review.platform.github.mirrors import RepositoryMirrorManager
+from worktree_review.platform.github.persistence import (
+    GitHubReviewStore,
+    PostgresGitHubReviewStore,
+)
+from worktree_review.platform.github.publication import GitHubCheckPublisher
 from worktree_review.platform.github.retry import (
     GitHubRetryCoordinator,
     RetryResolution,
+)
+from worktree_review.platform.github.snapshot import AttemptExecutionSnapshot
+from worktree_review.platform.github.triggers import GitHubTriggerCoordinator, QueuedAttemptPreparer
+from worktree_review.platform.github.worker import (
+    CloneUrlResolver,
+    GitHubReviewWorker,
+    ProviderFactory,
+)
+from worktree_review.platform.web.authentication import (
+    GitHubWebAuthenticator,
+    HttpxOAuthTransport,
+    WebAuthConfiguration,
+    load_web_auth_configuration,
 )
 from worktree_review.server.state import (
     AttemptLease,
@@ -36,14 +66,6 @@ from worktree_review.server.state import (
 if TYPE_CHECKING:
     import asyncpg  # type: ignore[import-untyped]
     from pgqueuer import PgQueuer
-
-
-class ServerConfigurationError(RuntimeError):
-    """Required production server configuration is absent or invalid."""
-
-
-class GitHubApiError(RuntimeError):
-    """The trusted GitHub API could not resolve a retry input."""
 
 
 class GitHubApiTransport(Protocol):
@@ -127,8 +149,10 @@ class GitHubRestClient:
         payload = await self.get_json(
             f"/repos/{quote(repository, safe='/')}/collaborators/{quote(actor, safe='')}/permission"
         )
-        permission = payload.get("permission")
-        return permission if isinstance(permission, str) else None
+        return normalize_standard_repository_role(
+            role_name=payload.get("role_name"),
+            permission=payload.get("permission"),
+        )
 
 
 def _decode_github_json_response(response: httpx.Response) -> dict[str, object]:
@@ -232,6 +256,95 @@ class PgQueuerAttemptEnqueuer:
         )
 
 
+class GitHubTokenProvider(Protocol):
+    async def token_for_installation(self, installation_id: int) -> str:
+        """Return a short-lived installation token. Never log the secret."""
+        ...
+
+
+class GitHubClientFactory:
+    """Issue per-installation REST clients from the App token provider."""
+
+    def __init__(
+        self,
+        *,
+        http_client: httpx.AsyncClient,
+        token_provider: GitHubTokenProvider,
+    ) -> None:
+        self._http_client = http_client
+        self._token_provider = token_provider
+
+    async def rest_client(self, installation_id: int) -> GitHubRestClient:
+        token = await self._token_provider.token_for_installation(installation_id)
+        return GitHubRestClient(http_client=self._http_client, token=token)
+
+
+class SnapshotBackedGitHubChecks:
+    """Check transport that binds each payload to the Attempt's installation token."""
+
+    def __init__(self, *, factory: GitHubClientFactory, github_store: GitHubReviewStore) -> None:
+        self._factory = factory
+        self._github_store = github_store
+
+    async def _client_for_payload(self, payload: CheckRunPayload) -> GitHubRestClient:
+        attempt_id = payload.external_id.removeprefix("worktree-review:")
+        snapshot = await self._github_store.get_execution_snapshot(attempt_id)
+        if snapshot is None:
+            raise GitHubApiError(f"missing execution snapshot for {attempt_id}")
+        return await self._factory.rest_client(snapshot.installation_id)
+
+    async def create_check_run(self, *, repository: str, payload: CheckRunPayload) -> int:
+        client = await self._client_for_payload(payload)
+        return await client.create_check_run(repository=repository, payload=payload)
+
+    async def update_check_run(
+        self,
+        *,
+        repository: str,
+        check_run_id: int,
+        payload: CheckRunPayload,
+    ) -> None:
+        client = await self._client_for_payload(payload)
+        await client.update_check_run(
+            repository=repository, check_run_id=check_run_id, payload=payload
+        )
+
+
+class InstallationAwarePullRequestResolver:
+    def __init__(self, *, factory: GitHubClientFactory, review_policy_path: Path) -> None:
+        self._factory = factory
+        self._review_policy_path = review_policy_path
+
+    async def resolve_current_request(
+        self,
+        change_request: GitHubChangeRequestLocator,
+    ) -> RetryResolution:
+        client = await self._factory.rest_client(change_request.installation_id)
+        return await GitHubPullRequestResolver(
+            github_api=client,
+            review_policy_path=self._review_policy_path,
+        ).resolve_current_request(change_request)
+
+
+class InstallationAwareRoleLookup:
+    def __init__(self, factory: GitHubClientFactory) -> None:
+        self._factory = factory
+
+    async def repository_role(
+        self,
+        *,
+        installation_id: int,
+        repository: str,
+        actor: str,
+    ) -> str | None:
+        client = await self._factory.rest_client(installation_id)
+        return await client.repository_role(
+            installation_id=installation_id,
+            repository=repository,
+            actor=actor,
+        )
+
+
 @dataclass
 class ServerRuntime:
     """Resources initialized for one FastAPI process."""
@@ -239,8 +352,34 @@ class ServerRuntime:
     retry_coordinator: GitHubRetryCoordinator
     database_pool: asyncpg.Pool
     http_client: httpx.AsyncClient
+    github_store: PostgresGitHubReviewStore | None = None
+    trigger_coordinator: GitHubTriggerCoordinator | None = None
+    attempt_store: PostgresAuthoritativeAttemptStore | None = None
+    publisher: GitHubCheckPublisher | None = None
+    # None in the default local mode: there is no provable GitHub actor, so
+    # session-gated capabilities (bypass, remote audit reads) stay unavailable.
+    web_authenticator: GitHubWebAuthenticator | None = None
+    # The coordinator exists whenever the GitHub runtime does, but the bypass
+    # route stays capability_unavailable without web_authenticator (P3 §13).
+    bypass_coordinator: GitHubBypassCoordinator | None = None
+    # Live repository-role lookup; the authorized deployment uses it for
+    # read-scope checks on remote APIs, not only for retry/bypass writes.
+    role_lookup: GitHubRepositoryRoleLookup | None = None
+    review_worker: GitHubReviewWorker | None = None
+    durable_worker: DurableGitHubAttemptWorker | None = None
+    token_provider: GitHubTokenProvider | None = None
+    worker_task: asyncio.Task[None] | None = field(default=None)
+    _closed: bool = field(default=False, init=False, repr=False)
 
     async def aclose(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        if self.worker_task is not None:
+            self.worker_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self.worker_task
+            self.worker_task = None
         await self.http_client.aclose()
         await self.database_pool.close()
 
@@ -248,59 +387,187 @@ class ServerRuntime:
 async def build_server_runtime(
     *,
     database_url: str,
-    github_token: str,
     github_api_url: str,
     review_policy_path: Path,
+    compute_policy_path: Path,
+    public_base_url: str = DEFAULT_PUBLIC_BASE_URL,
+    mirror_root: Path | None = None,
+    environ: Mapping[str, str] | None = None,
+    http_client: httpx.AsyncClient | None = None,
+    token_provider: GitHubTokenProvider | None = None,
+    clone_url_resolver: CloneUrlResolver | None = None,
+    provider_factory: ProviderFactory | None = None,
+    github_token: str | None = None,
+    web_auth_config: WebAuthConfiguration | None = None,
 ) -> ServerRuntime:
-    """Initialize the production retry dependency graph for FastAPI startup."""
+    """Initialize the production GitHub Gate dependency graph for FastAPI startup."""
 
     if not database_url:
         raise ServerConfigurationError("WORKTREE_REVIEW_DATABASE_URL is required")
-    if not github_token:
-        raise ServerConfigurationError("WORKTREE_REVIEW_GITHUB_TOKEN is required")
     _require_trusted_policy_file(review_policy_path)
+    _require_trusted_policy_file(compute_policy_path)
     try:
         load_review_policy(review_policy_path)
     except Exception as exc:
         raise ServerConfigurationError(
             f"trusted Review Policy cannot be loaded: {review_policy_path}"
         ) from exc
+    try:
+        load_compute_policy(compute_policy_path)
+    except Exception as exc:
+        raise ServerConfigurationError(
+            f"trusted Compute Policy cannot be loaded: {compute_policy_path}"
+        ) from exc
 
     import asyncpg
     from pgqueuer import PgQueuer
 
+    from worktree_review.platform.github.tokens import load_github_token_provider
+
+    owns_http_client = http_client is None
     database_pool = await asyncpg.create_pool(database_url)
-    http_client = httpx.AsyncClient(base_url=github_api_url.rstrip("/"), timeout=20.0)
+    if http_client is None:
+        http_client = httpx.AsyncClient(base_url=github_api_url.rstrip("/"), timeout=20.0)
     try:
+        if token_provider is None:
+            token_source = dict(os.environ if environ is None else environ)
+            if github_token and "WORKTREE_REVIEW_GITHUB_TOKEN" not in token_source:
+                token_source["WORKTREE_REVIEW_GITHUB_TOKEN"] = github_token
+            token_provider = load_github_token_provider(token_source, http_client=http_client)
         state = PostgresAuthoritativeAttemptStore(database_pool)
         await state.initialise()
+        github_store = PostgresGitHubReviewStore(database_pool)
+        await github_store.initialise()
         queue = PgQueuer.from_asyncpg_pool(database_pool)
         if queue.queries is None:
             raise ServerConfigurationError("pgqueuer query repository is not initialized")
         await queue.queries.install()
-        github_api = GitHubRestClient(http_client=http_client, token=github_token)
+        factory = GitHubClientFactory(http_client=http_client, token_provider=token_provider)
+        checks = SnapshotBackedGitHubChecks(factory=factory, github_store=github_store)
+        enqueuer = PgQueuerAttemptEnqueuer(queue)
+        public_base = public_base_url.rstrip("/") or DEFAULT_PUBLIC_BASE_URL
         retry_coordinator = GitHubRetryCoordinator(
             state=state,
-            authorizer=GitHubRoleRetryAuthorizer(_repository_role_lookup(github_api)),
-            resolver=GitHubPullRequestResolver(
-                github_api=github_api,
+            authorizer=GitHubRoleRetryAuthorizer(InstallationAwareRoleLookup(factory)),
+            resolver=InstallationAwarePullRequestResolver(
+                factory=factory,
                 review_policy_path=review_policy_path,
             ),
-            enqueue_attempt=PgQueuerAttemptEnqueuer(queue),
+            enqueue_attempt=enqueuer,
+            prepare_queued_attempt=QueuedAttemptPreparer(
+                github_store=github_store,
+                checks=checks,
+                review_policy_path=review_policy_path,
+                compute_policy_path=compute_policy_path,
+                public_base_url=public_base,
+            ),
         )
+        trigger_coordinator = GitHubTriggerCoordinator(
+            state=state,
+            github_store=github_store,
+            checks=checks,
+            enqueue_attempt=enqueuer,
+            review_policy_path=review_policy_path,
+            compute_policy_path=compute_policy_path,
+            public_base_url=public_base,
+        )
+        publisher = GitHubCheckPublisher(
+            state=state,
+            github_store=github_store,
+            checks=checks,
+            public_base_url=public_base,
+        )
+        bypass_coordinator = GitHubBypassCoordinator(
+            state=state,
+            github_store=github_store,
+            authorizer=GitHubRoleBypassAuthorizer(InstallationAwareRoleLookup(factory)),
+            review_policy_path=review_policy_path,
+        )
+        role_lookup = InstallationAwareRoleLookup(factory)
+        resolved_clone = clone_url_resolver or _github_clone_url_resolver(factory)
+        resolved_provider = provider_factory or _trusted_provider_factory(compute_policy_path)
+        mirrors = RepositoryMirrorManager(
+            mirror_root if mirror_root is not None else _default_mirror_root()
+        )
+        review_worker = GitHubReviewWorker(
+            state=state,
+            github_store=github_store,
+            mirrors=mirrors,
+            checks=checks,
+            review_policy_path=review_policy_path,
+            compute_policy_path=compute_policy_path,
+            resolve_clone_url=resolved_clone,
+            provider_factory=resolved_provider,
+            public_base_url=public_base,
+        )
+        durable_worker = DurableGitHubAttemptWorker(
+            github_store=github_store,
+            review_worker=review_worker,
+            publisher=publisher,
+            state=state,
+        )
+        web_authenticator = None
+        if web_auth_config is not None:
+            web_authenticator = GitHubWebAuthenticator(
+                config=web_auth_config,
+                transport=HttpxOAuthTransport(config=web_auth_config, http_client=http_client),
+            )
         return ServerRuntime(
             retry_coordinator=retry_coordinator,
             database_pool=database_pool,
             http_client=http_client,
+            github_store=github_store,
+            trigger_coordinator=trigger_coordinator,
+            attempt_store=state,
+            publisher=publisher,
+            web_authenticator=web_authenticator,
+            bypass_coordinator=bypass_coordinator,
+            role_lookup=role_lookup,
+            review_worker=review_worker,
+            durable_worker=durable_worker,
+            token_provider=token_provider,
         )
     except Exception:
-        await http_client.aclose()
+        if owns_http_client:
+            await http_client.aclose()
         await database_pool.close()
         raise
 
 
-def _repository_role_lookup(github_api: GitHubRestClient) -> GitHubRepositoryRoleLookup:
-    return github_api
+def _github_clone_url_resolver(factory: GitHubClientFactory) -> CloneUrlResolver:
+    async def resolve(snapshot: AttemptExecutionSnapshot) -> str:
+        client = await factory.rest_client(snapshot.installation_id)
+        payload = await client.get_json(
+            f"/repos/{quote(snapshot.change_request.repository, safe='/')}"
+        )
+        clone_url = payload.get("clone_url")
+        if not isinstance(clone_url, str) or not clone_url:
+            raise GitHubApiError("GitHub repository response is missing clone_url")
+        return clone_url
+
+    return resolve
+
+
+def _trusted_provider_factory(compute_policy_path: Path) -> ProviderFactory:
+    def factory(snapshot: AttemptExecutionSnapshot) -> ProviderClient:
+        # Prefer the frozen snapshot document; older snapshots fall back to
+        # the trusted file.
+        if snapshot.compute_policy_document is not None:
+            from worktree_review.core.policy import ComputePolicy
+
+            compute_policy = ComputePolicy.model_validate(snapshot.compute_policy_document)
+        else:
+            compute_policy, _version = load_compute_policy(compute_policy_path)
+        return build_provider(compute_policy)
+
+    return factory
+
+
+def _default_mirror_root() -> Path:
+    xdg = os.environ.get("XDG_STATE_HOME")
+    if xdg:
+        return Path(xdg) / "worktree-review" / "mirrors"
+    return Path.home() / ".local" / "state" / "worktree-review" / "mirrors"
 
 
 ServerRuntimeBuilder = Callable[[], Awaitable[ServerRuntime]]
@@ -318,17 +585,37 @@ def _expand_user_path(path_value: str) -> Path:
 
 
 async def build_server_runtime_from_environment() -> ServerRuntime:
-    """Build the retry runtime from deployment configuration."""
+    """Build the GitHub Gate runtime from deployment configuration."""
 
     review_policy_path_value = os.environ.get("WORKTREE_REVIEW_REVIEW_POLICY_PATH")
     if not review_policy_path_value:
         raise ServerConfigurationError("WORKTREE_REVIEW_REVIEW_POLICY_PATH is required")
+    compute_policy_path_value = os.environ.get("WORKTREE_REVIEW_COMPUTE_POLICY_PATH")
+    if not compute_policy_path_value:
+        raise ServerConfigurationError("WORKTREE_REVIEW_COMPUTE_POLICY_PATH is required")
+    mirror_root_value = os.environ.get("WORKTREE_REVIEW_MIRROR_ROOT")
+    public_base_url = os.environ.get(
+        "WORKTREE_REVIEW_PUBLIC_BASE_URL",
+        DEFAULT_PUBLIC_BASE_URL,
+    )
+    github_api_url = os.environ.get(
+        "WORKTREE_REVIEW_GITHUB_API_URL",
+        "https://api.github.com",
+    )
+    try:
+        web_auth_config = load_web_auth_configuration(
+            dict(os.environ),
+            public_base_url=public_base_url,
+            github_api_url=github_api_url,
+        )
+    except ValueError as exc:
+        raise ServerConfigurationError(str(exc)) from exc
     return await build_server_runtime(
         database_url=os.environ.get("WORKTREE_REVIEW_DATABASE_URL", ""),
-        github_token=os.environ.get("WORKTREE_REVIEW_GITHUB_TOKEN", ""),
-        github_api_url=os.environ.get(
-            "WORKTREE_REVIEW_GITHUB_API_URL",
-            "https://api.github.com",
-        ),
+        github_api_url=github_api_url,
         review_policy_path=_expand_user_path(review_policy_path_value),
+        compute_policy_path=_expand_user_path(compute_policy_path_value),
+        public_base_url=public_base_url,
+        mirror_root=None if not mirror_root_value else _expand_user_path(mirror_root_value),
+        web_auth_config=web_auth_config,
     )

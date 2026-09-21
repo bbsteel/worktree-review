@@ -71,6 +71,11 @@ dev = [
 [tool.hatch.version]
 path = "src/worktree_review/__init__.py"
 
+# The packaged Web UI bundle is a gitignored build artifact produced by
+# scripts/sync_frontend_dist.py; ship it in both distributions anyway.
+[tool.hatch.build]
+artifacts = ["/src/worktree_review/server/static/**"]
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/worktree_review"]
 

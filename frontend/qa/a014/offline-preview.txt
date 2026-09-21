@@ -1,0 +1,27 @@
+A-014 offline preview record
+recorded_at: 2026-09-09T09:37:36Z
+command: npm run preview -- --host 127.0.0.1 --port 4177
+bind: 127.0.0.1:4177
+
+=== GET / ===
+HTTP/1.1 200 OK
+Vary: Origin
+Content-Type: text/html
+Cache-Control: no-cache
+Etag: W/"4b5-6ovGOgc3Vjg7n63lVSfJExCiWVM"
+Date: Wed, 09 Sep 2026 09:37:37 GMT
+Connection: keep-alive
+Keep-Alive: timeout=5
+Content-Length: 1205
+
+
+=== GET /overview ===
+status=200
+
+=== dist/index.html external URLs ===
+none (no registry/CDN/Provider URLs in the preview HTML)
+
+=== notes ===
+Preview served the production build from frontend/dist over loopback.
+The HTML references only /assets/* and /favicon.svg.
+Runtime does not request npm registry, CDN, Provider, or GitHub.

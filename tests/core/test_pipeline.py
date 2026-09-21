@@ -7,7 +7,8 @@ from tests.gitutil import checkout_new_branch, commit_files, git, head_oid
 
 from worktree_review.core.findings import EvidenceBand
 from worktree_review.core.identity import ResolvedCommitPair
-from worktree_review.core.pipeline import ReviewRequest, run_review_pipeline
+from worktree_review.core.pipeline import ReviewRequest
+from worktree_review.core.pipeline import run_review_pipeline as execute_pipeline
 from worktree_review.core.policy import load_compute_policy, load_review_policy
 from worktree_review.core.provider import ScriptedProvider
 from worktree_review.core.report import (
@@ -17,6 +18,14 @@ from worktree_review.core.report import (
     StageName,
     StageStatus,
 )
+
+FIXED_ATTEMPT_ID = "11111111-1111-4111-8111-111111111111"
+
+
+async def run_review_pipeline(request: ReviewRequest, **kwargs):
+    kwargs.setdefault("repository_path", Path(request.resolved.source_repository))
+    kwargs.setdefault("attempt_id", FIXED_ATTEMPT_ID)
+    return await execute_pipeline(request, **kwargs)
 
 
 def _request(
@@ -127,7 +136,11 @@ async def test_pipeline_reports_stage_and_dimension_progress(
     )
 
     assert report.gate_state is GateState.PASSED
-    assert progress_events[0].name == StageName.CONSTRUCT_MERGE.value
+    assert progress_events[0].name == StageName.DERIVE_IDENTITY.value
+    assert any(event.name == StageName.CONSTRUCT_MERGE.value for event in progress_events)
+    assert any(event.name == StageName.CHECK_COMPLETENESS.value for event in progress_events)
+    assert any(event.name == StageName.EVALUATE_GATE.value for event in progress_events)
+    assert any(event.name == StageName.PUBLISH.value for event in progress_events)
     assert any(
         event.phase == "dimension" and event.name == "correctness" and event.status == "started"
         for event in progress_events

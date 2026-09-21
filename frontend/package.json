@@ -1,0 +1,45 @@
+{
+  "name": "worktree-review-frontend",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "build": "tsc -b && vite build",
+    "lint": "oxlint src",
+    "typecheck": "tsc -b --pretty false",
+    "test": "vitest run",
+    "test:i18n": "vitest run src/i18n.test.tsx",
+    "test:e2e": "playwright test",
+    "preview": "vite preview --host 127.0.0.1",
+    "build:demo": "tsc -b && vite build --mode demo",
+    "preview:demo": "vite preview --host 127.0.0.1 --mode demo",
+    "test:e2e:live": "npm run build && playwright test --config playwright.live.config.ts"
+  },
+  "dependencies": {
+    "framer-motion": "^12.23.12",
+    "lucide-react": "^0.542.0",
+    "prism-react-renderer": "^2.4.1",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
+    "react-router": "^7.8.2",
+    "recharts": "^3.1.2"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.55.0",
+    "@tailwindcss/vite": "^4.3.3",
+    "@testing-library/jest-dom": "^6.8.0",
+    "@testing-library/react": "^16.3.0",
+    "@testing-library/user-event": "^14.6.1",
+    "@types/node": "^24.13.3",
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.4",
+    "@vitejs/plugin-react": "^6.1.0",
+    "jsdom": "^26.1.0",
+    "oxlint": "^1.79.0",
+    "tailwindcss": "^4.3.3",
+    "typescript": "~5.9.2",
+    "vite": "^8.2.2",
+    "vitest": "^5.0.0"
+  }
+}

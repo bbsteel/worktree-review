@@ -1,0 +1,133 @@
+{
+  "metadata": {
+    "caseKey": "error_merge_conflict",
+    "provenance": "pipeline-snapshot",
+    "badge": "Pipeline snapshot · local",
+    "generatedAt": "2026-09-09T09:44:08Z",
+    "resultSchema": "worktree-review.cli.result/v1",
+    "reviewPolicy": {
+      "semver": "0.1.0",
+      "sha256": "c457d93bb5dd864c3112f8ff15449c64a6cc3b6a7512852c486cf575e1ec224f"
+    },
+    "computePolicy": {
+      "semver": "0.1.0",
+      "sha256": "86aaac8920d1c80b111f85057ad938cb23d2cefb324eaa8dccda8228f4389ac5"
+    },
+    "provider": "local-cli",
+    "model": "python",
+    "providerConfigurationFingerprint": "4ba262241bb77632487e2e89adfed0bbcddbd8ce6774173347d0792e7b1c6cf7",
+    "dataDestination": "local command stdin/stdout",
+    "knownRetention": "none — demo local-cli provider"
+  },
+  "result": {
+    "schema": "worktree-review.cli.result/v1",
+    "gate_state": "Error",
+    "attempt_id": "eef7bbef-30a9-401d-933c-ecd20ab7ca7d",
+    "request_key": {
+      "source_repository": "demo/error-merge-conflict",
+      "target_ref": "main",
+      "target_head_oid": "1cca1384c0736610268cceceb2f0d2d006e4b033",
+      "proposed_head_oid": "4c2b344be1bb7b8ae06c328b0a7c4e239f28087a",
+      "review_policy_version": {
+        "semver": "0.1.0",
+        "sha256": "c457d93bb5dd864c3112f8ff15449c64a6cc3b6a7512852c486cf575e1ec224f"
+      }
+    },
+    "review_identity": null,
+    "source_repository": "demo/error-merge-conflict",
+    "target_ref": "main",
+    "target_head_oid": "1cca1384c0736610268cceceb2f0d2d006e4b033",
+    "proposed_ref": "feature/broken-merge",
+    "proposed_source": "committed-ref",
+    "proposed_head_oid": "4c2b344be1bb7b8ae06c328b0a7c4e239f28087a",
+    "merge_tree_oid": null,
+    "review_policy_version": {
+      "semver": "0.1.0",
+      "sha256": "c457d93bb5dd864c3112f8ff15449c64a6cc3b6a7512852c486cf575e1ec224f"
+    },
+    "compute_policy_version": {
+      "semver": "0.1.0",
+      "sha256": "86aaac8920d1c80b111f85057ad938cb23d2cefb324eaa8dccda8228f4389ac5"
+    },
+    "compute_policy_disclosure": {
+      "provider": "local-cli",
+      "model": "python",
+      "data_destination": "local command stdin/stdout",
+      "known_retention": "none — demo local-cli provider",
+      "provider_configuration_fingerprint": "4ba262241bb77632487e2e89adfed0bbcddbd8ce6774173347d0792e7b1c6cf7"
+    },
+    "stage_outcomes": [
+      {
+        "stage": "derive-identity",
+        "status": "completed",
+        "detail": "attempt eef7bbef-30a9-401d-933c-ecd20ab7ca7d"
+      },
+      {
+        "stage": "construct-merge",
+        "status": "failed",
+        "detail": "merge conflict constructing the merge candidate; refusing to review a conflicted tree (paths: src/app.py)"
+      },
+      {
+        "stage": "prepare-review-worktree",
+        "status": "not-started",
+        "detail": "short-circuited after construct-merge failure"
+      },
+      {
+        "stage": "gather-context",
+        "status": "not-started",
+        "detail": "short-circuited after construct-merge failure"
+      },
+      {
+        "stage": "run-dimensions",
+        "status": "not-started",
+        "detail": "short-circuited after construct-merge failure"
+      },
+      {
+        "stage": "verify-dedup",
+        "status": "not-started",
+        "detail": "short-circuited after construct-merge failure"
+      },
+      {
+        "stage": "check-completeness",
+        "status": "completed",
+        "detail": "required dimensions and coverage did not complete"
+      },
+      {
+        "stage": "evaluate-gate",
+        "status": "completed",
+        "detail": null
+      },
+      {
+        "stage": "publish",
+        "status": "completed",
+        "detail": null
+      }
+    ],
+    "dimension_outcomes": [
+      {
+        "dimension_id": "correctness",
+        "status": "not-started",
+        "detail": null
+      },
+      {
+        "dimension_id": "security",
+        "status": "not-started",
+        "detail": null
+      }
+    ],
+    "findings": [],
+    "draft_findings": [],
+    "coverage": {
+      "required_coverage_complete": false,
+      "mandatory_missing": [],
+      "optional_missing": [],
+      "excluded": [],
+      "unreviewable": [],
+      "reviewed": []
+    },
+    "usage": [],
+    "call_plan": null,
+    "summary": "Review did not complete: merge-candidate construction failed.",
+    "error_detail": "merge conflict constructing the merge candidate; refusing to review a conflicted tree (paths: src/app.py)"
+  }
+}

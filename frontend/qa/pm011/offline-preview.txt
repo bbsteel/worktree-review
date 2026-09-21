@@ -1,0 +1,34 @@
+PM-011 offline preview record
+recorded_at: 2026-09-09T14:06:00Z
+command: npm run preview -- --host 127.0.0.1 --port 4179
+bind: 127.0.0.1:4179
+
+=== GET / ===
+HTTP/1.1 200 OK
+Vary: Origin
+Content-Type: text/html
+Cache-Control: no-cache
+
+=== demo routes (all 200) ===
+GET /overview                            status=200
+GET /reviews/attempt_01JY8R7F2W          status=200  (blocked case)
+GET /reviews/attempt_01JY8P4SS0D         status=200  (passed case)
+GET /reviews/attempt_01JY8E4R0R          status=200  (error merge-conflict case)
+
+=== dist external URL scan ===
+grep -rhoE "https?://[a-zA-Z0-9.-]+" frontend/dist/ yields only static string
+literals (w3.org SVG namespace, license and sourcemap comments in vendor
+chunks). No runtime fetch/XHR targets outside loopback exist in the bundle.
+
+=== runtime remote requests ===
+e2e spec "retry and bypass show capability and disabled reasons, no remote
+request" (review-detail.spec.ts) installs a page request listener and asserts
+zero non-loopback requests while exercising the Blocked detail page, including
+the disabled Retry/Bypass/Open Check/Open Session Insight controls.
+
+=== notes ===
+Preview serves the production build from frontend/dist over loopback only.
+The full demo (Dashboard, all three cases, theme switching, tab navigation,
+finding filters, evidence viewer) runs with no network: all data comes from
+in-bundle fixtures and recorded pipeline snapshots loaded by
+MockReviewDataSource. Provider, GitHub and Session Insight are never contacted.

@@ -1,0 +1,10 @@
+A-014 Dashboard keyboard check
+recorded_at: 2026-09-09T09:37:00Z
+command: PLAYWRIGHT_BROWSERS_PATH=frontend/.playwright-browsers npm --prefix frontend run test:e2e
+result: pass
+
+- Tab from the Overview shell reaches a Needs Attention review link (/reviews/:attemptId).
+- Theme switcher remains keyboard-operable (role=radiogroup).
+- Unimplemented New Review / nav entries are focusable Preview controls with accessible descriptions.
+- Contrast of body text vs background measured >= 7:1 in both dark and light at 1280x800, 1366x768, and 1440x900.
+- No horizontal overflow at those viewports.

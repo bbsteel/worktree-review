@@ -2,7 +2,7 @@ name: ci
 
 on:
   push:
-    branches: [master, main]
+    branches: [master, main, 'integration/**']
   pull_request:
 
 jobs:
@@ -20,8 +20,24 @@ jobs:
       - name: Set up Python
         run: uv python install 3.12
 
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
       - name: Install package
         run: uv sync --frozen --extra server --group dev
+
+      # server/static is gitignored; pytest create_app() defaults still serve the
+      # production bundle, so build+sync before the backend suite.
+      - name: Build and sync frontend for server tests
+        run: |
+          npm --prefix frontend ci
+          npm --prefix frontend run build
+          python3 scripts/sync_frontend_dist.py
+          test -f src/worktree_review/server/static/index.html
 
       - name: Ruff
         run: uv run ruff check src tests && uv run ruff format --check src tests
@@ -31,3 +47,131 @@ jobs:
 
       - name: Tests
         run: uv run pytest
+
+  frontend:
+    runs-on: ubuntu-latest
+    env:
+      # Keep install + test on the same project-local browser cache that
+      # playwright.config.ts selects via PLAYWRIGHT_BROWSERS_PATH.
+      PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/frontend/.playwright-browsers
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm --prefix frontend ci
+
+      - name: Lint
+        run: npm --prefix frontend run lint
+
+      - name: Typecheck
+        run: npm --prefix frontend run typecheck
+
+      - name: Unit tests
+        run: npm --prefix frontend run test
+
+      - name: Build
+        run: npm --prefix frontend run build
+
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        with:
+          path: frontend/.playwright-browsers
+          key: playwright-${{ hashFiles('frontend/package-lock.json') }}
+
+      - name: Install Playwright Chromium
+        working-directory: frontend
+        run: npx playwright install --with-deps chromium
+
+      # Key demo-path smoke: foundation routes, Review Detail end to end,
+      # Dashboard overflow/contrast/keyboard QA. Screenshot-capture specs
+      # (demo-package) are excluded — they regenerate artifacts, not gates.
+      - name: Playwright smoke
+        run: npm --prefix frontend run test:e2e -- e2e/empty-routes.spec.ts e2e/review-detail.spec.ts e2e/dashboard-qa.spec.ts e2e/stability-matrix.spec.ts e2e/localization.spec.ts
+
+      - name: Install uv and Python for the live server
+        uses: astral-sh/setup-uv@v4
+        with:
+          version: "0.8.22"
+          enable-cache: true
+
+      - name: Install Python environment
+        run: |
+          uv python install 3.12
+          uv sync --frozen --extra server
+
+      - name: Live acceptance E2E (real server, fresh SQLite, real local-cli provider)
+        run: npm --prefix frontend run test:e2e:live
+
+  packaging:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          version: "0.8.22"
+          enable-cache: true
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Build frontend (live production bundle)
+        run: |
+          npm --prefix frontend ci
+          npm --prefix frontend run build
+
+      - name: Verify demo build stays available and explicit
+        run: |
+          npm --prefix frontend run build:demo
+          test -f frontend/dist/index.html
+
+      - name: Rebuild live bundle and sync into package
+        run: |
+          npm --prefix frontend run build
+          python3 scripts/sync_frontend_dist.py
+
+      - name: Check frontend/static drift
+        run: python3 scripts/check_frontend_static_drift.py
+
+      - name: Build wheel and sdist
+        run: uv build
+
+      - name: Verify wheel ships the current Web UI bundle
+        run: python3 scripts/verify_wheel_contents.py dist/worktree_review-*-py3-none-any.whl
+
+      - name: Install wheel into a clean venv and smoke-test the server
+        run: |
+          uv venv ~/wheel-smoke-venv
+          uv pip install --python ~/wheel-smoke-venv/bin/python \
+            "worktree-review[server] @ $(ls dist/worktree_review-*-py3-none-any.whl)"
+          export WORKTREE_REVIEW_WEB_DATABASE="$PWD/wheel-smoke/web.sqlite"
+          export WORKTREE_REVIEW_BIND_PORT=8177
+          export XDG_STATE_HOME="$PWD/wheel-smoke/state"
+          ~/wheel-smoke-venv/bin/worktree-review-server &
+          SERVER_PID=$!
+          trap 'kill $SERVER_PID 2>/dev/null || true' EXIT
+          for attempt in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8177/healthz > /dev/null 2>&1; then
+              break
+            fi
+            sleep 1
+          done
+          curl -fsS http://127.0.0.1:8177/ | grep -qi "<html"
+          curl -fsS http://127.0.0.1:8177/api/v1/csrf-bootstrap | grep -q "csrf_token"
+          curl -fsS http://127.0.0.1:8177/api/v1/overview | grep -q "stats"
+          echo "wheel-installed server serves the full Web UI"

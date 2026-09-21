@@ -85,6 +85,7 @@ USER_CONFIG_FILENAME = "config.yaml"
 class PreparedCliReview(BaseModel):
     model_config = ConfigDict(frozen=True, arbitrary_types_allowed=True)
 
+    repository_path: Path
     resolved: ResolvedCommitPair
     review_policy: ReviewPolicy
     review_policy_version: PolicyVersionIdentity
@@ -232,6 +233,7 @@ async def prepare_cli_review(
             raise InvalidInvocationError(f"cannot snapshot current worktree: {exc}") from exc
 
     return PreparedCliReview(
+        repository_path=root,
         resolved=ResolvedCommitPair(
             source_repository=str(root),
             target_ref=resolved_target_ref,

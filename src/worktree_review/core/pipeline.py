@@ -6,8 +6,8 @@ failure cannot be hidden by later output.
 """
 
 import time
-import uuid
 from collections.abc import Callable
+from pathlib import Path
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
@@ -143,6 +143,7 @@ def _complete_report(
     usage: tuple[UsageRecord, ...] = (),
     call_plan: ReviewCallPlan | None = None,
     allow_passing_gate: bool = False,
+    progress_callback: Callable[[ReviewProgressEvent], None] | None = None,
 ) -> ReviewReport:
     resolved_coverage = coverage or CoverageRecord(required_coverage_complete=False)
     resolved_outcomes = dimension_outcomes or tuple(
@@ -151,6 +152,14 @@ def _complete_report(
     )
     dimensions_complete = bool(resolved_outcomes) and all(
         outcome.status is StageStatus.COMPLETED for outcome in resolved_outcomes
+    )
+    completeness_started_at = time.monotonic()
+    _notify_progress(
+        progress_callback,
+        phase="stage",
+        name=StageName.CHECK_COMPLETENESS.value,
+        status="started",
+        started_at=completeness_started_at,
     )
     execution = execution.with_outcome(
         StageOutcome(
@@ -162,6 +171,21 @@ def _complete_report(
                 else "required dimensions and coverage did not complete"
             ),
         )
+    )
+    _notify_progress(
+        progress_callback,
+        phase="stage",
+        name=StageName.CHECK_COMPLETENESS.value,
+        status="completed",
+        started_at=completeness_started_at,
+    )
+    gate_started_at = time.monotonic()
+    _notify_progress(
+        progress_callback,
+        phase="stage",
+        name=StageName.EVALUATE_GATE.value,
+        status="started",
+        started_at=gate_started_at,
     )
     gate_state = evaluate_gate(
         GateEvaluationInput(
@@ -180,8 +204,30 @@ def _complete_report(
     execution = execution.with_outcome(
         StageOutcome(stage=StageName.EVALUATE_GATE, status=StageStatus.COMPLETED)
     )
+    _notify_progress(
+        progress_callback,
+        phase="stage",
+        name=StageName.EVALUATE_GATE.value,
+        status="completed",
+        started_at=gate_started_at,
+    )
+    publish_started_at = time.monotonic()
+    _notify_progress(
+        progress_callback,
+        phase="stage",
+        name=StageName.PUBLISH.value,
+        status="started",
+        started_at=publish_started_at,
+    )
     execution = execution.with_outcome(
         StageOutcome(stage=StageName.PUBLISH, status=StageStatus.COMPLETED)
+    )
+    _notify_progress(
+        progress_callback,
+        phase="stage",
+        name=StageName.PUBLISH.value,
+        status="completed",
+        started_at=publish_started_at,
     )
     return ReviewReport(
         gate_state=gate_state,
@@ -216,12 +262,21 @@ def _complete_report(
 async def run_review_pipeline(
     request: ReviewRequest,
     *,
+    repository_path: Path,
+    attempt_id: str,
     provider: ProviderClient | None = None,
     on_call_plan_ready: Callable[[ReviewCallPlan], None] | None = None,
     on_progress: Callable[[ReviewProgressEvent], None] | None = None,
 ) -> ReviewReport:
-    """Run the shared pipeline through verification, gate evaluation, and publication."""
+    """Run the shared pipeline through verification, gate evaluation, and publication.
 
+    ``attempt_id`` must already be allocated by the calling surface or application
+    service. ``repository_path`` is the trusted Git execution directory and is never
+    derived by wrapping ``resolved.source_repository`` in ``Path``.
+    """
+
+    if not attempt_id:
+        raise ValueError("attempt_id must be allocated before the pipeline starts")
     request_key = ReviewRequestKey(
         source_repository=request.resolved.source_repository,
         target_ref=request.resolved.target_ref,
@@ -229,13 +284,27 @@ async def run_review_pipeline(
         proposed_head_oid=request.resolved.proposed_head_oid,
         review_policy_version=request.review_policy_version,
     )
-    attempt_id = str(uuid.uuid4())
+    derive_started_at = time.monotonic()
+    _notify_progress(
+        on_progress,
+        phase="stage",
+        name=StageName.DERIVE_IDENTITY.value,
+        status="started",
+        started_at=derive_started_at,
+    )
     execution = ExecutionRecord().with_outcome(
         StageOutcome(
             stage=StageName.DERIVE_IDENTITY,
             status=StageStatus.COMPLETED,
             detail=f"attempt {attempt_id}",
         )
+    )
+    _notify_progress(
+        on_progress,
+        phase="stage",
+        name=StageName.DERIVE_IDENTITY.value,
+        status="completed",
+        started_at=derive_started_at,
     )
     candidate: MergeCandidateIdentity | None = None
     review_identity: ReviewIdentity | None = None
@@ -252,7 +321,10 @@ async def run_review_pipeline(
             started_at=construct_started_at,
         )
         try:
-            candidate = await construct_merge_candidate(request.resolved)
+            candidate = await construct_merge_candidate(
+                request.resolved,
+                repository_path=repository_path,
+            )
             review_identity = ReviewIdentity(
                 candidate=candidate,
                 review_policy_version=request.review_policy_version,
@@ -289,6 +361,7 @@ async def run_review_pipeline(
                 request,
                 execution,
                 attempt_id=attempt_id,
+                progress_callback=on_progress,
                 request_key=request_key,
                 merge_tree_oid=None,
                 review_identity=None,
@@ -307,6 +380,7 @@ async def run_review_pipeline(
         try:
             review_worktree = await materialize_review_worktree(
                 candidate,
+                repository_path=repository_path,
                 owner_note=owner_note,
             )
             execution = execution.with_outcome(
@@ -341,6 +415,7 @@ async def run_review_pipeline(
                 request,
                 execution,
                 attempt_id=attempt_id,
+                progress_callback=on_progress,
                 request_key=request_key,
                 merge_tree_oid=candidate.merge_tree_oid,
                 review_identity=review_identity,
@@ -357,7 +432,12 @@ async def run_review_pipeline(
             started_at=gather_started_at,
         )
         try:
-            gathered = await gather_context(review_worktree, candidate, request.review_policy)
+            gathered = await gather_context(
+                review_worktree,
+                candidate,
+                request.review_policy,
+                repository_path=repository_path,
+            )
         except (WorktreeReviewError, UnimplementedStageError) as exc:
             execution = execution.with_outcome(
                 StageOutcome(
@@ -380,6 +460,7 @@ async def run_review_pipeline(
                 request,
                 execution,
                 attempt_id=attempt_id,
+                progress_callback=on_progress,
                 request_key=request_key,
                 merge_tree_oid=candidate.merge_tree_oid,
                 review_identity=review_identity,
@@ -405,6 +486,7 @@ async def run_review_pipeline(
                 request,
                 execution,
                 attempt_id=attempt_id,
+                progress_callback=on_progress,
                 request_key=request_key,
                 merge_tree_oid=candidate.merge_tree_oid,
                 review_identity=review_identity,
@@ -474,6 +556,7 @@ async def run_review_pipeline(
                 request,
                 execution,
                 attempt_id=attempt_id,
+                progress_callback=on_progress,
                 request_key=request_key,
                 merge_tree_oid=candidate.merge_tree_oid,
                 review_identity=review_identity,
@@ -549,6 +632,7 @@ async def run_review_pipeline(
                 request,
                 execution,
                 attempt_id=attempt_id,
+                progress_callback=on_progress,
                 request_key=request_key,
                 merge_tree_oid=candidate.merge_tree_oid,
                 review_identity=review_identity,
@@ -579,6 +663,7 @@ async def run_review_pipeline(
                 request,
                 execution,
                 attempt_id=attempt_id,
+                progress_callback=on_progress,
                 request_key=request_key,
                 merge_tree_oid=candidate.merge_tree_oid,
                 review_identity=review_identity,
@@ -595,6 +680,7 @@ async def run_review_pipeline(
             request,
             execution,
             attempt_id=attempt_id,
+            progress_callback=on_progress,
             request_key=request_key,
             merge_tree_oid=candidate.merge_tree_oid,
             review_identity=review_identity,
