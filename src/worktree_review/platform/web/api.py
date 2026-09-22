@@ -535,6 +535,7 @@ async def _github_recent_summaries(request: Request) -> list[dict[str, Any]]:
 
 async def _load_policies(runtime: WebRuntime, request_body: dict[str, Any]) -> tuple[Any, Any]:
     review_policy_id = str(request_body.get("review_policy_id") or "")
+    review_policy: ReviewPolicy | None
     if is_builtin_review_policy_id(review_policy_id):
         review_policy = load_builtin_review_policy()[0]
     else:
