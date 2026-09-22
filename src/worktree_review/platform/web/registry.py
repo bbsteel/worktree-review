@@ -528,9 +528,7 @@ async def read_trusted_policy_document(
                         "required_dimensions": list(review_policy.required_dimensions),
                     }
                     return text, summary, identity.sha256, content_sha256
-                compute_policy, identity, source_format = load_trusted_compute_document(
-                    snapshot
-                )
+                compute_policy, identity, source_format = load_trusted_compute_document(snapshot)
                 summary = {
                     "version": compute_policy.version,
                     "provider": compute_policy.provider,

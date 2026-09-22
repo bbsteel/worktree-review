@@ -102,21 +102,15 @@ async def test_save_after_external_disk_edit_uses_reloaded_disk_sha(
     )
     policy_id = str(created["id"])
     path = Path(str(created["path"]))
-    original = await read_trusted_policy_document(
-        runtime.store, kind="review", policy_id=policy_id
-    )
+    original = await read_trusted_policy_document(runtime.store, kind="review", policy_id=policy_id)
     assert original["sha256"] == original["registered_sha256"]
 
     parsed = yaml.safe_load(original["text"])
     assert isinstance(parsed, dict)
     parsed["version"] = "0.9.9"
-    await asyncio.to_thread(
-        path.write_text, yaml.safe_dump(parsed, sort_keys=False), "utf-8"
-    )
+    await asyncio.to_thread(path.write_text, yaml.safe_dump(parsed, sort_keys=False), "utf-8")
 
-    reloaded = await read_trusted_policy_document(
-        runtime.store, kind="review", policy_id=policy_id
-    )
+    reloaded = await read_trusted_policy_document(runtime.store, kind="review", policy_id=policy_id)
     assert reloaded["sha256"] != reloaded["registered_sha256"]
     assert reloaded["sha256"] != original["sha256"]
     assert reloaded["content_sha256"] != original["content_sha256"]
@@ -150,9 +144,7 @@ async def test_comment_only_edit_conflicts_on_raw_content_sha(
         runtime.store, kind="review", filename="comment-race.yaml"
     )
     policy_id = str(created["id"])
-    original = await read_trusted_policy_document(
-        runtime.store, kind="review", policy_id=policy_id
-    )
+    original = await read_trusted_policy_document(runtime.store, kind="review", policy_id=policy_id)
     commented = f"{original['text'].rstrip()}\n# editor-a note\n"
     assert policy_document_content_sha256(commented) != original["content_sha256"]
 
@@ -346,7 +338,6 @@ async def test_concurrent_managed_create_same_name_keeps_winner_file(
 ) -> None:
     """Two same-name creates: exactly one wins; loser must not delete the winner."""
 
-
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg-data"))
     runtime = await open_web_runtime(tmp_path / "race-create.sqlite")
     await register_local_repository(
@@ -369,9 +360,7 @@ async def test_concurrent_managed_create_same_name_keeps_winner_file(
     target = managed_policies_root() / "race.yaml"
     assert target.is_file()
     winner_id = next(item.split(":", 1)[1] for item in outcomes if item.startswith("ok:"))
-    document = await read_trusted_policy_document(
-        runtime.store, kind="review", policy_id=winner_id
-    )
+    document = await read_trusted_policy_document(runtime.store, kind="review", policy_id=winner_id)
     assert Path(str(document["path"])) == target
 
 
@@ -383,7 +372,6 @@ async def test_concurrent_saves_second_observes_conflict(
 ) -> None:
     """Interleaved saves that share the same expected sha: one commits, one 409s."""
 
-
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg-data"))
     runtime = await open_web_runtime(tmp_path / "race-save.sqlite")
     await register_local_repository(
@@ -393,9 +381,7 @@ async def test_concurrent_saves_second_observes_conflict(
         runtime.store, kind="review", filename="race-save.yaml"
     )
     policy_id = str(created["id"])
-    document = await read_trusted_policy_document(
-        runtime.store, kind="review", policy_id=policy_id
-    )
+    document = await read_trusted_policy_document(runtime.store, kind="review", policy_id=policy_id)
     base = yaml.safe_load(document["text"])
     assert isinstance(base, dict)
     text_a = yaml.safe_dump({**base, "version": "0.2.0"}, sort_keys=False)
@@ -420,9 +406,7 @@ async def test_concurrent_saves_second_observes_conflict(
     assert sum(1 for item in outcomes if item.startswith("ok:")) == 1
     assert sum(1 for item in outcomes if item.startswith("err:")) == 1
     assert any("policy_content_changed" in item for item in outcomes if item.startswith("err:"))
-    final = await read_trusted_policy_document(
-        runtime.store, kind="review", policy_id=policy_id
-    )
+    final = await read_trusted_policy_document(runtime.store, kind="review", policy_id=policy_id)
     assert final["sha256"] == final["registered_sha256"]
     parsed = yaml.safe_load(final["text"])
     assert isinstance(parsed, dict)
@@ -448,9 +432,7 @@ async def test_save_holds_lock_through_registry_identity_update(
         runtime.store, kind="review", filename="lock-registry.yaml"
     )
     policy_id = str(created["id"])
-    document = await read_trusted_policy_document(
-        runtime.store, kind="review", policy_id=policy_id
-    )
+    document = await read_trusted_policy_document(runtime.store, kind="review", policy_id=policy_id)
     base = yaml.safe_load(document["text"])
     assert isinstance(base, dict)
     text_a = yaml.safe_dump({**base, "version": "0.2.0"}, sort_keys=False)
@@ -492,9 +474,7 @@ async def test_save_holds_lock_through_registry_identity_update(
     outcomes = [first, second]
     assert sum(1 for item in outcomes if item.startswith("ok:")) == 1
     assert sum(1 for item in outcomes if item.startswith("err:")) == 1
-    final = await read_trusted_policy_document(
-        runtime.store, kind="review", policy_id=policy_id
-    )
+    final = await read_trusted_policy_document(runtime.store, kind="review", policy_id=policy_id)
     assert final["sha256"] == final["registered_sha256"]
 
 
@@ -521,9 +501,7 @@ async def test_read_pairs_text_with_matching_sha_under_concurrent_save(
         runtime.store, kind="review", filename="race-read.yaml"
     )
     policy_id = str(created["id"])
-    document = await read_trusted_policy_document(
-        runtime.store, kind="review", policy_id=policy_id
-    )
+    document = await read_trusted_policy_document(runtime.store, kind="review", policy_id=policy_id)
     base = yaml.safe_load(document["text"])
     assert isinstance(base, dict)
 
