@@ -125,6 +125,22 @@ function fakeClient(options: FakeClientOptions = {}): AdminClient {
     getComputePolicy: async () => computePolicy,
     registerReviewPolicy: async () => reviewPolicy,
     registerComputePolicy: async () => computePolicy,
+    getReviewPolicyDocument: async () => {
+      throw new Error('unused')
+    },
+    saveReviewPolicyDocument: async () => {
+      throw new Error('unused')
+    },
+    createManagedReviewPolicy: async () => reviewPolicy,
+    unregisterReviewPolicy: async () => undefined,
+    getComputePolicyDocument: async () => {
+      throw new Error('unused')
+    },
+    saveComputePolicyDocument: async () => {
+      throw new Error('unused')
+    },
+    createManagedComputePolicy: async () => computePolicy,
+    unregisterComputePolicy: async () => undefined,
   }
 }
 
@@ -164,6 +180,19 @@ async function fillRequiredFields(user: ReturnType<typeof userEvent.setup>) {
 }
 
 describe('NewReviewPage', () => {
+  it('hard-blocks submit when the local setup catalog is incomplete', async () => {
+    renderPage(
+      fakeClient({
+        repositories: [],
+      }),
+    )
+
+    expect(
+      await screen.findByRole('region', { name: 'Finish local setup before starting a review' }),
+    ).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Start review' })).toBeDisabled()
+  })
+
   it('shows repository, source, policy and disclosure sections before submit', async () => {
     renderPage(fakeClient())
 
@@ -299,7 +328,10 @@ describe('NewReviewPage', () => {
     renderPage(fakeClient({ repositories: [] }))
 
     expect(await screen.findByText('No authorized repositories')).toBeInTheDocument()
-    expect(screen.getByRole('link', { name: 'Open Repositories' })).toBeInTheDocument()
+    expect(
+      await screen.findByRole('region', { name: 'Finish local setup before starting a review' }),
+    ).toBeInTheDocument()
+    expect(screen.getAllByRole('link', { name: 'Open Repositories' }).length).toBeGreaterThan(0)
     expect(screen.getByRole('button', { name: 'Start review' })).toBeDisabled()
   })
 })

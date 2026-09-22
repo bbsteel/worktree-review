@@ -21,7 +21,12 @@ from worktree_review.application.review_runs import OverviewAggregate, ReviewRun
 from worktree_review.application.views import GitHubPullRequestSourceView, SurfaceProjection
 from worktree_review.core.findings import EvidenceBand, Finding, Severity
 from worktree_review.core.gate import finding_blocks_under_policy
-from worktree_review.core.policy import ComputePolicy, ReviewPolicy
+from worktree_review.core.policy import (
+    BUILTIN_REVIEW_POLICY_ID,
+    ComputePolicy,
+    ReviewPolicy,
+    load_builtin_review_policy,
+)
 from worktree_review.core.report import PIPELINE_STAGE_ORDER, ReviewReport, StageStatus
 from worktree_review.platform.cli.result import load_review_report_from_cli_result
 from worktree_review.platform.github.checks import github_check_run_url
@@ -1102,7 +1107,11 @@ def present_provider_profile(
 
 
 def present_review_policy(
-    row: dict[str, str], policy: ReviewPolicy | None, *, drifted: bool = False
+    row: dict[str, str],
+    policy: ReviewPolicy | None,
+    *,
+    drifted: bool = False,
+    builtin: bool = False,
 ) -> dict[str, Any]:
     return {
         "policy_id": row["id"],
@@ -1110,7 +1119,7 @@ def present_review_policy(
         "name": row["path"].rsplit("/", 1)[-1],
         "version": row["version_semver"],
         "sha256": row["version_sha256"],
-        "builtin": False,
+        "builtin": builtin,
         "required_dimensions": list(policy.required_dimensions) if policy else [],
         "blocking_severities": (
             [item.value for item in policy.blocking_severities] if policy else []
@@ -1124,6 +1133,23 @@ def present_review_policy(
         "optional_globs": list(policy.context.optional_globs) if policy else [],
         "excluded_globs": list(policy.context.excluded_globs) if policy else [],
     }
+
+
+def present_builtin_review_policy() -> dict[str, Any]:
+    """Surface DTO for the product built-in Review Policy (no trusted-store row)."""
+
+    policy, identity = load_builtin_review_policy()
+    return present_review_policy(
+        {
+            "id": BUILTIN_REVIEW_POLICY_ID,
+            "path": "Default Review Policy",
+            "version_semver": identity.semver,
+            "version_sha256": identity.sha256,
+        },
+        policy,
+        drifted=False,
+        builtin=True,
+    )
 
 
 def present_compute_policy(

@@ -20,7 +20,12 @@ from worktree_review.application.review_runs import OverviewAggregate
 from worktree_review.application.review_service import allocate_attempt_id
 from worktree_review.core.errors import InvalidInvocationError
 from worktree_review.core.git import invoke_git, worktree_is_clean
-from worktree_review.core.policy import ReviewPolicy, load_review_policy
+from worktree_review.core.policy import (
+    ReviewPolicy,
+    is_builtin_review_policy_id,
+    load_builtin_review_policy,
+    load_review_policy,
+)
 from worktree_review.core.report import GateState
 from worktree_review.platform.github.authz import BYPASS_ALLOWED_REPOSITORY_ROLES
 from worktree_review.platform.github.bypass import (
@@ -46,6 +51,7 @@ from worktree_review.platform.web.errors import ApiError
 from worktree_review.platform.web.local_store import IdempotencyConflictError
 from worktree_review.platform.web.presenters import (
     present_audit_event,
+    present_builtin_review_policy,
     present_compute_policy,
     present_github_review_run,
     present_overview,
@@ -59,15 +65,19 @@ from worktree_review.platform.web.presenters import (
 from worktree_review.platform.web.provider_resolution import freeze_provider_profile
 from worktree_review.platform.web.registry import (
     TrustBoundaryError,
+    create_managed_trusted_policy,
     load_trusted_compute_document,
     parse_credential_reference,
     profile_command_argv,
+    read_trusted_policy_document,
     register_local_repository,
     register_trusted_policy,
     require_registered_repository_path,
     resolve_credential_reference,
+    unregister_trusted_policy,
     validate_compute_policy_binding,
     validate_provider_profile_shape,
+    write_trusted_policy_document,
 )
 from worktree_review.platform.web.runtime import WebRuntime
 from worktree_review.platform.web.security import assert_local_mutation_headers, is_loopback_host
@@ -123,6 +133,18 @@ class RegisterReviewPolicyRequest(BaseModel):
 class RegisterComputePolicyRequest(BaseModel):
     path: str
     provider_profile_id: str | None = None
+
+
+class CreateManagedPolicyRequest(BaseModel):
+    filename: str = Field(min_length=1)
+    provider_profile_id: str | None = None
+
+
+class SavePolicyDocumentRequest(BaseModel):
+    """``expected_content_sha256`` is the raw UTF-8 document fingerprint from GET."""
+
+    expected_content_sha256: str = Field(min_length=64, max_length=64)
+    text: str = Field(min_length=1)
 
 
 class BypassFindingRequest(BaseModel):
@@ -512,17 +534,30 @@ async def _github_recent_summaries(request: Request) -> list[dict[str, Any]]:
 
 
 async def _load_policies(runtime: WebRuntime, request_body: dict[str, Any]) -> tuple[Any, Any]:
-    review_row = await runtime.store.get_trusted_policy(
-        "trusted_review_policies", str(request_body.get("review_policy_id") or "")
-    )
+    review_policy_id = str(request_body.get("review_policy_id") or "")
+    if is_builtin_review_policy_id(review_policy_id):
+        review_policy = load_builtin_review_policy()[0]
+    else:
+        review_row = await runtime.store.get_trusted_policy(
+            "trusted_review_policies", review_policy_id
+        )
+        review_policy = load_review_policy(Path(review_row["path"]))[0] if review_row else None
     compute_row = await runtime.store.get_trusted_policy(
         "trusted_compute_policies", str(request_body.get("compute_policy_id") or "")
     )
-    review_policy = load_review_policy(Path(review_row["path"]))[0] if review_row else None
     compute_policy = (
         load_trusted_compute_document(Path(compute_row["path"]))[0] if compute_row else None
     )
     return review_policy, compute_policy
+
+
+def _reject_builtin_review_policy_mutation(policy_id: str) -> None:
+    if is_builtin_review_policy_id(policy_id):
+        raise ApiError(
+            400,
+            "builtin_policy_readonly",
+            "the built-in Review Policy cannot be edited or unregistered",
+        )
 
 
 async def _freeze_bound_provider(runtime: WebRuntime, compute_row: dict[str, Any]) -> str | None:
@@ -614,14 +649,15 @@ def create_api_router() -> APIRouter:
             )
         except TrustBoundaryError as exc:
             raise ApiError(403, "unregistered_repository", str(exc)) from exc
-        review_row = await runtime.store.get_trusted_policy(
-            "trusted_review_policies", payload.review_policy_id
-        )
+        if not is_builtin_review_policy_id(payload.review_policy_id):
+            review_row = await runtime.store.get_trusted_policy(
+                "trusted_review_policies", payload.review_policy_id
+            )
+            if review_row is None:
+                raise ApiError(404, "review_policy_not_found", "unknown review_policy_id")
         compute_row = await runtime.store.get_trusted_policy(
             "trusted_compute_policies", payload.compute_policy_id
         )
-        if review_row is None:
-            raise ApiError(404, "review_policy_not_found", "unknown review_policy_id")
         if compute_row is None:
             raise ApiError(404, "compute_policy_not_found", "unknown compute_policy_id")
         frozen_provider_json = await _freeze_bound_provider(runtime, compute_row)
@@ -1409,7 +1445,7 @@ def create_api_router() -> APIRouter:
     @router.get("/api/v1/review-policies")
     async def list_review_policies(request: Request) -> list[dict[str, Any]]:
         runtime = _local_admin_runtime(request)
-        items = []
+        items = [present_builtin_review_policy()]
         for row in await runtime.store.list_trusted_policies("trusted_review_policies"):
             policy, identity = load_review_policy(Path(row["path"]))
             items.append(present_review_policy(row, policy, drifted=_policy_drifted(row, identity)))
@@ -1467,6 +1503,8 @@ def create_api_router() -> APIRouter:
     @router.get("/api/v1/review-policies/{policy_id}")
     async def get_review_policy(policy_id: str, request: Request) -> dict[str, Any]:
         runtime = _local_admin_runtime(request)
+        if is_builtin_review_policy_id(policy_id):
+            return present_builtin_review_policy()
         row = await runtime.store.get_trusted_policy("trusted_review_policies", policy_id)
         if row is None:
             raise ApiError(404, "review_policy_not_found", "unknown review policy")
@@ -1502,5 +1540,154 @@ def create_api_router() -> APIRouter:
             provider_profile_name=await _bound_profile_name(runtime, row),
             drifted=_policy_drifted(row, identity),
         )
+
+    def _map_policy_document_error(exc: Exception, *, kind: str) -> ApiError:
+        message = str(exc)
+        if isinstance(exc, TrustBoundaryError):
+            if message == "unknown policy":
+                code = "review_policy_not_found" if kind == "review" else "compute_policy_not_found"
+                return ApiError(404, code, "unknown policy")
+            if message == "policy_content_changed":
+                return ApiError(
+                    409,
+                    "policy_content_changed",
+                    "the policy file changed since it was loaded; reload and retry",
+                )
+            return ApiError(400, f"invalid_{kind}_policy", message)
+        if isinstance(exc, InvalidInvocationError):
+            return ApiError(400, f"invalid_{kind}_policy", message)
+        return ApiError(400, f"invalid_{kind}_policy", message)
+
+    @router.get("/api/v1/review-policies/{policy_id}/document")
+    async def get_review_policy_document(policy_id: str, request: Request) -> dict[str, Any]:
+        runtime = _local_admin_runtime(request)
+        _reject_builtin_review_policy_mutation(policy_id)
+        try:
+            return await read_trusted_policy_document(
+                runtime.store, kind="review", policy_id=policy_id
+            )
+        except (TrustBoundaryError, InvalidInvocationError) as exc:
+            raise _map_policy_document_error(exc, kind="review") from exc
+
+    @router.put("/api/v1/review-policies/{policy_id}/document")
+    async def put_review_policy_document(
+        policy_id: str,
+        payload: SavePolicyDocumentRequest,
+        request: Request,
+        csrf_token: str | None = Header(default=None, alias="X-CSRF-Token"),
+    ) -> dict[str, Any]:
+        runtime = _local_admin_runtime(request)
+        _mutation_guard(request, csrf_token)
+        _reject_builtin_review_policy_mutation(policy_id)
+        try:
+            return await write_trusted_policy_document(
+                runtime.store,
+                kind="review",
+                policy_id=policy_id,
+                expected_content_sha256=payload.expected_content_sha256,
+                text=payload.text,
+            )
+        except (TrustBoundaryError, InvalidInvocationError) as exc:
+            raise _map_policy_document_error(exc, kind="review") from exc
+
+    @router.post("/api/v1/review-policies/create-managed", status_code=201)
+    async def create_managed_review_policy(
+        payload: CreateManagedPolicyRequest,
+        request: Request,
+        csrf_token: str | None = Header(default=None, alias="X-CSRF-Token"),
+    ) -> dict[str, Any]:
+        runtime = _local_admin_runtime(request)
+        _mutation_guard(request, csrf_token)
+        try:
+            row = await create_managed_trusted_policy(
+                runtime.store, kind="review", filename=payload.filename
+            )
+        except (TrustBoundaryError, InvalidInvocationError) as exc:
+            raise _map_policy_document_error(exc, kind="review") from exc
+        stored = await runtime.store.get_trusted_policy("trusted_review_policies", str(row["id"]))
+        assert stored is not None
+        policy, identity = load_review_policy(Path(stored["path"]))
+        return present_review_policy(stored, policy, drifted=_policy_drifted(stored, identity))
+
+    @router.delete("/api/v1/review-policies/{policy_id}", status_code=204)
+    async def delete_review_policy(
+        policy_id: str,
+        request: Request,
+        csrf_token: str | None = Header(default=None, alias="X-CSRF-Token"),
+    ) -> None:
+        runtime = _local_admin_runtime(request)
+        _mutation_guard(request, csrf_token)
+        _reject_builtin_review_policy_mutation(policy_id)
+        deleted = await unregister_trusted_policy(runtime.store, kind="review", policy_id=policy_id)
+        if not deleted:
+            raise ApiError(404, "review_policy_not_found", "unknown review policy")
+
+    @router.get("/api/v1/compute-policies/{policy_id}/document")
+    async def get_compute_policy_document(policy_id: str, request: Request) -> dict[str, Any]:
+        runtime = _local_admin_runtime(request)
+        try:
+            return await read_trusted_policy_document(
+                runtime.store, kind="compute", policy_id=policy_id
+            )
+        except (TrustBoundaryError, InvalidInvocationError) as exc:
+            raise _map_policy_document_error(exc, kind="compute") from exc
+
+    @router.put("/api/v1/compute-policies/{policy_id}/document")
+    async def put_compute_policy_document(
+        policy_id: str,
+        payload: SavePolicyDocumentRequest,
+        request: Request,
+        csrf_token: str | None = Header(default=None, alias="X-CSRF-Token"),
+    ) -> dict[str, Any]:
+        runtime = _local_admin_runtime(request)
+        _mutation_guard(request, csrf_token)
+        try:
+            return await write_trusted_policy_document(
+                runtime.store,
+                kind="compute",
+                policy_id=policy_id,
+                expected_content_sha256=payload.expected_content_sha256,
+                text=payload.text,
+            )
+        except (TrustBoundaryError, InvalidInvocationError) as exc:
+            raise _map_policy_document_error(exc, kind="compute") from exc
+
+    @router.post("/api/v1/compute-policies/create-managed", status_code=201)
+    async def create_managed_compute_policy(
+        payload: CreateManagedPolicyRequest,
+        request: Request,
+        csrf_token: str | None = Header(default=None, alias="X-CSRF-Token"),
+    ) -> dict[str, Any]:
+        runtime = _local_admin_runtime(request)
+        _mutation_guard(request, csrf_token)
+        try:
+            row = await create_managed_trusted_policy(
+                runtime.store,
+                kind="compute",
+                filename=payload.filename,
+                provider_profile_id=payload.provider_profile_id,
+            )
+        except (TrustBoundaryError, InvalidInvocationError) as exc:
+            raise _map_policy_document_error(exc, kind="compute") from exc
+        stored = await runtime.store.get_trusted_policy("trusted_compute_policies", str(row["id"]))
+        assert stored is not None
+        policy = load_trusted_compute_document(Path(stored["path"]))[0]
+        return present_compute_policy(
+            stored, policy, provider_profile_name=await _bound_profile_name(runtime, stored)
+        )
+
+    @router.delete("/api/v1/compute-policies/{policy_id}", status_code=204)
+    async def delete_compute_policy(
+        policy_id: str,
+        request: Request,
+        csrf_token: str | None = Header(default=None, alias="X-CSRF-Token"),
+    ) -> None:
+        runtime = _local_admin_runtime(request)
+        _mutation_guard(request, csrf_token)
+        deleted = await unregister_trusted_policy(
+            runtime.store, kind="compute", policy_id=policy_id
+        )
+        if not deleted:
+            raise ApiError(404, "compute_policy_not_found", "unknown compute policy")
 
     return router

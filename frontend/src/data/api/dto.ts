@@ -412,6 +412,29 @@ export interface RegisterComputePolicyRequestDto {
   provider_profile_id?: string | null
 }
 
+export interface CreateManagedPolicyRequestDto {
+  filename: string
+  provider_profile_id?: string | null
+}
+
+export interface PolicyDocumentDto {
+  policy_id: string
+  kind: 'review' | 'compute'
+  path: string
+  /** Canonical Policy identity digest (parsed document). */
+  sha256: string
+  /** Raw UTF-8 file fingerprint used for editor optimistic concurrency. */
+  content_sha256: string
+  registered_sha256: string
+  text: string
+  summary: Record<string, unknown>
+}
+
+export interface SavePolicyDocumentRequestDto {
+  expected_content_sha256: string
+  text: string
+}
+
 export interface ReviewPolicyDto {
   policy_id: string
   name: string

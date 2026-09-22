@@ -14,8 +14,10 @@ import type {
 import type { ReviewRunView } from '../../domain/review.ts'
 import type {
   ComputePolicyDto,
+  CreateManagedPolicyRequestDto,
   CreateReviewRequestDto,
   CreateReviewResponseDto,
+  PolicyDocumentDto,
   ProviderProfileDto,
   ProviderTestResultDto,
   RegisterComputePolicyRequestDto,
@@ -25,6 +27,7 @@ import type {
   RepositoryStatusDto,
   ReviewListDto,
   ReviewPolicyDto,
+  SavePolicyDocumentRequestDto,
   SaveProviderProfileRequestDto,
 } from './dto.ts'
 import {
@@ -151,7 +154,7 @@ export class ReviewApiClient {
   }
 
   private async request<T>(
-    method: 'GET' | 'POST' | 'PATCH' | 'DELETE',
+    method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE',
     path: string,
     options: { body?: unknown; idempotencyKey?: string } = {},
   ): Promise<T> {
@@ -159,7 +162,7 @@ export class ReviewApiClient {
   }
 
   private async requestWithCsrfRetry<T>(
-    method: 'GET' | 'POST' | 'PATCH' | 'DELETE',
+    method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE',
     path: string,
     options: { body?: unknown; idempotencyKey?: string },
     allowCsrfRetry: boolean,
@@ -372,6 +375,66 @@ export class ReviewApiClient {
       'GET',
       `/compute-policies/${encodeURIComponent(policyId)}`,
     )
+  }
+
+  async getReviewPolicyDocument(policyId: string): Promise<PolicyDocumentDto> {
+    return this.request<PolicyDocumentDto>(
+      'GET',
+      `/review-policies/${encodeURIComponent(policyId)}/document`,
+    )
+  }
+
+  async saveReviewPolicyDocument(
+    policyId: string,
+    requestBody: SavePolicyDocumentRequestDto,
+  ): Promise<PolicyDocumentDto> {
+    return this.request<PolicyDocumentDto>(
+      'PUT',
+      `/review-policies/${encodeURIComponent(policyId)}/document`,
+      { body: requestBody },
+    )
+  }
+
+  async createManagedReviewPolicy(
+    requestBody: CreateManagedPolicyRequestDto,
+  ): Promise<ReviewPolicyDto> {
+    return this.request<ReviewPolicyDto>('POST', '/review-policies/create-managed', {
+      body: requestBody,
+    })
+  }
+
+  async unregisterReviewPolicy(policyId: string): Promise<void> {
+    await this.request<void>('DELETE', `/review-policies/${encodeURIComponent(policyId)}`)
+  }
+
+  async getComputePolicyDocument(policyId: string): Promise<PolicyDocumentDto> {
+    return this.request<PolicyDocumentDto>(
+      'GET',
+      `/compute-policies/${encodeURIComponent(policyId)}/document`,
+    )
+  }
+
+  async saveComputePolicyDocument(
+    policyId: string,
+    requestBody: SavePolicyDocumentRequestDto,
+  ): Promise<PolicyDocumentDto> {
+    return this.request<PolicyDocumentDto>(
+      'PUT',
+      `/compute-policies/${encodeURIComponent(policyId)}/document`,
+      { body: requestBody },
+    )
+  }
+
+  async createManagedComputePolicy(
+    requestBody: CreateManagedPolicyRequestDto,
+  ): Promise<ComputePolicyDto> {
+    return this.request<ComputePolicyDto>('POST', '/compute-policies/create-managed', {
+      body: requestBody,
+    })
+  }
+
+  async unregisterComputePolicy(policyId: string): Promise<void> {
+    await this.request<void>('DELETE', `/compute-policies/${encodeURIComponent(policyId)}`)
   }
 
   /**

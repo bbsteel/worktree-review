@@ -1,5 +1,5 @@
 import { useEffect, useState, type FormEvent } from 'react'
-import { useSearchParams } from 'react-router'
+import { Link, useNavigate, useSearchParams } from 'react-router'
 import { useAdminClient } from '../app/admin-client.ts'
 import { useI18n } from '../i18n.tsx'
 import { Badge } from '../components/ui/badge.tsx'
@@ -50,6 +50,7 @@ function GlobList({ label, globs }: { label: string; globs: string[] }) {
 export function PoliciesPage() {
   const { t } = useI18n()
   const client = useAdminClient()
+  const navigate = useNavigate()
   const [searchParams, setSearchParams] = useSearchParams()
   const section = searchParams.get('section') === 'compute' ? 'compute' : 'review'
   const [reviewPolicies, setReviewPolicies] = useState<ReviewPolicyDto[] | null>(null)
@@ -60,6 +61,8 @@ export function PoliciesPage() {
   const [reviewPath, setReviewPath] = useState('')
   const [computePath, setComputePath] = useState('')
   const [computeProfileId, setComputeProfileId] = useState('')
+  const [managedReviewName, setManagedReviewName] = useState('review-policy.yaml')
+  const [managedComputeName, setManagedComputeName] = useState('compute-policy.yaml')
   const [registering, setRegistering] = useState(false)
   const [registerError, setRegisterError] = useState<string | null>(null)
   const [registerNotice, setRegisterNotice] = useState<string | null>(null)
@@ -135,6 +138,99 @@ export function PoliciesPage() {
     }
   }
 
+  async function createManagedReview() {
+    const filename = managedReviewName.trim()
+    if (filename === '') {
+      return
+    }
+    setRegistering(true)
+    setRegisterError(null)
+    setRegisterNotice(null)
+    try {
+      const created = await client.createManagedReviewPolicy({ filename })
+      setRegisterNotice(t('Created managed Review Policy {name}.', { name: created.name }))
+      navigate(`/policies/review/${created.policy_id}/edit`)
+    } catch (caught) {
+      setRegisterError(
+        caught instanceof ApiError
+          ? `${caught.code}: ${caught.message}`
+          : t('The managed Review Policy could not be created.'),
+      )
+    } finally {
+      setRegistering(false)
+    }
+  }
+
+  async function createManagedCompute() {
+    const filename = managedComputeName.trim()
+    if (filename === '') {
+      return
+    }
+    setRegistering(true)
+    setRegisterError(null)
+    setRegisterNotice(null)
+    try {
+      const created = await client.createManagedComputePolicy({
+        filename,
+        provider_profile_id: computeProfileId === '' ? null : computeProfileId,
+      })
+      setRegisterNotice(t('Created managed Compute Policy {name}.', { name: created.name }))
+      navigate(`/policies/compute/${created.policy_id}/edit`)
+    } catch (caught) {
+      setRegisterError(
+        caught instanceof ApiError
+          ? `${caught.code}: ${caught.message}`
+          : t('The managed Compute Policy could not be created.'),
+      )
+    } finally {
+      setRegistering(false)
+    }
+  }
+
+  async function unregisterReview(policyId: string) {
+    const confirmed = window.confirm(
+      t(
+        'Unregister this Review Policy? This removes the registry entry only and does not delete the policy file on disk.',
+      ),
+    )
+    if (!confirmed) {
+      return
+    }
+    setRegisterError(null)
+    try {
+      await client.unregisterReviewPolicy(policyId)
+      setReloadCounter((count) => count + 1)
+    } catch (caught) {
+      setRegisterError(
+        caught instanceof ApiError
+          ? `${caught.code}: ${caught.message}`
+          : t('The Review Policy could not be unregistered.'),
+      )
+    }
+  }
+
+  async function unregisterCompute(policyId: string) {
+    const confirmed = window.confirm(
+      t(
+        'Unregister this Compute Policy? This removes the registry entry only and does not delete the policy file on disk.',
+      ),
+    )
+    if (!confirmed) {
+      return
+    }
+    setRegisterError(null)
+    try {
+      await client.unregisterComputePolicy(policyId)
+      setReloadCounter((count) => count + 1)
+    } catch (caught) {
+      setRegisterError(
+        caught instanceof ApiError
+          ? `${caught.code}: ${caught.message}`
+          : t('The Compute Policy could not be unregistered.'),
+      )
+    }
+  }
+
   if (loadError !== null) {
     return (
       <main className="mx-auto w-full max-w-4xl px-6 py-6">
@@ -207,22 +303,51 @@ export function PoliciesPage() {
                 required
               />
             </label>
-            <div className="mt-3 flex items-center gap-3">
+            <div className="mt-3 flex flex-wrap items-center gap-3">
               <Button variant="primary" size="sm" type="submit" disabled={registering || reviewPath.trim() === ''}>
                 {registering ? t('Registering…') : t('Register Review Policy')}
               </Button>
-              {registerNotice !== null ? (
+              {registerNotice !== null && section === 'review' ? (
                 <span role="status" className="text-meta text-status-passed">
                   {registerNotice}
                 </span>
               ) : null}
-              {registerError !== null ? (
+              {registerError !== null && section === 'review' ? (
                 <span role="alert" className="text-meta text-status-error">
                   {registerError}
                 </span>
               ) : null}
             </div>
           </form>
+          <div className="mb-3 rounded-lg border border-border bg-surface p-4">
+            <h2 className="text-sm font-semibold text-text-primary">
+              {t('Create managed Review Policy')}
+            </h2>
+            <p className="mt-1 text-meta text-text-secondary">
+              {t('Creates a template under the server managed policies directory and opens the editor.')}
+            </p>
+            <label className="mt-2 flex flex-col gap-1 text-meta text-text-secondary">
+              {t('Filename')}
+              <input
+                type="text"
+                value={managedReviewName}
+                onChange={(event) => {
+                  setManagedReviewName(event.target.value)
+                }}
+                className={`${FIELD_CLASS} font-mono`}
+              />
+            </label>
+            <Button
+              className="mt-3"
+              variant="secondary"
+              size="sm"
+              type="button"
+              disabled={registering || managedReviewName.trim() === ''}
+              onClick={() => void createManagedReview()}
+            >
+              {t('Create and edit')}
+            </Button>
+          </div>
           {reviewPolicies.length === 0 ? (
             <EmptyState
               title={t('No registered Review Policies')}
@@ -242,6 +367,24 @@ export function PoliciesPage() {
                     {policy.builtin ? <Badge tone="neutral" label={t('Built-in')} /> : null}
                     <CopyValue value={policy.sha256} label={t('Review Policy SHA-256')} />
                   </div>
+                  {!policy.builtin ? (
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      <Link
+                        className="inline-flex min-h-9 items-center rounded-md border border-border px-2.5 text-sm"
+                        to={`/policies/review/${policy.policy_id}/edit`}
+                      >
+                        {t('Edit')}
+                      </Link>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="secondary"
+                        onClick={() => void unregisterReview(policy.policy_id)}
+                      >
+                        {t('Unregister')}
+                      </Button>
+                    </div>
+                  ) : null}
                   <dl className="mt-2">
                     <DefinitionRow term={t('Required dimensions')}>
                       <span className="font-mono text-meta">
@@ -320,22 +463,51 @@ export function PoliciesPage() {
                 </select>
               </label>
             </div>
-            <div className="mt-3 flex items-center gap-3">
+            <div className="mt-3 flex flex-wrap items-center gap-3">
               <Button variant="primary" size="sm" type="submit" disabled={registering || computePath.trim() === ''}>
                 {registering ? t('Registering…') : t('Register Compute Policy')}
               </Button>
-              {registerNotice !== null ? (
+              {registerNotice !== null && section === 'compute' ? (
                 <span role="status" className="text-meta text-status-passed">
                   {registerNotice}
                 </span>
               ) : null}
-              {registerError !== null ? (
+              {registerError !== null && section === 'compute' ? (
                 <span role="alert" className="text-meta text-status-error">
                   {registerError}
                 </span>
               ) : null}
             </div>
           </form>
+          <div className="mb-3 rounded-lg border border-border bg-surface p-4">
+            <h2 className="text-sm font-semibold text-text-primary">
+              {t('Create managed Compute Policy')}
+            </h2>
+            <p className="mt-1 text-meta text-text-secondary">
+              {t('Creates a template under the server managed policies directory and opens the editor.')}
+            </p>
+            <label className="mt-2 flex flex-col gap-1 text-meta text-text-secondary">
+              {t('Filename')}
+              <input
+                type="text"
+                value={managedComputeName}
+                onChange={(event) => {
+                  setManagedComputeName(event.target.value)
+                }}
+                className={`${FIELD_CLASS} font-mono`}
+              />
+            </label>
+            <Button
+              className="mt-3"
+              variant="secondary"
+              size="sm"
+              type="button"
+              disabled={registering || managedComputeName.trim() === ''}
+              onClick={() => void createManagedCompute()}
+            >
+              {t('Create and edit')}
+            </Button>
+          </div>
           {computePolicies.length === 0 ? (
             <EmptyState
               title={t('No registered Compute Policies')}
@@ -353,6 +525,22 @@ export function PoliciesPage() {
                       {policy.name} {policy.version}
                     </h2>
                     <CopyValue value={policy.sha256} label={t('Compute Policy SHA-256')} />
+                  </div>
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    <Link
+                      className="inline-flex min-h-9 items-center rounded-md border border-border px-2.5 text-sm"
+                      to={`/policies/compute/${policy.policy_id}/edit`}
+                    >
+                      {t('Edit')}
+                    </Link>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="secondary"
+                      onClick={() => void unregisterCompute(policy.policy_id)}
+                    >
+                      {t('Unregister')}
+                    </Button>
                   </div>
                   <dl className="mt-2">
                     <DefinitionRow term={t('Provider / Model')}>

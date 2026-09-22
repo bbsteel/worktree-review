@@ -81,6 +81,8 @@ describe('SessionInsightCard', () => {
   it('states that observation never affects the gate', () => {
     render(<SessionInsightCard status={status({ state: 'disconnected' })} />)
 
-    expect(screen.getByText(/Reviews run normally without it/)).toBeInTheDocument()
+    expect(
+      screen.getByText(/Reviews still write a Session Journal for SI to read/),
+    ).toBeInTheDocument()
   })
 })
