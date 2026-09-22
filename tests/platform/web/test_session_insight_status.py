@@ -211,3 +211,78 @@ async def test_disabled_session_insight_still_completes_reviews(
     assert run is not None
     assert run.run_status.value == "completed"
     assert run.result_json is not None
+
+
+@pytest.mark.asyncio
+async def test_web_attempt_still_writes_session_journal_for_si_reader(
+    tmp_path: Path, git_repository: Path, policy_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Confirm-only: local Attempts keep writing Journal files SI can consume."""
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key-not-sent-anywhere")
+    journal_root = tmp_path / "sessions"
+    runtime = await open_web_runtime(
+        tmp_path / "si-journal.sqlite",
+        journal_root=journal_root,
+    )
+    assert runtime.journal is not None
+    runtime.provider_factory = lambda _policy, _config: ScriptedProvider(
+        payloads={"correctness": {"findings": []}}
+    )
+    repository = await register_local_repository(
+        runtime.store, requested_root=git_repository, display_name="demo"
+    )
+    review = await register_trusted_policy(
+        runtime.store, policy_dir / "review-policy.yaml", kind="review"
+    )
+    await runtime.store.insert_provider_profile(
+        profile_id="profile-test",
+        name="test",
+        provider="anthropic",
+        credential_reference="${ANTHROPIC_API_KEY}",
+    )
+    compute = await register_trusted_policy(
+        runtime.store,
+        policy_dir / "compute-policy.yaml",
+        kind="compute",
+        provider_profile_id="profile-test",
+    )
+    attempt_id = "attempt-si-journal"
+    from worktree_review.application.lifecycle import RunStatus
+    from worktree_review.application.review_events import ReviewEvent as _ReviewEvent
+
+    await runtime.store.create_attempt_with_initial_event_and_idempotency(
+        attempt_id=attempt_id,
+        idempotency_key="si-journal",
+        request_digest="d-journal",
+        initial_event=_ReviewEvent(
+            sequence=1,
+            occurred_at=utc_now(),
+            attempt_id=attempt_id,
+            surface="web",
+            event_type="attempt.created",
+            payload={},
+        ),
+        run_status=RunStatus.QUEUED,
+        request_json=json.dumps(
+            {
+                "repository_id": repository["id"],
+                "source": {"kind": "local-worktree", "target_ref": "main"},
+                "review_policy_id": review["id"],
+                "compute_policy_id": compute["id"],
+            }
+        ),
+    )
+    await execute_attempt(runtime, attempt_id)
+    run = await runtime.store.get_run(attempt_id)
+    assert run is not None
+    assert run.run_status.value == "completed"
+
+    session_dir = journal_root / attempt_id
+    assert (session_dir / "events.jsonl").is_file()
+    assert (session_dir / "metadata.json").is_file()
+    assert (session_dir / "result.json").is_file()
+    metadata = json.loads((session_dir / "metadata.json").read_text(encoding="utf-8"))
+    assert metadata["schema"] == METADATA_SCHEMA
+    assert metadata["attempt_id"] == attempt_id
+    assert int(metadata["last_persisted_sequence"]) >= 1

@@ -29,6 +29,14 @@ export type AdminClient = Pick<
   | 'getComputePolicy'
   | 'registerReviewPolicy'
   | 'registerComputePolicy'
+  | 'getReviewPolicyDocument'
+  | 'saveReviewPolicyDocument'
+  | 'createManagedReviewPolicy'
+  | 'unregisterReviewPolicy'
+  | 'getComputePolicyDocument'
+  | 'saveComputePolicyDocument'
+  | 'createManagedComputePolicy'
+  | 'unregisterComputePolicy'
 >
 
 export const AdminClientContext = createContext<AdminClient | null>(null)

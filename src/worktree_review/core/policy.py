@@ -37,6 +37,7 @@ ProviderName = Literal["anthropic", "openai", "local-cli"]
 
 DEFAULT_MAX_FILE_BYTES = 1_048_576
 DEFAULT_OPTIONAL_CONTEXT_GLOBS: tuple[str, ...] = ("AGENTS.md", "CLAUDE.md")
+BUILTIN_REVIEW_POLICY_ID = "builtin-review-policy"
 BUILTIN_REVIEW_POLICY_VERSION = "0.1.0"
 BUILTIN_REVIEW_POLICY_DOCUMENT: dict[str, Any] = {
     "schema": REVIEW_POLICY_DOCUMENT_ID,
@@ -175,6 +176,12 @@ def load_builtin_review_policy() -> tuple[ReviewPolicy, PolicyVersionIdentity]:
     except Exception as exc:
         raise PolicyValidationError(f"built-in Review Policy is invalid: {exc}") from exc
     return policy, policy_version_identity(document, policy.version)
+
+
+def is_builtin_review_policy_id(policy_id: str) -> bool:
+    """True when the Web/API id refers to the product built-in Review Policy."""
+
+    return policy_id == BUILTIN_REVIEW_POLICY_ID
 
 
 def load_compute_policy(path: Path) -> tuple[ComputePolicy, PolicyVersionIdentity]:

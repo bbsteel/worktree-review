@@ -22,6 +22,7 @@ from worktree_review.application.review_events import (
 )
 from worktree_review.application.review_service import ReviewApplicationService
 from worktree_review.core.pipeline import ReviewRequest
+from worktree_review.core.policy import is_builtin_review_policy_id
 from worktree_review.core.provider import UsageRecord, build_provider
 from worktree_review.core.report import ReviewProgressEvent
 from worktree_review.platform.cli.invocation import prepare_cli_review
@@ -137,13 +138,21 @@ async def _execute_attempt_inner(runtime: WebRuntime, attempt_id: str) -> None:
         return
     request_body = json.loads(run.request_json)
     repository = await runtime.store.get_repository(str(request_body.get("repository_id") or ""))
-    review_row = await runtime.store.get_trusted_policy(
-        "trusted_review_policies", str(request_body.get("review_policy_id") or "")
+    review_policy_id = str(request_body.get("review_policy_id") or "")
+    uses_builtin_review_policy = is_builtin_review_policy_id(review_policy_id)
+    review_row = (
+        None
+        if uses_builtin_review_policy
+        else await runtime.store.get_trusted_policy("trusted_review_policies", review_policy_id)
     )
     compute_row = await runtime.store.get_trusted_policy(
         "trusted_compute_policies", str(request_body.get("compute_policy_id") or "")
     )
-    if repository is None or review_row is None or compute_row is None:
+    if (
+        repository is None
+        or (review_row is None and not uses_builtin_review_policy)
+        or compute_row is None
+    ):
         await runtime.store.update_run_status(attempt_id, RunStatus.FAILED)
         await runtime.recorder.record(
             attempt_id=attempt_id,
@@ -163,6 +172,9 @@ async def _execute_attempt_inner(runtime: WebRuntime, attempt_id: str) -> None:
     await runtime.recorder.hydrate(attempt_id)
     compute_path = Path(compute_row["path"])
     compute_source_format = compute_row.get("source_format") or "compute-policy"
+    # Built-in Review Policy has no trusted file; prepare_cli_review loads it when
+    # policy_path is None.
+    review_policy_path = None if review_row is None else Path(review_row["path"])
     try:
         if compute_source_format == "user-config":
             prepared = await prepare_cli_review(
@@ -170,7 +182,7 @@ async def _execute_attempt_inner(runtime: WebRuntime, attempt_id: str) -> None:
                 target_ref=target_raw if isinstance(target_raw, str) else None,
                 proposed_ref=proposed_raw if isinstance(proposed_raw, str) else None,
                 recent_commit_count=int(recent) if recent is not None else None,
-                policy_path=Path(review_row["path"]),
+                policy_path=review_policy_path,
                 config_path=compute_path,
             )
         else:
@@ -179,7 +191,7 @@ async def _execute_attempt_inner(runtime: WebRuntime, attempt_id: str) -> None:
                 target_ref=target_raw if isinstance(target_raw, str) else None,
                 proposed_ref=proposed_raw if isinstance(proposed_raw, str) else None,
                 recent_commit_count=int(recent) if recent is not None else None,
-                policy_path=Path(review_row["path"]),
+                policy_path=review_policy_path,
                 compute_policy_path=compute_path,
             )
     except Exception as exc:
@@ -193,9 +205,13 @@ async def _execute_attempt_inner(runtime: WebRuntime, attempt_id: str) -> None:
         return
     # Fail closed when a trusted policy file changed after registration:
     # the registered sha256 is the frozen identity the user reviewed.
-    drift = _trusted_policy_drift(review_row, prepared.review_policy_version) or (
-        _trusted_policy_drift(compute_row, prepared.compute_policy_version)
+    # Built-in Review Policy is product-owned and has no path-based drift check.
+    review_drift = (
+        None
+        if review_row is None
+        else _trusted_policy_drift(review_row, prepared.review_policy_version)
     )
+    drift = review_drift or _trusted_policy_drift(compute_row, prepared.compute_policy_version)
     if drift is not None:
         await runtime.store.update_run_status(attempt_id, RunStatus.FAILED)
         await runtime.recorder.record(

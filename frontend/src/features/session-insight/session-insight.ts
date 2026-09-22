@@ -26,7 +26,7 @@ export const SESSION_INSIGHT_STATE_PRESENTATION: Record<
   disconnected: {
     label: 'Disconnected',
     description:
-      'Session Insight is not running or no address is configured. Reviews run normally without it.',
+      'Session Insight is not running or its address is set only in process environment. Reviews still write a Session Journal for SI to read; the Web UI does not configure the SI address.',
   },
   incompatible: {
     label: 'Version incompatible',

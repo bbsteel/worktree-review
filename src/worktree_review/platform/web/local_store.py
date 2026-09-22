@@ -470,6 +470,67 @@ class SqliteReviewRunStore:
 
         return await asyncio.to_thread(_get)
 
+    def update_trusted_policy_identity_sync(
+        self,
+        *,
+        table: str,
+        policy_id: str,
+        version_semver: str,
+        version_sha256: str,
+        source_format: str | None = None,
+    ) -> bool:
+        """Update registered Policy identity from a worker already holding a file lock."""
+
+        if table not in {"trusted_review_policies", "trusted_compute_policies"}:
+            raise InvalidInvocationError("unknown policy table")
+        with closing(self._connect()) as connection:
+            if table == "trusted_compute_policies":
+                cursor = connection.execute(
+                    "UPDATE trusted_compute_policies SET version_semver = ?, "
+                    "version_sha256 = ?, source_format = ? WHERE id = ?",
+                    (version_semver, version_sha256, source_format, policy_id),
+                )
+            else:
+                cursor = connection.execute(
+                    "UPDATE trusted_review_policies SET version_semver = ?, "
+                    "version_sha256 = ? WHERE id = ?",
+                    (version_semver, version_sha256, policy_id),
+                )
+            connection.commit()
+            return cursor.rowcount > 0
+
+    async def update_trusted_policy_identity(
+        self,
+        *,
+        table: str,
+        policy_id: str,
+        version_semver: str,
+        version_sha256: str,
+        source_format: str | None = None,
+    ) -> bool:
+        async with self._lock:
+            return await asyncio.to_thread(
+                self.update_trusted_policy_identity_sync,
+                table=table,
+                policy_id=policy_id,
+                version_semver=version_semver,
+                version_sha256=version_sha256,
+                source_format=source_format,
+            )
+
+    async def delete_trusted_policy(self, table: str, policy_id: str) -> bool:
+        if table not in {"trusted_review_policies", "trusted_compute_policies"}:
+            raise InvalidInvocationError("unknown policy table")
+
+        def _delete() -> bool:
+            with closing(self._connect()) as connection:
+                cursor = connection.execute(f"DELETE FROM {table} WHERE id = ?", (policy_id,))
+                connection.commit()
+                return cursor.rowcount > 0
+
+        async with self._lock:
+            return await asyncio.to_thread(_delete)
+
     async def get_provider_profile(self, profile_id: str) -> dict[str, str | None] | None:
         def _get() -> dict[str, str | None] | None:
             with closing(self._connect()) as connection:

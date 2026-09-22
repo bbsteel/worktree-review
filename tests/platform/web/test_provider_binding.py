@@ -508,7 +508,9 @@ async def test_trusted_policy_drift_after_registration_fails_closed(
             encoding="utf-8",
         )
         drifted_listing = client.get("/api/v1/review-policies").json()
-        assert drifted_listing[0]["drifted"] is True
+        drifted = next(item for item in drifted_listing if item["policy_id"] == review["id"])
+        assert drifted["drifted"] is True
+        assert drifted_listing[0]["builtin"] is True
     await execute_attempt(runtime, attempt_id)
     run = await runtime.store.get_run(attempt_id)
     assert run is not None

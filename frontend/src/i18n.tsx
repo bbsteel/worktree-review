@@ -85,6 +85,23 @@ export const messages: Record<Locale, Record<string, string>> = {
     'Overview unavailable': 'Overview unavailable',
     'Action items first. Statistics and trends are secondary.':
       'Action items first. Statistics and trends are secondary.',
+    'Finish local setup': 'Finish local setup',
+    'Register a repository and a Compute Policy bound to a configured Provider before starting reviews. The built-in Review Policy is enough until you register a custom one.':
+      'Register a repository and a Compute Policy bound to a configured Provider before starting reviews. The built-in Review Policy is enough until you register a custom one.',
+    'Register a repository': 'Register a repository',
+    'Review Policy ready (built-in or registered)':
+      'Review Policy ready (built-in or registered)',
+    'Compute Policy bound to a configured Provider':
+      'Compute Policy bound to a configured Provider',
+    'Open Compute Policies': 'Open Compute Policies',
+    'Open Providers': 'Open Providers',
+    'Finish local setup before starting a review': 'Finish local setup before starting a review',
+    'Submit stays disabled until a repository, Review Policy, and Compute Policy with a configured Provider are available.':
+      'Submit stays disabled until a repository, Review Policy, and Compute Policy with a configured Provider are available.',
+    'The selected Compute Policy is not bound to a Provider with a configured credential. Fix the binding on Policies or Providers.':
+      'The selected Compute Policy is not bound to a Provider with a configured credential. Fix the binding on Policies or Providers.',
+    'Session Insight is not running or its address is set only in process environment. Reviews still write a Session Journal for SI to read; the Web UI does not configure the SI address.':
+      'Session Insight is not running or its address is set only in process environment. Reviews still write a Session Journal for SI to read; the Web UI does not configure the SI address.',
     Surface: 'Surface',
     'All surfaces': 'All surfaces',
     'Needs attention · {count}': 'Needs attention · {count}',
@@ -773,6 +790,47 @@ export const messages: Record<Locale, Record<string, string>> = {
     'Not bound (reviews cannot start)': 'Not bound (reviews cannot start)',
     'Not bound — reviews using this policy cannot start':
       'Not bound — reviews using this policy cannot start',
+    'Create managed Review Policy': 'Create managed Review Policy',
+    'Create managed Compute Policy': 'Create managed Compute Policy',
+    'Creates a template under the server managed policies directory and opens the editor.':
+      'Creates a template under the server managed policies directory and opens the editor.',
+    Filename: 'Filename',
+    'Create and edit': 'Create and edit',
+    'Created managed Review Policy {name}.': 'Created managed Review Policy {name}.',
+    'Created managed Compute Policy {name}.': 'Created managed Compute Policy {name}.',
+    'The managed Review Policy could not be created.':
+      'The managed Review Policy could not be created.',
+    'The managed Compute Policy could not be created.':
+      'The managed Compute Policy could not be created.',
+    Unregister: 'Unregister',
+    'Unregister this Review Policy? This removes the registry entry only and does not delete the policy file on disk.':
+      'Unregister this Review Policy? This removes the registry entry only and does not delete the policy file on disk.',
+    'Unregister this Compute Policy? This removes the registry entry only and does not delete the policy file on disk.':
+      'Unregister this Compute Policy? This removes the registry entry only and does not delete the policy file on disk.',
+    'The Review Policy could not be unregistered.': 'The Review Policy could not be unregistered.',
+    'The Compute Policy could not be unregistered.':
+      'The Compute Policy could not be unregistered.',
+    'Edit Review Policy': 'Edit Review Policy',
+    'Edit Compute Policy': 'Edit Compute Policy',
+    'Back to Policies': 'Back to Policies',
+    'Loading policy editor': 'Loading policy editor',
+    'Loading policy document': 'Loading policy document',
+    'The policy document could not be loaded.': 'The policy document could not be loaded.',
+    'Form subset': 'Form subset',
+    'Only a few fields are edited here. Everything else stays in the YAML document.':
+      'Only a few fields are edited here. Everything else stays in the YAML document.',
+    'Blocking severities (comma-separated)': 'Blocking severities (comma-separated)',
+    'Apply form to YAML': 'Apply form to YAML',
+    'Sync form from YAML': 'Sync form from YAML',
+    'The form could not be applied to YAML.': 'The form could not be applied to YAML.',
+    'YAML could not be parsed into the form.': 'YAML could not be parsed into the form.',
+    'Advanced YAML': 'Advanced YAML',
+    'Save policy': 'Save policy',
+    'The policy could not be saved.': 'The policy could not be saved.',
+    'The policy file changed on disk. Reload the editor before saving again.':
+      'The policy file changed on disk. Reload the editor before saving again.',
+    'Reload from disk': 'Reload from disk',
+    'Reloading…': 'Reloading…',
     'Session Insight observation is advisory and never affects the Gate.':
       'Session Insight observation is advisory and never affects the Gate.',
     // P3: authorized bypass and audit log
@@ -916,6 +974,21 @@ export const messages: Record<Locale, Record<string, string>> = {
     'Loading overview': '正在加载概览',
     'Overview unavailable': '概览不可用',
     'Action items first. Statistics and trends are secondary.': '优先处理待办事项，统计和趋势作为辅助信息。',
+    'Finish local setup': '完成本地配置',
+    'Register a repository and a Compute Policy bound to a configured Provider before starting reviews. The built-in Review Policy is enough until you register a custom one.':
+      '发起检视前请登记仓库，并登记绑定了已配置凭证 Provider 的 Compute Policy。在登记自定义 Review Policy 之前，内置默认即可。',
+    'Register a repository': '登记仓库',
+    'Review Policy ready (built-in or registered)': 'Review Policy 就绪（内置或已登记）',
+    'Compute Policy bound to a configured Provider': 'Compute Policy 已绑定已配置凭证的 Provider',
+    'Open Compute Policies': '打开 Compute Policies',
+    'Open Providers': '打开 Providers',
+    'Finish local setup before starting a review': '发起检视前请先完成本地配置',
+    'Submit stays disabled until a repository, Review Policy, and Compute Policy with a configured Provider are available.':
+      '在具备仓库、Review Policy，以及绑定了已配置凭证 Provider 的 Compute Policy 之前，提交保持禁用。',
+    'The selected Compute Policy is not bound to a Provider with a configured credential. Fix the binding on Policies or Providers.':
+      '所选 Compute Policy 未绑定到凭证已配置的 Provider。请在 Policies 或 Providers 中修复绑定。',
+    'Session Insight is not running or its address is set only in process environment. Reviews still write a Session Journal for SI to read; the Web UI does not configure the SI address.':
+      'Session Insight 未运行，或其地址仅由进程环境配置。检视仍会写入可供 SI 读取的 Session Journal；Web UI 不负责配置 SI 地址。',
     Surface: '来源',
     'All surfaces': '全部来源',
     'Needs attention · {count}': '需要关注 · {count}',
@@ -1568,6 +1641,44 @@ export const messages: Record<Locale, Record<string, string>> = {
     'Bound Provider Profile': '绑定的 Provider Profile',
     'Not bound (reviews cannot start)': '未绑定（无法发起检视）',
     'Not bound — reviews using this policy cannot start': '未绑定 — 使用此策略的检视无法启动',
+    'Create managed Review Policy': '创建托管 Review Policy',
+    'Create managed Compute Policy': '创建托管 Compute Policy',
+    'Creates a template under the server managed policies directory and opens the editor.':
+      '在服务器托管策略目录下创建模板并打开编辑器。',
+    Filename: '文件名',
+    'Create and edit': '创建并编辑',
+    'Created managed Review Policy {name}.': '已创建托管 Review Policy {name}。',
+    'Created managed Compute Policy {name}.': '已创建托管 Compute Policy {name}。',
+    'The managed Review Policy could not be created.': '无法创建托管 Review Policy。',
+    'The managed Compute Policy could not be created.': '无法创建托管 Compute Policy。',
+    Unregister: '取消登记',
+    'Unregister this Review Policy? This removes the registry entry only and does not delete the policy file on disk.':
+      '取消登记此 Review Policy？这只会移除注册表条目，不会删除磁盘上的策略文件。',
+    'Unregister this Compute Policy? This removes the registry entry only and does not delete the policy file on disk.':
+      '取消登记此 Compute Policy？这只会移除注册表条目，不会删除磁盘上的策略文件。',
+    'The Review Policy could not be unregistered.': '无法取消登记 Review Policy。',
+    'The Compute Policy could not be unregistered.': '无法取消登记 Compute Policy。',
+    'Edit Review Policy': '编辑 Review Policy',
+    'Edit Compute Policy': '编辑 Compute Policy',
+    'Back to Policies': '返回策略',
+    'Loading policy editor': '正在加载策略编辑器',
+    'Loading policy document': '正在加载策略文档',
+    'The policy document could not be loaded.': '无法加载策略文档。',
+    'Form subset': '表单子集',
+    'Only a few fields are edited here. Everything else stays in the YAML document.':
+      '此处仅编辑少量字段，其余内容保留在 YAML 文档中。',
+    'Blocking severities (comma-separated)': '阻塞严重级别（逗号分隔）',
+    'Apply form to YAML': '将表单应用到 YAML',
+    'Sync form from YAML': '从 YAML 同步表单',
+    'The form could not be applied to YAML.': '无法将表单应用到 YAML。',
+    'YAML could not be parsed into the form.': '无法将 YAML 解析到表单。',
+    'Advanced YAML': '高级 YAML',
+    'Save policy': '保存策略',
+    'The policy could not be saved.': '无法保存策略。',
+    'The policy file changed on disk. Reload the editor before saving again.':
+      '磁盘上的策略文件已变更。请重新加载编辑器后再保存。',
+    'Reload from disk': '从磁盘重新加载',
+    'Reloading…': '正在重新加载…',
     'Session Insight observation is advisory and never affects the Gate.':
       'Session Insight 观测仅为建议性，绝不影响 Gate。',
     // P3: 授权 Bypass 与审计日志

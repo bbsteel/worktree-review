@@ -6,6 +6,7 @@ from typing import Any
 import pytest
 
 from worktree_review.application.review_service import ReviewApplicationService
+from worktree_review.core.policy import BUILTIN_REVIEW_POLICY_ID
 from worktree_review.platform.web.registry import (
     register_local_repository,
     register_trusted_policy,
@@ -169,7 +170,89 @@ async def test_overview_and_repository_registration(
         assert overview.json()["stats"]["attempt_count"] == 1
         policies = client.get("/api/v1/review-policies")
         assert policies.status_code == 200
-        assert policies.json()[0]["policy_id"] == review["id"]
+        listed_policies = policies.json()
+        assert listed_policies[0]["policy_id"] == BUILTIN_REVIEW_POLICY_ID
+        assert listed_policies[0]["builtin"] is True
+        assert {item["policy_id"] for item in listed_policies} >= {
+            BUILTIN_REVIEW_POLICY_ID,
+            review["id"],
+        }
         compute_policies = client.get("/api/v1/compute-policies")
         assert compute_policies.status_code == 200
         assert compute_policies.json()[0]["policy_id"] == compute["id"]
+
+
+@pytest.mark.asyncio
+async def test_builtin_review_policy_list_get_and_create(
+    tmp_path: Path, git_repository: Path, policy_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def _forbidden(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("pipeline must not run inside the HTTP request")
+
+    monkeypatch.setattr(ReviewApplicationService, "execute", _forbidden)
+    client, runtime, repository, _review, compute = await _prepared_client(
+        tmp_path, git_repository, policy_dir
+    )
+    with client:
+        listed = client.get("/api/v1/review-policies")
+        assert listed.status_code == 200
+        builtin = listed.json()[0]
+        assert builtin["policy_id"] == BUILTIN_REVIEW_POLICY_ID
+        assert builtin["builtin"] is True
+        assert builtin["required_dimensions"]
+
+        fetched = client.get(f"/api/v1/review-policies/{BUILTIN_REVIEW_POLICY_ID}")
+        assert fetched.status_code == 200
+        assert fetched.json()["policy_id"] == BUILTIN_REVIEW_POLICY_ID
+        assert fetched.json()["builtin"] is True
+
+        created = client.post(
+            "/api/v1/reviews",
+            json={
+                "repository_id": repository["id"],
+                "source": {"kind": "local-worktree", "target_ref": "main"},
+                "review_policy_id": BUILTIN_REVIEW_POLICY_ID,
+                "compute_policy_id": compute["id"],
+            },
+            headers=_headers("builtin-key"),
+        )
+        assert created.status_code == 202, created.text
+        attempt_id = created.json()["attempt_id"]
+        stored = await runtime.store.get_run(attempt_id)
+        assert stored is not None
+        assert BUILTIN_REVIEW_POLICY_ID in (stored.request_json or "")
+        detail = client.get(f"/api/v1/reviews/{attempt_id}")
+        assert detail.status_code == 200
+        assert detail.json()["run_status"] == "queued"
+    assert runtime.queue.qsize() == 1
+
+
+@pytest.mark.asyncio
+async def test_builtin_review_policy_document_and_unregister_rejected(
+    tmp_path: Path, git_repository: Path, policy_dir: Path
+) -> None:
+    client, _runtime, _repository, _review, _compute = await _prepared_client(
+        tmp_path, git_repository, policy_dir
+    )
+    with client:
+        document = client.get(f"/api/v1/review-policies/{BUILTIN_REVIEW_POLICY_ID}/document")
+        assert document.status_code == 400
+        assert document.json()["error"]["code"] == "builtin_policy_readonly"
+
+        edited = client.put(
+            f"/api/v1/review-policies/{BUILTIN_REVIEW_POLICY_ID}/document",
+            headers=_headers(),
+            json={
+                "expected_content_sha256": "0" * 64,
+                "text": "schema: worktree-review.review-policy/v1\n",
+            },
+        )
+        assert edited.status_code == 400
+        assert edited.json()["error"]["code"] == "builtin_policy_readonly"
+
+        deleted = client.delete(
+            f"/api/v1/review-policies/{BUILTIN_REVIEW_POLICY_ID}",
+            headers=_headers(),
+        )
+        assert deleted.status_code == 400
+        assert deleted.json()["error"]["code"] == "builtin_policy_readonly"

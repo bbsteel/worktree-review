@@ -4,6 +4,7 @@ import { AuditLogPage } from '../pages/AuditLogPage.tsx'
 import { NewReviewPage } from '../pages/NewReviewPage.tsx'
 import { OverviewPage } from '../pages/OverviewPage.tsx'
 import { PoliciesPage } from '../pages/PoliciesPage.tsx'
+import { PolicyEditorPage } from '../pages/PolicyEditorPage.tsx'
 import { ProvidersPage } from '../pages/ProvidersPage.tsx'
 import { RepositoriesPage } from '../pages/RepositoriesPage.tsx'
 import { DataSourceProvider } from './DataSourceProvider.tsx'
@@ -25,6 +26,14 @@ export const router = createBrowserRouter([
       { path: 'repositories', element: <RepositoriesPage /> },
       { path: 'providers', element: <ProvidersPage /> },
       { path: 'policies', element: <PoliciesPage /> },
+      {
+        path: 'policies/review/:policyId/edit',
+        element: <PolicyEditorPage kind="review" />,
+      },
+      {
+        path: 'policies/compute/:policyId/edit',
+        element: <PolicyEditorPage kind="compute" />,
+      },
       { path: 'audit', element: <AuditLogPage /> },
     ],
   },

@@ -4,7 +4,6 @@ import {
   GitPullRequest,
   LayoutDashboard,
   ScrollText,
-  Settings,
   Shield,
   Unplug,
 } from 'lucide-react'
@@ -18,7 +17,6 @@ const previewReason = {
   reviews: 'Reviews list is Preview. Open a demo case from the prototype banner to see a Review Detail route.',
   sessionInsight: 'Session Insight observation is advisory and never affects the Gate.',
   github: 'GitHub integration is Preview and is not connected.',
-  settings: 'Settings is Preview and is not available in this Pre-Alpha prototype.',
 }
 
 const NAV_LINK_CLASS =
@@ -91,9 +89,6 @@ export function SideNav({ onNavigate }: { onNavigate?: () => void }) {
           icon={Cable}
         />
         <PreviewControl label={t('GitHub')} reason={t(previewReason.github)} icon={GitPullRequest} />
-        <div className="mt-auto">
-          <PreviewControl label={t('Settings')} reason={t(previewReason.settings)} icon={Settings} />
-        </div>
       </nav>
       <div className="border-t border-border px-4 py-3 text-xs text-text-secondary">
         <p>{t('Web service: {service}', { service: t(source.kind === 'mock' ? 'prototype mock' : 'live local API') })}</p>

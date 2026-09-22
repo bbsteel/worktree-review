@@ -612,11 +612,13 @@ Providers
   Session Insight
   GitHub
 Audit Log
-系统设置 Settings
 ```
 
 “发起检视”是全局主操作，不占用固定导航项。Demo Cases 只在演示或开发模式显示，不作为生产
-主导航。首版 Policies 页面为只读登记和检查，不提供任意 YAML 编辑器。
+主导航。Policies 页面支持登记已有服务器路径、在托管目录新建模板，以及对已登记**外部**
+Policy 进行内容编辑（最小表单子集 + 高级 YAML）；内置默认 Review Policy 只读不可改。不提供
+「系统设置」导航：进程绑定、SQLite 路径与 Session Insight 地址仍由启动环境配置；Session
+Insight 通过消费 Session Journal 识别检视过程，Web UI 不负责配置 SI。
 
 `Reviews` 是面向用户的统一概念：列表按 Review Request 和来源组织，内部可包含一个或多个
 Attempt。旧名称 `Runs` 不再作为主导航名称，但 API 和 Store 仍可以使用明确的
@@ -729,7 +731,7 @@ Overview 首版包含：
 │ ○ GitHub      │ │ correctness 完成 · 01:24          │ │ 6 child sessions│ │
 │               │ └───────────────────────────────────┘ └────────────────┘ │
 │ Audit Log     │                                                            │
-│ Settings      │ 最近检视                                                   │
+│               │ 最近检视                                                   │
 │               │ payment-service  Blocked  2 findings  2m18s  刚刚         │
 │               │ session-insight  Passed   0 findings  2m11s  14:32        │
 │               │                                                            │
@@ -894,6 +896,28 @@ Compute Policies：
 页面固定说明：Review Policy 决定检视与 Gate；Compute Policy 决定模型、预算和调用限制。
 Policy 必须来自被检视 Repository 之外的可信位置。Repository 内的指令、评论和文档均是不可信
 上下文，不能修改 Gate 规则。
+
+### 12.5 Policy 内容编辑（本地 loopback 修订）
+
+本地 loopback 允许对**已登记外部** Policy 做内容编辑；这偏离早期「不做任意 YAML 编辑器」
+的首版约束，但信任边界不变：
+
+1. **登记已有路径**：浏览器只提交服务器路径；路径解析后必须位于所有已登记 Repository 之外。
+2. **托管新建**：默认在 `$XDG_DATA_HOME/worktree-review/policies/`（无 `XDG_DATA_HOME` 时为
+   `~/.local/share/worktree-review/policies/`）创建模板文件并自动登记；用户可改文件名。
+3. **编辑器**：同一文档的双模式——表单只覆盖最少字段（Review：`version` +
+   blocking severities；Compute：`version` + provider/model；展示名取自登记路径，
+   schema 禁止 `name` 字段）；高级 YAML 编辑全文；表单未覆盖字段在往返中保留；
+   保存前 schema + 模型校验。
+4. **保存**：携带编辑器最近一次加载的原始文本指纹 `content_sha256`（UTF-8 原文哈希，
+   含注释/格式）；磁盘相对该值漂移返回 409。GET 另返回解析后的策略身份 `sha256` 与
+   登记身份 `registered_sha256` 供漂移展示。保存前再次校验仓库外边界；原子写盘后更新
+   登记身份。历史 Attempt 只认冻结快照，编辑不影响已完成 Attempt。
+
+5. **取消登记**：只删注册表行，不删磁盘文件；即使曾被 Attempt 引用也允许取消登记。
+6. **内置 Policy**：不可在编辑器中修改。
+
+授权的 `github-oauth` 部署不开放上述本地管理面（既有 fail-closed）。
 
 ## 13. Review Detail 页面
 
@@ -1683,3 +1707,12 @@ Token、Cost 或 Retention 未知时显示 `Unknown` 与原因，不显示 0 或
 的 Recharts；Overview 默认展示最近 30 天，并允许切换时间范围。在以上开放项确定前，可以先
 完成 ReviewEvent、应用服务、页面信息架构和三类 Demo Result，因为它们不依赖 GitHub 部署
 地址或 Session Insight 最终深链接格式。
+
+## 28. 修订记录：本地 loopback 网页配齐业务配置
+
+- 日期：2026-09-21
+- 决定：在本地 loopback 完成 Repositories / Providers / Policies 业务配置的网页闭环；
+  Session Insight 不通过 Web 配置地址，仅保证 Session Journal 可被 SI Reader 消费。
+- 主要变更：§8 导航去掉 Settings；§12.5 新增 Policy 内容编辑契约；Credentials 仍只存
+  `${ENV_VAR}` 引用；首启用 Overview 清单 + New Review 缺项阻断。
+- 实现切片：设计修订 → Policy document API → 编辑器 UI → 清单/导航。

@@ -13,6 +13,11 @@ import type {
   ReviewPolicyDto,
 } from '../data/api/dto.ts'
 import { ApiError, IdempotencyConflictError } from '../data/api/review-api-client.ts'
+import { ConfigSetupChecklist } from '../features/config-setup/ConfigSetupChecklist.tsx'
+import {
+  evaluateConfigSetup,
+  selectedComputeCredentialReady,
+} from '../features/config-setup/config-readiness.ts'
 import {
   buildCreateReviewRequest,
   describeSourceSelection,
@@ -174,8 +179,22 @@ export function NewReviewPage() {
   const sourceSelection = describeSourceSelection(form)
   const committedRefDirty =
     form.sourceMode === 'local-committed-ref' && repositoryStatus?.dirty === true
+  const setup = evaluateConfigSetup(catalog)
+  const selectedCredentialReady = selectedComputeCredentialReady(
+    selectedComputePolicy,
+    catalog.providerProfiles,
+  )
+  const submitBlockedByCatalog = setup.catalogIncomplete
+  const submitBlockedBySelection =
+    !submitBlockedByCatalog &&
+    form.computePolicyId !== '' &&
+    selectedComputePolicy !== null &&
+    !selectedCredentialReady
 
   async function submit() {
+    if (submitBlockedByCatalog || submitBlockedBySelection) {
+      return
+    }
     const nextErrors = validateNewReviewForm(form)
     if (committedRefDirty) {
       nextErrors.proposedRef =
@@ -214,6 +233,18 @@ export function NewReviewPage() {
         <p className="mt-1 text-sm text-text-secondary">
           {t('Start one local, non-authoritative review attempt. All sections are visible before you start; nothing is hidden behind a wizard.')}
       </p>
+
+      {submitBlockedByCatalog ? (
+        <div className="mt-4">
+          <ConfigSetupChecklist
+            items={setup.items}
+            title={t('Finish local setup before starting a review')}
+            description={t(
+              'Submit stays disabled until a repository, Review Policy, and Compute Policy with a configured Provider are available.',
+            )}
+          />
+        </div>
+      ) : null}
 
       <form
         className="mt-4 flex flex-col gap-4"
@@ -529,6 +560,20 @@ export function NewReviewPage() {
             </div>
           </dl>
 
+          {submitBlockedBySelection ? (
+            <p role="alert" className="mt-3 text-sm text-status-error">
+              {t(
+                'The selected Compute Policy is not bound to a Provider with a configured credential. Fix the binding on Policies or Providers.',
+              )}{' '}
+              <Link
+                to="/providers"
+                className="underline underline-offset-2 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+              >
+                {t('Open Providers')}
+              </Link>
+            </p>
+          ) : null}
+
           {submitError !== null ? (
             <p role="alert" className="mt-3 text-sm text-status-error">
               {submitError}
@@ -536,7 +581,10 @@ export function NewReviewPage() {
           ) : null}
 
           <div className="mt-4 flex items-center gap-3">
-            <Button type="submit" disabled={submitting || catalog.repositories.length === 0}>
+            <Button
+              type="submit"
+              disabled={submitting || submitBlockedByCatalog || submitBlockedBySelection}
+            >
               {submitting ? t('Starting…') : t('Start review')}
             </Button>
             <p className="text-meta text-text-secondary">

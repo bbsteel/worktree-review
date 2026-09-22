@@ -1,9 +1,16 @@
+import { useEffect, useState } from 'react'
 import { Link, useSearchParams } from 'react-router'
+import { useAdminClient } from '../../app/admin-client.ts'
 import { useDataSource } from '../../app/data-source.ts'
 import { Badge } from '../../components/ui/badge.tsx'
 import { EmptyState } from '../../components/ui/empty-state.tsx'
 import { Skeleton } from '../../components/ui/skeleton.tsx'
 import { useI18n } from '../../i18n.tsx'
+import { ConfigSetupChecklist } from '../config-setup/ConfigSetupChecklist.tsx'
+import {
+  evaluateConfigSetup,
+  type ConfigSetupSnapshot,
+} from '../config-setup/config-readiness.ts'
 import { OverviewCharts } from './OverviewCharts.tsx'
 import { filterOverviewLists, type SurfaceFilter } from './filter.ts'
 import { formatCost, formatDuration, gateBadge } from './format.ts'
@@ -12,11 +19,47 @@ import { SessionInsightCard } from './SessionInsightCard.tsx'
 import { StatsStrip } from './StatsStrip.tsx'
 
 export function OverviewDashboard() {
-  const { overview, loading, error } = useDataSource()
+  const { overview, loading, error, source } = useDataSource()
+  const client = useAdminClient()
   const { t } = useI18n()
   const [searchParams, setSearchParams] = useSearchParams()
   const repository = searchParams.get('repository')
   const surface = (searchParams.get('surface') as SurfaceFilter | null) ?? 'all'
+  const [setup, setSetup] = useState<ConfigSetupSnapshot | null>(null)
+
+  useEffect(() => {
+    if (source.kind !== 'live') {
+      setSetup(null)
+      return
+    }
+    let cancelled = false
+    Promise.all([
+      client.listRepositories(),
+      client.listReviewPolicies(),
+      client.listComputePolicies(),
+      client.listProviderProfiles(),
+    ])
+      .then(([repositories, reviewPolicies, computePolicies, providerProfiles]) => {
+        if (!cancelled) {
+          setSetup(
+            evaluateConfigSetup({
+              repositories,
+              reviewPolicies,
+              computePolicies,
+              providerProfiles,
+            }),
+          )
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setSetup(null)
+        }
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [client, source.kind])
 
   if (loading || !overview) {
     return (
@@ -71,6 +114,16 @@ export function OverviewDashboard() {
           </select>
         </label>
       </div>
+
+      {setup !== null && !setup.allReady ? (
+        <ConfigSetupChecklist
+          items={setup.items}
+          title={t('Finish local setup')}
+          description={t(
+            'Register a repository and a Compute Policy bound to a configured Provider before starting reviews. The built-in Review Policy is enough until you register a custom one.',
+          )}
+        />
+      ) : null}
 
       <section aria-labelledby="attention-heading">
         <h2 id="attention-heading" className="text-sm font-semibold text-text-primary">
